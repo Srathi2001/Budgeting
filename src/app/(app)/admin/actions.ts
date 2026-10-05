@@ -241,7 +241,9 @@ export async function importFusionLeases(versionId: number, form: FormData): Pro
     const { parseLeaseReport, applyFusionLeases } = await import('@/lib/import/fusion');
     const leases = parseLeaseReport(Buffer.from(await file.arrayBuffer()));
     const r = await applyFusionLeases(versionId, leases, user.id);
-    return `Loaded ${r.matched} leases` +
+    const skipped = Object.entries(r.skipped).map(([status, n]) => `${n} ${status}`).join(', ');
+    return `Loaded ${r.matched} current leases` +
+      (skipped ? ` (not used: ${skipped})` : '') +
       (r.createdUnits.length ? `; ${r.createdUnits.length} new units added` : '') +
       (r.cleared ? `; ${r.cleared} units no longer leased` : '') +
       (r.unknownProperties.length ? `; ${r.unknownProperties.length} rows skipped (unknown property: ${r.unknownProperties.slice(0, 5).join(', ')})` : '');

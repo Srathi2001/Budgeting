@@ -42,4 +42,6 @@ next-env.d.ts
 
 !.env.example
 /.pgdata
+# downloaded Fusion data (tenant details)
+/tmp
 

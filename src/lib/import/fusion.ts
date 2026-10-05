@@ -167,10 +167,49 @@ export function parseUnitDump(data: ArrayBuffer | Buffer): FusionUnit[] {
   return out;
 }
 
-const normProp = (c: string) => c.trim().toUpperCase().replace(/N$/, '');
+// PMC landlord properties were re-coded in Fusion from …N to …P (50B113N → 50B113P); the old lease
+// is left Suspended and the renewal sits on the P code. Both name the same property and unit.
+const normProp = (c: string) => c.trim().toUpperCase().replace(/[NP]$/, '');
 const normUnit = (c: string) => c.trim().toUpperCase();
+const nTwin = (unitCode: string) => normUnit(unitCode).replace(/^([0-9A-Z]+?)P-/, '$1N-');
+
+/**
+ * The report can include each unit's lease history (Terminated, Pre-Terminated, Suspended).
+ * Keep one Approved lease per unit. An Approved lease past its end date is kept: the renewal is
+ * still pending, and the budget derives it. With several Approved leases (a renewal signed in
+ * advance), the one running on the as-of date wins, else the next to start, else the last to end.
+ */
+export function currentLeases(leases: FusionLease[], asOf: string = new Date().toLocaleDateString('en-CA')) {
+  const approved = new Map<string, FusionLease[]>();
+  const skipped: Record<string, number> = {};
+  const skip = (k: string) => (skipped[k] = (skipped[k] ?? 0) + 1);
+  for (const l of leases) {
+    const status = (l.leaseStatus ?? '').trim();
+    if (!/^approved$/i.test(status)) {
+      skip(status || '(blank)');
+      continue;
+    }
+    const k = normUnit(l.unitCode);
+    approved.set(k, [...(approved.get(k) ?? []), l]);
+  }
+  const rank = (l: FusionLease) => {
+    const start = l.leaseStart ?? '', end = l.leaseEnd ?? '9999';
+    if (start <= asOf && end >= asOf) return `0${start}`; // running
+    if (start > asOf) return `1${start}`; // signed, starts later: earliest first
+    return `2${String(99999999 - Number(end.replace(/-/g, '')))}`; // ended: latest end first
+  };
+  const out: FusionLease[] = [];
+  for (const ls of approved.values()) {
+    ls.sort((a, b) => rank(a).localeCompare(rank(b)));
+    out.push(ls[0]);
+    for (let i = 1; i < ls.length; i++) skip('Approved, superseded');
+  }
+  return { leases: out, skipped };
+}
 
 export interface FusionSyncResult {
+  /** report rows not used, by lease status */
+  skipped: Record<string, number>;
   matched: number;
   /** leases on a merged unit, spread over its member units */
   mergedLeases: number;
@@ -183,7 +222,8 @@ export interface FusionSyncResult {
  * Load current leases into a budget version. The report is treated as a full snapshot for the
  * business units it contains: units of those BUs that have no lease in it lose their lease details.
  */
-export async function applyFusionLeases(versionId: number, leases: FusionLease[], userId: number | null): Promise<FusionSyncResult> {
+export async function applyFusionLeases(versionId: number, reportRows: FusionLease[], userId: number | null): Promise<FusionSyncResult> {
+  const { leases, skipped } = currentLeases(reportRows);
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) throw new Error('Version not found');
   if (version.status === 'LOCKED') throw new Error('Version is locked');
@@ -202,18 +242,19 @@ export async function applyFusionLeases(versionId: number, leases: FusionLease[]
   const lines = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
   const lineByUnit = new Map(lines.map((l) => [l.unitId, l]));
   const now = new Date();
-  const result: FusionSyncResult = { matched: 0, mergedLeases: 0, createdUnits: [], unknownProperties: [], cleared: 0 };
+  const result: FusionSyncResult = { skipped, matched: 0, mergedLeases: 0, createdUnits: [], unknownProperties: [], cleared: 0 };
   const touchedLines = new Set<number>();
-  const buNames = new Set(leases.map((l) => l.businessUnit?.toUpperCase()).filter(Boolean) as string[]);
+  // BUs come from all report rows: a BU whose leases have all ended still counts as reported
+  const buNames = new Set(reportRows.map((l) => l.businessUnit?.toUpperCase()).filter(Boolean) as string[]);
 
   await db.transaction(async (tx) => {
     for (const f of leases) {
-      // 1. the unit itself, 2. the member units of a merged unit, 3. a new unit in a known property
+      // 1. the unit itself (or its N-coded twin), 2. the member units of a merged unit, 3. a new unit in a known property
       let targets: schema.Unit[] = [];
-      const direct = unitByCode.get(normUnit(f.unitCode));
+      const direct = unitByCode.get(normUnit(f.unitCode)) ?? unitByCode.get(nTwin(f.unitCode));
       if (direct) targets = [direct];
       else {
-        const members = membersByMerged.get(normUnit(f.unitCode));
+        const members = membersByMerged.get(normUnit(f.unitCode)) ?? membersByMerged.get(nTwin(f.unitCode));
         if (members?.length) {
           targets = members;
           result.mergedLeases++;
@@ -306,7 +347,7 @@ export async function applyFusionLeases(versionId: number, leases: FusionLease[]
       versionId,
       entity: 'fusion_sync',
       action: 'leases',
-      changes: { matched: result.matched, createdUnits: result.createdUnits.length, cleared: result.cleared, unknown: result.unknownProperties.slice(0, 20) },
+      changes: { matched: result.matched, skipped, createdUnits: result.createdUnits.length, cleared: result.cleared, unknown: result.unknownProperties.slice(0, 20) },
     });
     await recalcLines(tx, versionId);
   });
