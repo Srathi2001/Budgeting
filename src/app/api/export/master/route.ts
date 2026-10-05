@@ -44,6 +44,6 @@ export async function GET(request: Request) {
     r.noRenewal ? 'Y' : '', r.budgetRate, r.increasePct === null ? null : r2(r.increasePct * 100), r.cheques,
     r.rooms, r.capacity, r2(r.vacancyLoss), r2(r.otherIncomeTotal), r.warnings.join('; '), r.notes,
   ]);
-  const name = `Revenue Master ${version.name}.xlsx`.replace(/[^\w .()-]/g, '');
+  const name = `Lease Budget ${version.name}.xlsx`.replace(/[^\w .()-]/g, '');
   return xlsxResponse([{ name: 'Revenue Master', rows: [header1, header2, ...body], cols: [5, 5, 8, 28, 10, 20, 30] }], name);
 }

@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 
 const LINKS = [
   { href: '/', label: 'Dashboard' },
-  { href: '/master', label: 'Revenue Master' },
+  { href: '/master', label: 'Lease Budget' },
   { href: '/other-income', label: 'Other Income' },
   { href: '/summary', label: 'Monthly Summary' },
   { href: '/analysis', label: 'Revenue Analysis' },

@@ -14,7 +14,11 @@ export interface PropertyRollup {
   vacantUnits: number;
   warnings: number;
   revenue: number[];
+  /** rent cheques ex VAT */
   cash: number[];
+  vat: number[];
+  depositIn: number[];
+  depositOut: number[];
   /** Engine-derived other income by month (admin, ejari, MF, agency) */
   autoOther: { adminFee: number[]; ejariFee: number[]; mfFee: number[]; agencyFee: number[] };
   /** Manually budgeted other income by month, all GLs combined */
@@ -60,6 +64,9 @@ export async function propertyRollups(versionId: number, propertyIds?: number[])
       warnings: 0,
       revenue: z12(),
       cash: z12(),
+      vat: z12(),
+      depositIn: z12(),
+      depositOut: z12(),
       autoOther: { adminFee: z12(), ejariFee: z12(), mfFee: z12(), agencyFee: z12() },
       manualOther: z12(),
       vacancyLoss: 0,
@@ -71,7 +78,8 @@ export async function propertyRollups(versionId: number, propertyIds?: number[])
     select property_id, month,
       sum(revenue)::float as revenue, sum(cash)::float as cash,
       sum(admin_fee)::float as admin_fee, sum(ejari_fee)::float as ejari_fee,
-      sum(mf_fee)::float as mf_fee, sum(agency_fee)::float as agency_fee
+      sum(mf_fee)::float as mf_fee, sum(agency_fee)::float as agency_fee,
+      sum(vat)::float as vat, sum(deposit_in)::float as deposit_in, sum(deposit_out)::float as deposit_out
     from line_monthly where version_id = ${versionId}
     group by property_id, month`);
   for (const r of monthly.rows as Record<string, number>[]) {
@@ -80,6 +88,9 @@ export async function propertyRollups(versionId: number, propertyIds?: number[])
     const i = r.month - 1;
     roll.revenue[i] = r.revenue;
     roll.cash[i] = r.cash;
+    roll.vat[i] = r.vat;
+    roll.depositIn[i] = r.deposit_in;
+    roll.depositOut[i] = r.deposit_out;
     roll.autoOther.adminFee[i] = r.admin_fee;
     roll.autoOther.ejariFee[i] = r.ejari_fee;
     roll.autoOther.mfFee[i] = r.mf_fee;
@@ -114,4 +125,13 @@ export function autoOtherTotal(r: PropertyRollup): number[] {
   return r.revenue.map(
     (_, i) => r.autoOther.adminFee[i] + r.autoOther.ejariFee[i] + r.autoOther.mfFee[i] + r.autoOther.agencyFee[i],
   );
+}
+
+/**
+ * Total cash inflow by month: rent cheques + lease fees + manual other income (assumed collected
+ * in the month budgeted) + VAT + security deposits received - deposits refunded.
+ */
+export function cashFlow(r: PropertyRollup): number[] {
+  const fees = autoOtherTotal(r);
+  return r.revenue.map((_, i) => r.cash[i] + fees[i] + r.manualOther[i] + r.vat[i] + r.depositIn[i] - r.depositOut[i]);
 }

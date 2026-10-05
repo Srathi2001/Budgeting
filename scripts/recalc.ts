@@ -1,10 +1,14 @@
-﻿import 'dotenv/config';
+// Recalculates every budget version (or only the ids given): npx tsx scripts/recalc.ts [versionId...]
+import 'dotenv/config';
 import { db, schema } from '../src/db';
 import { recalcLines } from '../src/lib/budget/calc';
-import { eq } from 'drizzle-orm';
+
 (async () => {
-  const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.status, 'OPEN'));
-  await db.transaction((tx) => recalcLines(tx, v.id));
-  console.log('recalculated', v.name);
+  const wanted = process.argv.slice(2).map(Number);
+  const versions = (await db.select().from(schema.budgetVersions)).filter((v) => !wanted.length || wanted.includes(v.id));
+  for (const v of versions) {
+    await db.transaction((tx) => recalcLines(tx, v.id));
+    console.log('recalculated', v.name);
+  }
   process.exit(0);
 })();

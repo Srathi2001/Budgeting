@@ -2,21 +2,26 @@
 
 Replaces the Excel round trip in the budget process. Before: PM templates (`Budget <PM> <BU> X.xlsx`) went out to property managers, came back filled in, and were pasted into the `Revenue Master` of `H.E. MJN_Budget 2026.xlsm`. Now property managers enter and edit lease data directly. Revenue, cash, and lease fees are recalculated on every save, and the analysis pages update immediately.
 
-**Stack:** Next.js 16 (App Router), PostgreSQL with Drizzle ORM, and AG Grid Community for the spreadsheet-style Revenue Master.
+**Stack:** Next.js 16 (App Router), PostgreSQL with Drizzle ORM, and AG Grid Community for the spreadsheet-style Lease Budget grid.
 
 ## Screens
 
 | Page | What it replaces |
 | --- | --- |
-| **Revenue Master** | `Revenue Master` sheet and the PM template `Main` sheet. One row per unit: current contract, 1st and 2nd renewal, budget rate, cheques. Revenue and cash by month are calculated. |
+| **Lease Budget** | `Revenue Master` sheet and the PM template `Main` sheet. One row per unit: current lease, 1st and 2nd renewal, budget rate, deposit, cheques. Revenue and cash by month are calculated. The row panel shows each contract's cheque schedule: actual for the current lease (Fusion lease schedules once connected; manual until then), 4 equal cheques by default for renewals, editable. |
 | **Other Income** | `Other Income` sheet. Admin fee, agency commission, MF, and Ejari are calculated from leases. Other GL lines are entered by month. |
-| **Monthly Summary** | PM template `Summary` sheet and `Camps CF`. Revenue, cash, and other income by property by month. |
-| **Revenue Analysis** | `Revenue Analysis` sheet. Budget vs comparatives (2026B, 2025F, 2025B, 2024A…), escalation, vacancy loss, comments. |
+| **Monthly Summary** | PM template `Summary` sheet and `Camps CF`. Revenue, other income, and cash inflow by property by month, plus a portfolio cash flow breakdown (rent, fees, VAT, deposits). |
+| **Revenue Analysis** | `Revenue Analysis` sheet. 2027B vs 2026F, 2026B, 2025A, 2024A. Roll up or drill down by business unit, property manager, category, property, and unit in any order, by year, quarter, or month. |
 | **Building P&L** | `Buildingwise P&L` sheet. Revenue side only; cost columns are placeholders for now. |
 | **Submissions** | New. PM submits a property; Finance approves or returns it with a note. Includes an activity log. |
-| **Admin** | Versions (lock, roll forward, recalculate), assumptions, RERA index, properties and coordinators, users. |
+| **Admin** | Versions (lock, roll forward, recalculate), assumptions, RERA index, comparatives (enter or upload from Excel), properties and coordinators, users. |
 
-Every page exports to Excel. The Revenue Master export uses the same column layout (A–BF) as the finance workbook's `Revenue Master` sheet, so rows can be pasted straight across while both run in parallel.
+Every page exports to Excel. The Lease Budget export uses the same column layout (A–BF) as the finance workbook's `Revenue Master` sheet, so rows can be pasted straight across while both run in parallel.
+
+**Comparatives:**
+* The current and prior-year budgets are held per unit, so they drill to any level.
+* Forecast and actuals are held per property; they show for any group made of whole properties, and as "–" below that.
+* Until Fusion actuals are connected, Finance enters 2026F and 2025A in Admin → Comparatives, by typing or by uploading an Excel file with a `Code` column and one column per label.
 
 ## Calculation logic (from the PM templates)
 
@@ -34,7 +39,15 @@ All of it lives in [`src/lib/engine/lease.ts`](src/lib/engine/lease.ts), with te
 * **2nd renewal** is created automatically when the 1st renewal ends before 31 December.
 * **Overrides:** every derived renewal value (rent, dates, MF, increase %) can be overridden in the grid (bold yellow). Delete the value to go back to the calculated one (grey).
 * **Revenue:** daily rate (rent ÷ contract days) × days falling in each month, for each contract.
-* **Cash:** equal cheques, the first on the start date, then every 370 ÷ n days (default 4 cheques). Dates are whole days, so the Excel issue where a cheque landing on the last day of a month at 12:00 was dropped does not occur.
+* **Rent cheques:**
+  * The contract's cheque schedule is used when there is one: actual for the current lease, or edited for a renewal.
+  * Otherwise: equal cheques, the first on the start date, then every 370 ÷ n days (default 4 cheques).
+  * Dates are whole days, so the Excel issue where a cheque landing on the last day of a month at 12:00 was dropped does not occur.
+  * A schedule that doesn't add up to the rent raises a warning.
+* **Cash inflow** = rent cheques + fees + VAT + security deposits received − deposits refunded.
+  * **VAT** (5%): applies to commercial and labour rent and to all fees. Residential rent is exempt.
+  * **Deposits:** 5% of annual rent is taken from each new tenant (the median across Fusion leases). The current tenant's deposit is refunded the month after their lease ends when they leave.
+  * Renewing tenants move no deposit.
 * **Fees, booked in the contract start month:**
   * Admin fee: 500 residential / 1,000 commercial; not charged on a new-tenant 1st renewal.
   * Ejari: 200.

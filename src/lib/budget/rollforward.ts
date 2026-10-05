@@ -63,6 +63,12 @@ export async function rollForward(db: DB, sourceVersionId: number, opts: { name?
         currentRent: chosen.rent,
         currentStart: formatDay(chosen.start),
         currentEnd: formatDay(chosen.end),
+        // an actual or edited cheque schedule travels with the contract; equal cheques are re-derived
+        currentSchedule:
+          chosen.schedule && chosen.scheduleSource !== 'EQUAL'
+            ? chosen.schedule.map((q) => ({ date: formatDay(q.date)!, amount: q.amount }))
+            : null,
+        securityDeposit: chosen.kind === 'CURRENT' ? l.securityDeposit : null,
         // A lease that had already expired before the year starts goes to a new tenant
         renew1: chosen.end >= jan1 ? true : false,
         notes: `Rolled forward from ${source.name}: ${chosen.kind.toLowerCase().replace('renewal', 'renewal ')}`,

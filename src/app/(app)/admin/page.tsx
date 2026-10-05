@@ -3,7 +3,29 @@ import { asc, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
-import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel } from './panels';
+import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel } from './panels';
+import { comparativeLabels } from '@/lib/budget/comparatives';
+
+async function ComparativesTab({ version }: { version: schema.BudgetVersion }) {
+  const labels = await comparativeLabels(version);
+  const props = await db.select().from(schema.properties).where(eq(schema.properties.active, true)).orderBy(asc(schema.properties.buCode), asc(schema.properties.code));
+  const comps = await db.select().from(schema.comparatives).where(eq(schema.comparatives.versionId, version.id));
+  return (
+    <ComparativesPanel
+      versionId={version.id}
+      versionName={version.name}
+      labels={labels}
+      locked={version.status === 'LOCKED'}
+      rows={props.map((p) => ({
+        id: p.id,
+        code: p.code,
+        name: p.name,
+        bu: p.buCode,
+        values: Object.fromEntries(labels.map((l) => [l, comps.find((c) => c.propertyId === p.id && c.label === l)?.amount ?? null])),
+      }))}
+    />
+  );
+}
 
 export const metadata = { title: 'Admin · Budget' };
 
@@ -11,6 +33,7 @@ const TABS = [
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
   ['rera', 'RERA index'],
+  ['comparatives', 'Comparatives'],
   ['properties', 'Properties'],
   ['users', 'Users'],
 ] as const;
@@ -57,6 +80,7 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
           properties={await db.select({ code: schema.properties.code, name: schema.properties.name }).from(schema.properties).orderBy(asc(schema.properties.code))}
         />
       )}
+      {tab === 'comparatives' && <ComparativesTab version={v} />}
       {tab === 'properties' && (
         <PropertiesPanel rows={await db.select().from(schema.properties).orderBy(asc(schema.properties.buCode), asc(schema.properties.code))} />
       )}

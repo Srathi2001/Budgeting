@@ -54,21 +54,20 @@ export default async function OtherIncomePage(props: PageProps<'/other-income'>)
   return (
     <div className="space-y-4 p-6">
       <Header properties={visible} selected={null} />
-      <div className="card overflow-auto">
-        <table className="table-fin">
+      <div className="frame frame-tall">
+        <table className="tbl">
           <thead>
             <tr>
-              <th>Code</th>
-              <th>Property</th>
-              <th>BU</th>
+              <th className="stick stick-edge w-[300px]">Property</th>
+              <th className="w-14">BU</th>
               {used.map((g) => (
-                <th key={g.code} className="num" title={g.name}>
-                  {g.code}
-                  <div className="max-w-32 truncate font-normal">{g.name}</div>
-                  {g.autoSource && <div className="font-normal text-sky-700">calculated</div>}
+                <th key={g.code} className="num sep w-28 normal-case" title={g.name}>
+                  <div className="text-[11px] tracking-normal text-slate-500">{g.code}</div>
+                  <div className="ml-auto max-w-28 truncate tracking-normal">{g.name.toLowerCase().replace(/^\w/, (c) => c.toUpperCase())}</div>
+                  {g.autoSource && <div className="font-normal tracking-normal text-sky-700">calculated</div>}
                 </th>
               ))}
-              <th className="num">Total</th>
+              <th className="num sep w-28">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -76,30 +75,34 @@ export default async function OtherIncomePage(props: PageProps<'/other-income'>)
               const vals = used.map((g) => sum(lineFor(r, g)));
               return (
                 <tr key={r.propertyId}>
-                  <td className="text-slate-500">{r.code}</td>
-                  <td>
-                    <Link href={`/other-income?p=${r.propertyId}`} className="hover:text-sky-700 hover:underline">
-                      {r.name}
-                    </Link>
+                  <td className="stick stick-edge">
+                    <div className="flex w-[280px] items-baseline gap-2 overflow-hidden">
+                      <Link href={`/other-income?p=${r.propertyId}`} className="truncate hover:text-sky-700 hover:underline" title={r.name}>
+                        {r.name}
+                      </Link>
+                      <span className="shrink-0 text-[11px] text-slate-400">{r.code}</span>
+                    </div>
                   </td>
-                  <td>{r.buCode}</td>
+                  <td className="muted">{r.buCode}</td>
                   {vals.map((x, i) => (
-                    <td key={used[i].code} className="num">
+                    <td key={used[i].code} className="num sep">
                       {fmt(x)}
                     </td>
                   ))}
-                  <td className="num font-semibold">{fmt(sum(vals))}</td>
+                  <td className="num sep font-semibold">{fmt(sum(vals))}</td>
                 </tr>
               );
             })}
-            <tr className="total">
-              <td colSpan={3}>Total</td>
+            <tr className="tbl-total">
+              <td className="stick stick-edge" colSpan={2}>
+                Total
+              </td>
               {used.map((g) => (
-                <td key={g.code} className="num">
+                <td key={g.code} className="num sep">
                   {fmt(sum(rolls.map((r) => sum(lineFor(r, g)))))}
                 </td>
               ))}
-              <td className="num">{fmt(sum(used.map((g) => sum(rolls.map((r) => sum(lineFor(r, g)))))))}</td>
+              <td className="num sep">{fmt(sum(used.map((g) => sum(rolls.map((r) => sum(lineFor(r, g)))))))}</td>
             </tr>
           </tbody>
         </table>
@@ -111,7 +114,7 @@ export default async function OtherIncomePage(props: PageProps<'/other-income'>)
 function Header({ properties, selected }: { properties: { id: number; code: string; name: string }[]; selected: number | null }) {
   return (
     <header className="flex flex-wrap items-center gap-3">
-      <h1 className="text-xl font-semibold">Other income</h1>
+      <h1 className="page-title">Other income</h1>
       <nav className="flex flex-wrap gap-1 text-sm">
         <Link href="/other-income" className={selected === null ? 'btn-primary' : 'btn'}>
           All properties
@@ -131,7 +134,7 @@ function Header({ properties, selected }: { properties: { id: number; code: stri
         <button className="btn">Open</button>
       </form>
       <p className="w-full text-xs text-slate-500">
-        Admin fee, agency commission, maintenance service fee (MF) and Ejari fee are calculated from the Revenue Master. Other
+        Admin fee, agency commission, maintenance service fee (MF) and Ejari fee are calculated from the Lease Budget. Other
         lines are budgeted here by month.
       </p>
     </header>

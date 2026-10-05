@@ -39,8 +39,8 @@ export default async function SubmissionsPage() {
         </p>
       </header>
 
-      <div className="card overflow-auto">
-        <table className="table-fin">
+      <div className="frame">
+        <table className="tbl">
           <thead>
             <tr>
               <th>Property</th>
@@ -85,9 +85,9 @@ export default async function SubmissionsPage() {
         </table>
       </div>
 
-      <section className="card overflow-auto">
+      <section className="frame">
         <h2 className="border-b border-slate-200 px-4 py-2 text-sm font-semibold">Recent activity</h2>
-        <table className="table-fin">
+        <table className="tbl">
           <thead>
             <tr>
               <th>When</th>

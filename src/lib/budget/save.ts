@@ -9,6 +9,7 @@ import { LINE_FIELDS, UNIT_FIELDS, type RowPatch, type SaveResult } from './mast
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 const money = z.number().finite().min(0).max(1e10);
+const schedule = z.array(z.object({ date: isoDate, amount: z.number().finite().min(0).max(1e10) })).max(24);
 
 export const PatchSchema = z
   .object({
@@ -19,17 +20,21 @@ export const PatchSchema = z
     currentRent: money.nullable(),
     currentStart: isoDate.nullable(),
     currentEnd: isoDate.nullable(),
+    currentSchedule: schedule.nullable(),
+    securityDeposit: money.nullable(),
     renew1: z.boolean(),
     noRenewal: z.boolean(),
     r1Rent: money.nullable(),
     r1Start: isoDate.nullable(),
     r1End: isoDate.nullable(),
     r1Mf: z.boolean().nullable(),
+    r1Schedule: schedule.nullable(),
     r2Renew: z.boolean().nullable(),
     r2Rent: money.nullable(),
     r2Start: isoDate.nullable(),
     r2End: isoDate.nullable(),
     r2Mf: z.boolean().nullable(),
+    r2Schedule: schedule.nullable(),
     budgetRate: money.nullable(),
     increasePctOverride: z.number().min(-1).max(5).nullable(),
     cheques: z.number().int().min(1).max(12).nullable(),
@@ -91,7 +96,7 @@ export async function applyLineChanges(
       for (const [k, v] of Object.entries(patch)) {
         if ((LINE_FIELDS as readonly string[]).includes(k)) {
           const before = (row.l as Record<string, unknown>)[k];
-          if (before !== v) {
+          if (JSON.stringify(before ?? null) !== JSON.stringify(v ?? null)) {
             linePatch[k] = v;
             diff[k] = { from: before, to: v };
           }

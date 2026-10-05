@@ -1,10 +1,19 @@
-// Shared between the server (loading/saving) and the Revenue Master grid.
+// Shared between the server (loading/saving) and the Lease Budget grid.
+
+export interface ScheduleItem {
+  date: string; // YYYY-MM-DD
+  amount: number; // ex VAT
+}
+
+export type ScheduleSource = 'ACTUAL' | 'CUSTOM' | 'EQUAL';
 
 export interface DerivedContract {
   rent: number;
   start: string | null;
   end: string | null;
   mf: boolean;
+  schedule: ScheduleItem[];
+  scheduleSource: ScheduleSource;
 }
 
 export interface MasterRow {
@@ -35,23 +44,28 @@ export interface MasterRow {
   currentRent: number | null;
   currentStart: string | null;
   currentEnd: string | null;
+  currentSchedule: ScheduleItem[] | null;
+  securityDeposit: number | null;
   renew1: boolean;
   noRenewal: boolean;
   r1Rent: number | null;
   r1Start: string | null;
   r1End: string | null;
   r1Mf: boolean | null;
+  r1Schedule: ScheduleItem[] | null;
   r2Renew: boolean | null;
   r2Rent: number | null;
   r2Start: string | null;
   r2End: string | null;
   r2Mf: boolean | null;
+  r2Schedule: ScheduleItem[] | null;
   budgetRate: number | null;
   increasePctOverride: number | null;
   cheques: number | null;
   notes: string | null;
 
   // engine output
+  current: DerivedContract | null;
   r1: DerivedContract | null;
   r2: DerivedContract | null;
   increasePct: number | null;
@@ -60,8 +74,10 @@ export interface MasterRow {
   warnings: string[];
   revenue: number[];
   cash: number[];
+  cashFlow: number[];
   revenueTotal: number;
   cashTotal: number;
+  cashFlowTotal: number;
   otherIncomeTotal: number;
 
   editable: boolean;
@@ -76,17 +92,21 @@ export const LINE_FIELDS = [
   'currentRent',
   'currentStart',
   'currentEnd',
+  'currentSchedule',
+  'securityDeposit',
   'renew1',
   'noRenewal',
   'r1Rent',
   'r1Start',
   'r1End',
   'r1Mf',
+  'r1Schedule',
   'r2Renew',
   'r2Rent',
   'r2Start',
   'r2End',
   'r2Mf',
+  'r2Schedule',
   'budgetRate',
   'increasePctOverride',
   'cheques',

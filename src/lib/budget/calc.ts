@@ -1,6 +1,14 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { type DB, schema } from '@/db';
-import { computeLease, type LeaseInput, type LeaseResult, type ReraRange } from '@/lib/engine/lease';
+import {
+  computeLease,
+  cashFlowOf,
+  type Cheque,
+  type LeaseInput,
+  type LeaseResult,
+  type MonthlySeries,
+  type ReraRange,
+} from '@/lib/engine/lease';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { parseDay } from '@/lib/engine/dates';
 
@@ -10,6 +18,14 @@ const { leaseLines, units, properties, budgetVersions, reraIndex, lineMonthly } 
 
 export function reraKey(propertyCode: string, bedroom: string | null) {
   return `${propertyCode.trim().toUpperCase()}|${String(bedroom ?? '').trim().toUpperCase()}`;
+}
+
+function toCheques(items: schema.ScheduleItem[] | null): Cheque[] | null {
+  if (!items?.length) return null;
+  const out = items
+    .map((i) => ({ date: parseDay(i.date), amount: Number(i.amount) || 0 }))
+    .filter((i): i is Cheque => i.date !== null);
+  return out.length ? out : null;
 }
 
 export function lineToInput(
@@ -27,17 +43,21 @@ export function lineToInput(
     currentRent: line.currentRent,
     currentStart: parseDay(line.currentStart),
     currentEnd: parseDay(line.currentEnd),
+    currentSchedule: toCheques(line.currentSchedule),
+    securityDeposit: line.securityDeposit,
     renew1: line.renew1,
     noRenewal: line.noRenewal,
     r1Rent: line.r1Rent,
     r1Start: parseDay(line.r1Start),
     r1End: parseDay(line.r1End),
     r1Mf: line.r1Mf,
+    r1Schedule: toCheques(line.r1Schedule),
     r2Renew: line.r2Renew,
     r2Rent: line.r2Rent,
     r2Start: parseDay(line.r2Start),
     r2End: parseDay(line.r2End),
     r2Mf: line.r2Mf,
+    r2Schedule: toCheques(line.r2Schedule),
     budgetRate: line.budgetRate,
     increasePctOverride: line.increasePctOverride,
     cheques: line.cheques,
@@ -45,9 +65,12 @@ export function lineToInput(
 }
 
 /** Stored in lease_lines.calc — the engine result minus the monthly arrays (those live in line_monthly). */
-export type StoredCalc = Omit<LeaseResult, 'revenue' | 'cash' | 'adminFee' | 'ejariFee' | 'mfFee' | 'agencyFee'> & {
+export type StoredCalc = Omit<LeaseResult, keyof MonthlySeries> & {
   revenue: number[];
+  /** rent cheques ex VAT */
   cash: number[];
+  /** total cash inflow: rent + fees + VAT + deposits in - deposits out */
+  cashFlow: number[];
 };
 
 /**
@@ -97,6 +120,9 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
         ejariFee: res.ejariFee[m],
         mfFee: res.mfFee[m],
         agencyFee: res.agencyFee[m],
+        vat: res.vat[m],
+        depositIn: res.depositIn[m],
+        depositOut: res.depositOut[m],
       });
     }
   }
@@ -119,6 +145,7 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
       warnings: res.warnings,
       revenue: res.revenue,
       cash: res.cash,
+      cashFlow: res.revenue.map((_, i) => Math.round(cashFlowOf(res, i) * 100) / 100),
     };
     await tx.update(leaseLines).set({ calc: stored }).where(eq(leaseLines.id, id));
   }

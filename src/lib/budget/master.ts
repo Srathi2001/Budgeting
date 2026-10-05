@@ -1,4 +1,4 @@
-﻿import { and, eq, inArray, asc } from 'drizzle-orm';
+import { and, eq, inArray, asc } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { formatDay } from '@/lib/engine/dates';
 import type { Contract } from '@/lib/engine/lease';
@@ -9,7 +9,14 @@ const { leaseLines, units, properties } = schema;
 
 function toDerived(c: Contract | undefined): DerivedContract | null {
   if (!c) return null;
-  return { rent: c.rent, start: formatDay(c.start), end: formatDay(c.end), mf: c.mf };
+  return {
+    rent: c.rent,
+    start: formatDay(c.start),
+    end: formatDay(c.end),
+    mf: c.mf,
+    schedule: (c.schedule ?? []).map((q) => ({ date: formatDay(q.date)!, amount: Math.round(q.amount * 100) / 100 })),
+    scheduleSource: c.scheduleSource ?? 'EQUAL',
+  };
 }
 
 export async function loadMasterRows(
@@ -54,21 +61,26 @@ export async function loadMasterRows(
       currentRent: l.currentRent,
       currentStart: l.currentStart,
       currentEnd: l.currentEnd,
+      currentSchedule: l.currentSchedule ?? null,
+      securityDeposit: l.securityDeposit,
       renew1: l.renew1,
       noRenewal: l.noRenewal,
       r1Rent: l.r1Rent,
       r1Start: l.r1Start,
       r1End: l.r1End,
       r1Mf: l.r1Mf,
+      r1Schedule: l.r1Schedule ?? null,
       r2Renew: l.r2Renew,
       r2Rent: l.r2Rent,
       r2Start: l.r2Start,
       r2End: l.r2End,
       r2Mf: l.r2Mf,
+      r2Schedule: l.r2Schedule ?? null,
       budgetRate: l.budgetRate,
       increasePctOverride: l.increasePctOverride,
       cheques: l.cheques,
       notes: l.notes,
+      current: toDerived(contracts.find((c) => c.kind === 'CURRENT')),
       r1: toDerived(contracts.find((c) => c.kind === 'RENEWAL1')),
       r2: toDerived(contracts.find((c) => c.kind === 'RENEWAL2')),
       increasePct: calc?.increasePct ?? null,
@@ -77,8 +89,10 @@ export async function loadMasterRows(
       warnings: calc?.warnings ?? [],
       revenue: calc?.revenue ?? Array(12).fill(0),
       cash: calc?.cash ?? Array(12).fill(0),
+      cashFlow: calc?.cashFlow ?? Array(12).fill(0),
       revenueTotal: calc?.totals.revenue ?? 0,
       cashTotal: calc?.totals.cash ?? 0,
+      cashFlowTotal: calc?.totals.cashFlow ?? 0,
       otherIncomeTotal: calc?.totals.otherIncome ?? 0,
       editable: opts.editableProperties ? opts.editableProperties.has(p.id) : false,
     };

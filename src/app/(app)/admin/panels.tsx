@@ -13,7 +13,9 @@ import {
   deleteRera,
   upsertUser,
   updateProperty,
+  importComparatives,
 } from './actions';
+import { saveComparative } from '../analysis/actions';
 
 type Result = { error?: string; ok?: string };
 
@@ -38,8 +40,8 @@ export function VersionsPanel({
   const { pending, run, Msg } = useAction();
   return (
     <div className="space-y-4">
-      <div className="card overflow-auto">
-        <table className="table-fin">
+      <div className="frame">
+        <table className="tbl">
           <thead>
             <tr>
               <th>Version</th>
@@ -119,7 +121,7 @@ export function AssumptionsPanel({
     <label className="grid grid-cols-[16rem_8rem_1fr] items-center gap-3 py-1 text-sm">
       <span className="font-medium text-slate-700">{label}</span>
       <span className="flex items-center gap-1">
-        <input name={name} defaultValue={Math.round(value * scale * 10000) / 10000} disabled={locked} className="input w-24 text-right" />
+        <input name={name} defaultValue={Math.round(value * scale * 10000) / 10000} disabled={locked} className="cell-edit text-right" />
         <span className="text-slate-500">{unit}</span>
       </span>
       <span className="text-xs text-slate-500">{hint}</span>
@@ -144,6 +146,8 @@ export function AssumptionsPanel({
             ejariFee: n(f.get('ejariFee')),
             mfPct: n(f.get('mfPct')) / 100,
             agencyPct: n(f.get('agencyPct')) / 100,
+            vatRate: n(f.get('vatRate')) / 100,
+            depositPct: n(f.get('depositPct')) / 100,
           }),
         )
       }
@@ -161,11 +165,13 @@ export function AssumptionsPanel({
       {field('ejariFee', 'Ejari fee', a.ejariFee, 'Per contract start', 1, 'AED')}
       {field('mfPct', 'Maintenance service fee (MF)', a.mfPct, 'Of annual rent, on contracts with MF = Y', 100, '%')}
       {field('agencyPct', 'Agency commission', a.agencyPct, 'Of annual rent, on new-tenant leases', 100, '%')}
+      {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent and all fees; residential rent exempt. Included in cash inflow', 100, '%')}
+      {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
 
       <div className="pt-3">
         <div className="text-sm font-medium text-slate-700">RERA increase bands</div>
         <p className="mb-2 text-xs text-slate-500">If the current rent is more than X% below the RERA average, the renewal increase is Y%.</p>
-        <table className="table-fin w-auto">
+        <table className="tbl tbl-fit">
           <thead>
             <tr>
               <th className="num">Rent below RERA avg by more than</th>
@@ -178,7 +184,7 @@ export function AssumptionsPanel({
               <tr key={i}>
                 <td className="num">
                   <input
-                    className="input w-20 text-right"
+                    className="cell-edit w-16 text-right"
                     disabled={locked}
                     value={Math.round(b.gapAbove * 10000) / 100}
                     onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, gapAbove: Number(e.target.value) / 100 } : x)))}
@@ -187,7 +193,7 @@ export function AssumptionsPanel({
                 </td>
                 <td className="num">
                   <input
-                    className="input w-20 text-right"
+                    className="cell-edit w-16 text-right"
                     disabled={locked}
                     value={Math.round(b.increase * 10000) / 100}
                     onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, increase: Number(e.target.value) / 100 } : x)))}
@@ -261,8 +267,8 @@ export function ReraPanel({
       <div className="flex items-center gap-3">
         {pending ? <span className="text-sm text-slate-500">Saving & recalculating…</span> : <Msg />}
       </div>
-      <div className="card overflow-auto">
-        <table className="table-fin">
+      <div className="frame">
+        <table className="tbl">
           <thead>
             <tr>
               <th>Property code</th>
@@ -291,8 +297,8 @@ export function ReraPanel({
                     </datalist>
                     <input name="bedroom" placeholder="Bedroom (e.g. 2, 0, 104)" required className="input w-40" />
                     <input name="unitType" placeholder="Unit type" className="input w-40" />
-                    <input name="min" placeholder="Min" required className="input w-28 text-right" />
-                    <input name="max" placeholder="Max" required className="input w-28 text-right" />
+                    <input name="min" placeholder="Min" required className="cell-edit text-right" />
+                    <input name="max" placeholder="Max" required className="cell-edit text-right" />
                     <button className="btn-primary" disabled={pending}>
                       Add
                     </button>
@@ -311,7 +317,7 @@ export function ReraPanel({
                     fmt(r.min)
                   ) : (
                     <input
-                      className="input w-28 text-right"
+                      className="cell-edit text-right"
                       defaultValue={r.min}
                       onBlur={(e) => {
                         const v = n(e.target.value);
@@ -329,7 +335,7 @@ export function ReraPanel({
                     fmt(r.max)
                   ) : (
                     <input
-                      className="input w-28 text-right"
+                      className="cell-edit text-right"
                       defaultValue={r.max}
                       onBlur={(e) => {
                         const v = n(e.target.value);
@@ -371,8 +377,8 @@ export function PropertiesPanel({ rows }: { rows: PropRow[] }) {
         The coordinator (PC) decides which property manager can edit a property. Camps are priced per bed per month.
       </p>
       <Msg />
-      <div className="card overflow-auto">
-        <table className="table-fin">
+      <div className="frame">
+        <table className="tbl">
           <thead>
             <tr>
               <th>Code</th>
@@ -486,6 +492,104 @@ export function UsersPanel({ rows, isAdmin }: { rows: UserRow[]; isAdmin: boolea
             Add user
           </button>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ---- comparatives -----------------------------------------------------------------------------
+
+type CompRow = { id: number; code: string; name: string; bu: string; values: Record<string, number | null> };
+
+export function ComparativesPanel({
+  versionId,
+  versionName,
+  labels,
+  rows,
+  locked,
+}: {
+  versionId: number;
+  versionName: string;
+  labels: string[];
+  rows: CompRow[];
+  locked: boolean;
+}) {
+  const { pending, run, Msg } = useAction();
+  const totals = labels.map((l) => rows.reduce((s, r) => s + (r.values[l] ?? 0), 0));
+  return (
+    <div className="space-y-3">
+      <p className="text-[13px] text-slate-600">
+        Property-level comparatives for <b>{versionName}</b>: forecast for the current year and actuals for prior years. Once Fusion is connected,
+        actuals will load from the GL. Type values below, or upload an Excel sheet with a <code>Code</code> column and one column per label.
+      </p>
+      {!locked && (
+        <form className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]" action={(f) => run(() => importComparatives(versionId, f))}>
+          <span className="font-medium">Upload from Excel</span>
+          <input type="file" name="file" accept=".xlsx,.xls,.xlsm" className="text-xs" required />
+          <button className="btn-primary" disabled={pending}>
+            {pending ? 'Importing…' : 'Import'}
+          </button>
+          <a className="text-sky-700 hover:underline" href="/api/export/comparatives">
+            Download template with current values
+          </a>
+          <span className="ml-auto">
+            <Msg />
+          </span>
+        </form>
+      )}
+      <div className="frame frame-tall">
+        <table className="tbl tbl-fit">
+          <thead>
+            <tr>
+              <th className="stick stick-edge w-24">Code</th>
+              <th className="w-80">Property</th>
+              <th className="w-16">BU</th>
+              {labels.map((l) => (
+                <th key={l} className="num sep w-36">
+                  {l}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="stick stick-edge muted">{r.code}</td>
+                <td>{r.name}</td>
+                <td className="muted">{r.bu}</td>
+                {labels.map((l) => (
+                  <td key={l} className="num sep">
+                    {locked ? (
+                      fmt(r.values[l])
+                    ) : (
+                      <input
+                        className="cell-edit text-right"
+                        defaultValue={r.values[l] === null || r.values[l] === undefined ? '' : fmt(r.values[l])}
+                        placeholder="–"
+                        onBlur={(e) => {
+                          const raw = e.target.value.replace(/[,\s()]/g, '');
+                          const v = raw === '' || raw === '-' ? null : Number(raw);
+                          if (v !== null && !Number.isFinite(v)) return;
+                          if (v !== r.values[l]) run(() => saveComparative({ versionId, propertyId: r.id, label: l, amount: v }).then((x) => ({ ...x, ok: x.error ? undefined : 'Saved' })));
+                        }}
+                      />
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr className="tbl-total">
+              <td className="stick stick-edge" colSpan={3}>
+                Total
+              </td>
+              {totals.map((t, i) => (
+                <td key={labels[i]} className="num sep">
+                  {fmt(t)}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   );

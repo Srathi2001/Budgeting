@@ -24,6 +24,7 @@ import {
 import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine } from './actions';
+import { ScheduleEditor } from './schedule-editor';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -144,7 +145,7 @@ function inputCol(field: keyof Row, headerName: string, kind: 'text' | 'money' |
   }
 }
 
-function monthCols(key: 'revenue' | 'cash', totalKey: 'revenueTotal' | 'cashTotal'): ColDef<Row>[] {
+function monthCols(key: 'revenue' | 'cashFlow', totalKey: 'revenueTotal' | 'cashFlowTotal'): ColDef<Row>[] {
   return [
     ...MONTHS.map(
       (m, i): ColDef<Row> => ({
@@ -202,24 +203,24 @@ export function MasterGrid({
   const refreshTotals = useCallback(() => {
     const api = apiRef.current;
     if (!api) return;
-    const t = { revenue: Array(12).fill(0), cash: Array(12).fill(0), revenueTotal: 0, cashTotal: 0, currentRent: 0, count: 0 };
+    const t = { revenue: Array(12).fill(0), cashFlow: Array(12).fill(0), revenueTotal: 0, cashFlowTotal: 0, currentRent: 0, count: 0 };
     api.forEachNodeAfterFilter((n) => {
       if (!n.data) return;
       t.count++;
       t.currentRent += n.data.currentRent ?? 0;
       n.data.revenue.forEach((v, i) => (t.revenue[i] += v));
-      n.data.cash.forEach((v, i) => (t.cash[i] += v));
+      n.data.cashFlow.forEach((v, i) => (t.cashFlow[i] += v));
       t.revenueTotal += n.data.revenueTotal;
-      t.cashTotal += n.data.cashTotal;
+      t.cashFlowTotal += n.data.cashFlowTotal;
     });
     api.setGridOption('pinnedBottomRowData', [
       {
         unitCode: `Total (${t.count} units)`,
         currentRent: t.currentRent,
         revenue: t.revenue,
-        cash: t.cash,
+        cashFlow: t.cashFlow,
         revenueTotal: t.revenueTotal,
-        cashTotal: t.cashTotal,
+        cashFlowTotal: t.cashFlowTotal,
         warnings: [],
         editable: false,
       } as unknown as Row,
@@ -316,6 +317,9 @@ export function MasterGrid({
           inputCol('currentRent', 'Rent', 'money', 105),
           inputCol('currentStart', 'Start', 'date', 95),
           inputCol('currentEnd', 'End', 'date', 95),
+          inputCol('securityDeposit', 'Deposit', 'money', 90, {
+            headerTooltip: 'Security deposit held. Blank = assumed % of rent. Refunded in cash flow when the tenant leaves.',
+          }),
         ],
       },
       {
@@ -375,7 +379,9 @@ export function MasterGrid({
       {
         headerName: 'Other',
         children: [
-          inputCol('cheques', 'Cheques', 'int', 80, { headerTooltip: 'Number of cheques per contract (blank = default 4)' }),
+          inputCol('cheques', 'Cheques', 'int', 80, {
+            headerTooltip: 'Equal cheques per renewal (blank = 4). Edit exact dates/amounts in the row panel below the grid.',
+          }),
           { colId: 'vacancyLoss', headerName: 'Vacancy loss', width: 100, type: 'rightAligned', valueGetter: (p) => p.data?.vacancyLoss ?? 0, valueFormatter: money },
           { colId: 'otherIncomeTotal', headerName: 'Fees', width: 85, type: 'rightAligned', valueGetter: (p) => p.data?.otherIncomeTotal ?? 0, valueFormatter: money, headerTooltip: 'Admin + Ejari + MF + Agency fees from this unit' },
           inputCol('notes', 'Notes', 'text', 220, { cellEditor: 'agLargeTextCellEditor', cellEditorPopup: true }),
@@ -383,7 +389,7 @@ export function MasterGrid({
       },
     ];
     if (showRevenue) defs.push({ headerName: `Revenue ${year}`, children: monthCols('revenue', 'revenueTotal') });
-    if (showCash) defs.push({ headerName: `Cash ${year}`, children: monthCols('cash', 'cashTotal') });
+    if (showCash) defs.push({ headerName: `Cash inflow ${year} (incl. fees, VAT, deposits)`, children: monthCols('cashFlow', 'cashFlowTotal') });
     return defs;
   }, [showRevenue, showCash, year]);
 
@@ -401,7 +407,7 @@ export function MasterGrid({
   return (
     <div className="flex h-screen flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
-        <h1 className="mr-2 text-base font-semibold">Revenue Master</h1>
+        <h1 className="mr-2 text-base font-semibold">Lease Budget</h1>
         <select
           className="input w-72"
           value={selectedProperty ?? 'all'}
@@ -498,6 +504,11 @@ export function MasterGrid({
           row={selected}
           year={year}
           onClose={() => setSelected(null)}
+          onSave={(patch) => {
+            queue.current.set(selected.lineId, { ...(queue.current.get(selected.lineId) ?? {}), ...patch });
+            if (timer.current) clearTimeout(timer.current);
+            void flush();
+          }}
           onRemove={
             selected.editable
               ? async () => {
@@ -571,23 +582,40 @@ function AddUnitForm({
   );
 }
 
-function RowDetail({ row, year, onClose, onRemove }: { row: Row; year: number; onClose: () => void; onRemove?: () => void }) {
+function RowDetail({
+  row,
+  year,
+  onClose,
+  onRemove,
+  onSave,
+}: {
+  row: Row;
+  year: number;
+  onClose: () => void;
+  onRemove?: () => void;
+  onSave: (patch: RowPatch) => void;
+}) {
+  const kind = row.rc === 'R' ? 'Residential' : row.rc === 'C' ? 'Commercial' : 'Labour';
   const contracts = [
-    { label: 'Current', rent: row.currentRent, start: row.currentStart, end: row.currentEnd, mf: row.mfCurrent },
-    row.r1 && { label: row.renew1 ? '1st renewal' : '1st renewal (new tenant)', ...row.r1 },
-    row.r2 && { label: '2nd renewal', ...row.r2 },
-  ].filter(Boolean) as { label: string; rent: number | null; start: string | null; end: string | null; mf: boolean | null }[];
+    row.current && { key: 'current', title: 'Current lease', c: row.current, field: 'currentSchedule' as const, note: 'Actual cheques will come from Fusion lease schedules' },
+    row.r1 && { key: 'r1', title: row.renew1 ? '1st renewal' : '1st renewal · new tenant', c: row.r1, field: 'r1Schedule' as const, note: undefined },
+    row.r2 && { key: 'r2', title: '2nd renewal', c: row.r2, field: 'r2Schedule' as const, note: undefined },
+  ].filter(Boolean) as { key: string; title: string; c: NonNullable<Row['r1']>; field: 'currentSchedule' | 'r1Schedule' | 'r2Schedule'; note?: string }[];
+
   return (
-    <div className="max-h-[38vh] overflow-auto border-t-2 border-slate-300 bg-white px-4 py-3 text-sm">
-      <div className="mb-2 flex items-center gap-3">
-        <div className="font-semibold">
-          {row.unitCode} · {row.tenant ?? '—'}
-        </div>
-        <div className="text-xs text-slate-500">
-          {row.propertyName} · {row.rc === 'R' ? 'Residential' : row.rc === 'C' ? 'Commercial' : 'Labour'}
-          {row.area ? ` · ${fmt(row.area)} sq.ft` : ''}
-          {row.increasePct !== null ? ` · renewal increase ${pct(row.increasePct)}` : ''}
-          {row.reraAverage ? ` · RERA avg ${fmt(row.reraAverage)}` : ''}
+    <div className="max-h-[46vh] overflow-auto border-t-2 border-slate-300 bg-white px-4 py-3 text-sm">
+      <div className="mb-3 flex items-start gap-3">
+        <div>
+          <div className="font-semibold text-slate-900">
+            {row.unitCode} <span className="font-normal text-slate-400">·</span> {row.tenant ?? '—'}
+          </div>
+          <div className="text-xs text-slate-500">
+            {row.propertyName} · {kind}
+            {row.area ? ` · ${fmt(row.area)} sq.ft` : ''}
+            {row.increasePct !== null ? ` · renewal increase ${pct(row.increasePct)}` : ''}
+            {row.reraAverage ? ` · RERA avg ${fmt(row.reraAverage)}` : ''}
+            {` · deposit ${row.securityDeposit !== null ? fmt(row.securityDeposit) : 'assumed % of rent'}`}
+          </div>
         </div>
         <div className="ml-auto flex gap-2">
           {onRemove && (
@@ -600,70 +628,71 @@ function RowDetail({ row, year, onClose, onRemove }: { row: Row; year: number; o
           </button>
         </div>
       </div>
+
       {row.warnings.length > 0 && (
-        <ul className="mb-2 list-disc pl-5 text-xs text-amber-700">
+        <ul className="mb-3 list-disc rounded-md bg-amber-50 py-1.5 pr-3 pl-7 text-xs text-amber-800">
           {row.warnings.map((w) => (
             <li key={w}>{w}</li>
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap gap-6">
-        <table className="table-fin w-auto">
-          <thead>
-            <tr>
-              <th>Contract</th>
-              <th className="num">Rent</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>MF</th>
-            </tr>
-          </thead>
-          <tbody>
-            {contracts.map((c) => (
-              <tr key={c.label}>
-                <td>{c.label}</td>
-                <td className="num">{fmt(c.rent)}</td>
-                <td>{ymdToDmy(c.start)}</td>
-                <td>{ymdToDmy(c.end)}</td>
-                <td>{yn(c.mf)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <table className="table-fin w-auto">
-          <thead>
-            <tr>
-              <th>{year}</th>
-              {MONTHS.map((m) => (
-                <th key={m} className="num">
-                  {m}
-                </th>
-              ))}
-              <th className="num">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Revenue</td>
-              {row.revenue.map((v, i) => (
-                <td key={i} className="num">
-                  {fmt(v)}
-                </td>
-              ))}
-              <td className="num font-semibold">{fmt(row.revenueTotal)}</td>
-            </tr>
-            <tr>
-              <td>Cash</td>
-              {row.cash.map((v, i) => (
-                <td key={i} className="num">
-                  {fmt(v)}
-                </td>
-              ))}
-              <td className="num font-semibold">{fmt(row.cashTotal)}</td>
-            </tr>
-          </tbody>
-        </table>
+
+      <div className="flex gap-3 overflow-x-auto pb-1">
+        {contracts.map(({ key, title, c, field, note }) => (
+          <div key={key} className="shrink-0">
+            <div className="mb-1 flex gap-3 px-0.5 text-xs text-slate-600">
+              <span>
+                Rent <b className="text-slate-900 tabular-nums">{fmt(c.rent)}</b>
+              </span>
+              <span>
+                {ymdToDmy(c.start)} – {ymdToDmy(c.end)}
+              </span>
+              <span>MF {yn(c.mf)}</span>
+            </div>
+            <ScheduleEditor
+              title={title}
+              contract={c}
+              year={year}
+              editable={row.editable}
+              overrideNote={note}
+              onSave={(items) => onSave({ [field]: items } as RowPatch)}
+            />
+          </div>
+        ))}
       </div>
+
+      <table className="tbl mt-3">
+        <thead>
+          <tr>
+            <th className="w-72">{year}</th>
+            {MONTHS.map((m) => (
+              <th key={m} className="num w-20">
+                {m}
+              </th>
+            ))}
+            <th className="num w-24">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(
+            [
+              ['Revenue', row.revenue, row.revenueTotal],
+              ['Rent cheques (ex VAT)', row.cash, row.cashTotal],
+              ['Cash inflow (incl. fees, VAT, deposits)', row.cashFlow, row.cashFlowTotal],
+            ] as const
+          ).map(([label, vals, total]) => (
+            <tr key={label}>
+              <td className="text-slate-700">{label}</td>
+              {vals.map((v, i) => (
+                <td key={i} className="num">
+                  {fmt(v)}
+                </td>
+              ))}
+              <td className="num font-semibold">{fmt(total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

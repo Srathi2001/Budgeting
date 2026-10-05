@@ -71,6 +71,8 @@ const AssumptionsSchema = z.object({
   ejariFee: z.number().min(0),
   mfPct: z.number().min(0).max(1),
   agencyPct: z.number().min(0).max(1),
+  vatRate: z.number().min(0).max(1),
+  depositPct: z.number().min(0).max(1),
 }) satisfies z.ZodType<Assumptions>;
 
 export async function saveAssumptions(versionId: number, input: Assumptions): Promise<Result> {
@@ -177,5 +179,59 @@ export async function updateProperty(id: number, input: z.infer<typeof PropertyS
     await db.update(schema.properties).set(d).where(eq(schema.properties.id, id));
     await audit(me.id, null, 'property', 'update', { id, ...d });
     return 'Property updated';
+  });
+}
+
+// ---- comparatives -----------------------------------------------------------------------------
+
+/**
+ * Upload an Excel sheet of comparatives: a column with property codes ("Code" / "Property Code")
+ * and one column per label (e.g. 2026F, 2025A, 2024A). Blank cells are left unchanged.
+ */
+export async function importComparatives(versionId: number, form: FormData): Promise<Result> {
+  const user = await requireFinance();
+  return wrap(async () => {
+    const file = form.get('file');
+    if (!(file instanceof File) || !file.size) throw new Error('Choose an Excel file');
+    const XLSX = await import('xlsx');
+    const wb = XLSX.read(Buffer.from(await file.arrayBuffer()), { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+    const headerIdx = rows.findIndex((r) => r.some((c) => /^(property\s*)?code$/i.test(String(c ?? '').trim())));
+    if (headerIdx < 0) throw new Error('No "Code" column found in the first sheet');
+    const header = rows[headerIdx].map((c) => String(c ?? '').trim().toUpperCase());
+    const codeCol = header.findIndex((h) => /^(PROPERTY\s*)?CODE$/.test(h));
+    const labelCols = header.map((h, i) => ({ h, i })).filter((x) => /^\d{4}[ABF]$/.test(x.h));
+    if (!labelCols.length) throw new Error('No comparative columns found (headers like 2026F, 2025A, 2024A)');
+
+    const props = await db.select().from(schema.properties);
+    const norm = (c: string) => c.trim().toUpperCase().replace(/N$/, '');
+    const byCode = new Map(props.map((p) => [norm(p.code), p.id]));
+    let saved = 0;
+    const unknown: string[] = [];
+    for (const r of rows.slice(headerIdx + 1)) {
+      const code = r[codeCol] ? String(r[codeCol]) : '';
+      if (!code) continue;
+      const pid = byCode.get(norm(code));
+      if (!pid) {
+        unknown.push(code);
+        continue;
+      }
+      for (const { h, i } of labelCols) {
+        const raw = r[i];
+        if (raw === null || raw === '') continue;
+        const amount = typeof raw === 'number' ? raw : Number(String(raw).replace(/[,\s]/g, ''));
+        if (!Number.isFinite(amount)) continue;
+        await db
+          .insert(schema.comparatives)
+          .values({ versionId, propertyId: pid, label: h, amount })
+          .onConflictDoUpdate({
+            target: [schema.comparatives.versionId, schema.comparatives.propertyId, schema.comparatives.label],
+            set: { amount },
+          });
+        saved++;
+      }
+    }
+    await audit(user.id, versionId, 'comparative', 'import', { file: file.name, values: saved, unknown });
+    return `Imported ${saved} values${unknown.length ? `; unknown property codes: ${unknown.slice(0, 8).join(', ')}` : ''}`;
   });
 }

@@ -15,6 +15,12 @@ import {
 } from 'drizzle-orm/pg-core';
 import type { Assumptions } from '@/lib/engine/assumptions';
 
+/** One cheque: date 'YYYY-MM-DD', amount ex VAT */
+export interface ScheduleItem {
+  date: string;
+  amount: number;
+}
+
 // numeric columns come back as strings from pg; read them through `mode: 'number'`
 const money = (name: string) => numeric(name, { precision: 16, scale: 2, mode: 'number' });
 const decimal = (name: string) => numeric(name, { precision: 12, scale: 6, mode: 'number' });
@@ -99,6 +105,9 @@ export const leaseLines = pgTable(
     currentRent: money('current_rent'),
     currentStart: day('current_start'),
     currentEnd: day('current_end'),
+    /** Actual cheques of the current lease: from Fusion lease schedules (or entered until the sync exists). */
+    currentSchedule: jsonb('current_schedule').$type<ScheduleItem[]>(),
+    securityDeposit: money('security_deposit'),
 
     renew1: boolean('renew1').notNull().default(true),
     noRenewal: boolean('no_renewal').notNull().default(false),
@@ -106,12 +115,15 @@ export const leaseLines = pgTable(
     r1Start: day('r1_start'),
     r1End: day('r1_end'),
     r1Mf: boolean('r1_mf'),
+    /** Edited cheque schedule for the 1st renewal; null = equal cheques */
+    r1Schedule: jsonb('r1_schedule').$type<ScheduleItem[]>(),
 
     r2Renew: boolean('r2_renew'),
     r2Rent: money('r2_rent'),
     r2Start: day('r2_start'),
     r2End: day('r2_end'),
     r2Mf: boolean('r2_mf'),
+    r2Schedule: jsonb('r2_schedule').$type<ScheduleItem[]>(),
 
     budgetRate: money('budget_rate'),
     increasePctOverride: decimal('increase_pct_override'),
@@ -143,6 +155,9 @@ export const lineMonthly = pgTable(
     ejariFee: money('ejari_fee').notNull().default(0),
     mfFee: money('mf_fee').notNull().default(0),
     agencyFee: money('agency_fee').notNull().default(0),
+    vat: money('vat').notNull().default(0),
+    depositIn: money('deposit_in').notNull().default(0),
+    depositOut: money('deposit_out').notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.lineId, t.month] }), index('line_monthly_version_property_idx').on(t.versionId, t.propertyId)],
 );

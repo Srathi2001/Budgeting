@@ -1,34 +1,26 @@
 import Link from 'next/link';
 import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
-import { propertyRollups, autoOtherTotal } from '@/lib/budget/reports';
-import { fmt, pct, sum } from '@/lib/format';
+import { propertyRollups, autoOtherTotal, cashFlow } from '@/lib/budget/reports';
+import { sum } from '@/lib/format';
+import { Num, Pct } from '@/components/num';
 
 export const metadata = { title: 'Building P&L · Budget' };
 
 // Cost lines from the Buildingwise P&L sheet. Not budgeted in the tool yet.
-const COST_COLUMNS = [
-  'Maintenance (R03 + M01–M04)',
-  'Capex / replacement (R01 + R02 + R04)',
-  'FM staff cost',
-  'Water & electricity',
-  'Watchmen',
-  'Insurance',
-  'Cleaning & security AMC',
-  'Misc other OH',
-  'DREC / land fees',
-];
+const COST_COLUMNS = ['Maintenance', 'Capex / repl.', 'FM staff', 'Water & elec.', 'Watchmen', 'Insurance', 'Cleaning & sec.', 'Misc OH', 'DREC / land'];
 
 export default async function PnlPage() {
   const user = await requireUser();
   const { version } = await getActiveVersion();
   const rolls = await propertyRollups(version!.id, (await visibleProperties(user)).map((p) => p.id));
 
-  const lines = rolls.map((r) => {
-    const rental = sum(r.revenue);
-    const other = sum(autoOtherTotal(r)) + sum(r.manualOther);
-    const cash = sum(r.cash);
-    return { r, rental, other, total: rental + other, cash };
-  });
+  const lines = rolls
+    .map((r) => {
+      const rental = sum(r.revenue);
+      const other = sum(autoOtherTotal(r)) + sum(r.manualOther);
+      return { r, rental, other, total: rental + other, cash: sum(cashFlow(r)) };
+    })
+    .sort((a, b) => a.r.buCode.localeCompare(b.r.buCode) || b.total - a.total);
   const T = {
     rental: sum(lines.map((l) => l.rental)),
     other: sum(lines.map((l) => l.other)),
@@ -37,79 +29,91 @@ export default async function PnlPage() {
   };
 
   return (
-    <div className="space-y-4 p-6">
+    <div className="space-y-3 p-6">
       <header className="flex items-end gap-4">
         <div>
-          <h1 className="text-xl font-semibold">Building-wise P&amp;L · {version!.year}</h1>
-          <p className="text-sm text-slate-500">
-            Revenue side only. Cost columns are placeholders until the cost budget is added. AED.
-          </p>
+          <h1 className="page-title">Building-wise P&amp;L · {version!.year}</h1>
+          <p className="page-sub">Revenue side only — cost columns are placeholders until the cost budget is added · AED</p>
         </div>
         <a className="btn ml-auto" href="/api/export/pnl">
           Export to Excel
         </a>
       </header>
-      <div className="card overflow-auto">
-        <table className="table-fin">
+      <div className="frame frame-tall">
+        <table className="tbl">
           <thead>
+            <tr className="tbl-band">
+              <th className="stick" colSpan={3} />
+              <th className="sep" colSpan={3}>
+                Revenue
+              </th>
+              <th className="sep" colSpan={COST_COLUMNS.length + 1}>
+                Costs (to be budgeted)
+              </th>
+              <th className="sep" colSpan={2}>
+                Profit
+              </th>
+              <th className="sep">Cash</th>
+            </tr>
             <tr>
-              <th className="num">S.N.</th>
-              <th>BU</th>
-              <th className="num">Units</th>
-              <th>Code</th>
-              <th>Property</th>
-              <th className="num">Rental revenue</th>
-              <th className="num">Other income</th>
-              <th className="num">Total revenue</th>
-              {COST_COLUMNS.map((c) => (
-                <th key={c} className="num text-slate-400">
+              <th className="stick stick-edge w-[300px]">Property</th>
+              <th className="w-16">BU</th>
+              <th className="num w-14">Units</th>
+              <th className="num sep w-28">Rental</th>
+              <th className="num w-24">Other inc.</th>
+              <th className="num w-28">Total</th>
+              {COST_COLUMNS.map((c, i) => (
+                <th key={c} className={`num w-24 text-slate-400 ${i === 0 ? 'sep' : ''}`}>
                   {c}
                 </th>
               ))}
-              <th className="num text-slate-400">Total expenses</th>
-              <th className="num">Gross profit</th>
-              <th className="num">GP %</th>
-              <th className="num">Cash in (rent)</th>
+              <th className="num w-24 text-slate-400">Total exp.</th>
+              <th className="num sep w-28">Gross profit</th>
+              <th className="num w-16">GP %</th>
+              <th className="num sep w-28">Cash inflow</th>
             </tr>
           </thead>
           <tbody>
-            {lines.map(({ r, rental, other, total, cash }, i) => (
+            {lines.map(({ r, rental, other, total, cash }) => (
               <tr key={r.propertyId}>
-                <td className="num text-slate-500">{i + 1}</td>
-                <td>{r.buName}</td>
-                <td className="num">{r.kind === 'CAMP' ? 'Camps' : r.units}</td>
-                <td className="text-slate-500">{r.code}</td>
-                <td>
-                  <Link href={`/master?p=${r.propertyId}`} className="hover:text-sky-700 hover:underline">
-                    {r.name}
-                  </Link>
+                <td className="stick stick-edge">
+                  <div className="flex w-[280px] items-baseline gap-2 overflow-hidden">
+                    <Link href={`/master?p=${r.propertyId}`} className="truncate hover:text-sky-700 hover:underline" title={r.name}>
+                      {r.name}
+                    </Link>
+                    <span className="shrink-0 text-[11px] text-slate-400">{r.code}</span>
+                  </div>
                 </td>
-                <td className="num">{fmt(rental)}</td>
-                <td className="num">{fmt(other)}</td>
-                <td className="num font-semibold">{fmt(total)}</td>
-                {COST_COLUMNS.map((c) => (
-                  <td key={c} className="num text-slate-300">
-                    —
+                <td className="muted">{r.buName}</td>
+                <td className="num muted">{r.kind === 'CAMP' ? 'Camp' : r.units}</td>
+                <Num v={rental} className="sep" />
+                <Num v={other} />
+                <Num v={total} bold />
+                {COST_COLUMNS.map((c, i) => (
+                  <td key={c} className={`na ${i === 0 ? 'sep' : ''}`}>
+                    ·
                   </td>
                 ))}
-                <td className="num text-slate-300">—</td>
-                <td className="num">{fmt(total)}</td>
-                <td className="num">{total ? pct(1) : ''}</td>
-                <td className="num">{fmt(cash)}</td>
+                <td className="na">·</td>
+                <Num v={total} className="sep" />
+                <Pct v={total ? 1 : null} />
+                <Num v={cash} className="sep" />
               </tr>
             ))}
-            <tr className="total">
-              <td colSpan={5}>Total</td>
-              <td className="num">{fmt(T.rental)}</td>
-              <td className="num">{fmt(T.other)}</td>
-              <td className="num">{fmt(T.total)}</td>
-              {COST_COLUMNS.map((c) => (
-                <td key={c} />
+            <tr className="tbl-total">
+              <td className="stick stick-edge">Total</td>
+              <td />
+              <td className="num">{sum(lines.map((l) => l.r.units))}</td>
+              <Num v={T.rental} className="sep" />
+              <Num v={T.other} />
+              <Num v={T.total} />
+              {COST_COLUMNS.map((c, i) => (
+                <td key={c} className={i === 0 ? 'sep' : ''} />
               ))}
               <td />
-              <td className="num">{fmt(T.total)}</td>
-              <td className="num">{pct(1)}</td>
-              <td className="num">{fmt(T.cash)}</td>
+              <Num v={T.total} className="sep" />
+              <Pct v={T.total ? 1 : null} />
+              <Num v={T.cash} className="sep" />
             </tr>
           </tbody>
         </table>

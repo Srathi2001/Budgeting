@@ -2,7 +2,7 @@ import { requireUser, getActiveVersion, visibleProperties, editablePropertyIds }
 import { loadMasterRows } from '@/lib/budget/master';
 import { MasterGrid } from './master-grid';
 
-export const metadata = { title: 'Revenue Master · Budget' };
+export const metadata = { title: 'Lease Budget · Budget' };
 
 export default async function MasterPage(props: PageProps<'/master'>) {
   const user = await requireUser();

@@ -43,12 +43,12 @@ export function OtherIncomeEditor({
   const total = MONTHS.map((_, i) => sum(lines.map((l) => l.months[i])));
 
   return (
-    <div className="card overflow-auto">
+    <div className="frame">
       <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-2 text-xs text-slate-500">
         {editable ? 'Type monthly amounts, or an annual amount in Total to spread it evenly.' : 'Read only.'}
         {msg && <span className="ml-auto">{msg}</span>}
       </div>
-      <table className="table-fin">
+      <table className="tbl">
         <thead>
           <tr>
             <th>GL</th>
@@ -73,7 +73,7 @@ export function OtherIncomeEditor({
                 <td key={i} className="num">
                   {editable && !l.auto ? (
                     <input
-                      className="input w-24 text-right"
+                      className="cell-edit text-right"
                       defaultValue={v ? String(v) : ''}
                       key={`${l.code}-${i}-${v}`}
                       onBlur={(e) => {
@@ -89,7 +89,7 @@ export function OtherIncomeEditor({
               <td className="num font-semibold">
                 {editable && !l.auto ? (
                   <input
-                    className="input w-28 text-right font-semibold"
+                    className="cell-edit text-right font-semibold"
                     defaultValue={sum(l.months) ? String(Math.round(sum(l.months) * 100) / 100) : ''}
                     key={`${l.code}-t-${sum(l.months)}`}
                     title="Enter an annual amount to spread evenly across 12 months"
@@ -109,7 +109,7 @@ export function OtherIncomeEditor({
               </td>
             </tr>
           ))}
-          <tr className="total">
+          <tr className="tbl-total">
             <td colSpan={2}>Total other income</td>
             {total.map((v, i) => (
               <td key={i} className="num">

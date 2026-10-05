@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
-import { propertyRollups, autoOtherTotal } from '@/lib/budget/reports';
+import { propertyRollups, autoOtherTotal, cashFlow } from '@/lib/budget/reports';
 import { fmt, MONTHS, sum } from '@/lib/format';
 import { StatusBadge } from '@/components/status-badge';
 
@@ -11,7 +11,8 @@ export default async function Dashboard() {
   const rolls = await propertyRollups(version!.id, props.map((p) => p.id));
 
   const revenue = MONTHS.map((_, i) => sum(rolls.map((r) => r.revenue[i])));
-  const cash = MONTHS.map((_, i) => sum(rolls.map((r) => r.cash[i])));
+  const flows = rolls.map((r) => ({ id: r.propertyId, flow: cashFlow(r) }));
+  const cash = MONTHS.map((_, i) => sum(flows.map((f) => f.flow[i])));
   const other = MONTHS.map((_, i) => sum(rolls.map((r) => autoOtherTotal(r)[i] + r.manualOther[i])));
   const max = Math.max(...revenue, ...cash, 1);
 
@@ -19,7 +20,7 @@ export default async function Dashboard() {
   for (const r of rolls) {
     const b = byBu.get(r.buCode) ?? { name: r.buName, revenue: 0, cash: 0, units: 0 };
     b.revenue += sum(r.revenue);
-    b.cash += sum(r.cash);
+    b.cash += sum(cashFlow(r));
     b.units += r.units;
     byBu.set(r.buCode, b);
   }
@@ -34,7 +35,7 @@ export default async function Dashboard() {
 
   const kpis = [
     { label: 'Rental revenue', value: fmt(sum(revenue)) },
-    { label: 'Cash collections', value: fmt(sum(cash)) },
+    { label: 'Cash inflow (incl. VAT, deposits)', value: fmt(sum(cash)) },
     { label: 'Other income', value: fmt(sum(other)) },
     { label: 'Units', value: `${fmt(sum(rolls.map((r) => r.units)))} (${fmt(sum(rolls.map((r) => r.vacantUnits)))} vacant)` },
     { label: 'Vacancy loss (gap days)', value: fmt(sum(rolls.map((r) => r.vacancyLoss))) },
@@ -67,7 +68,7 @@ export default async function Dashboard() {
               <span className="inline-block h-2.5 w-2.5 rounded-sm bg-sky-600" /> Revenue
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Cash
+              <span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Cash inflow
             </span>
           </div>
         </div>
@@ -85,15 +86,15 @@ export default async function Dashboard() {
       </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <section className="card overflow-hidden">
+        <section className="frame">
           <h2 className="border-b border-slate-200 px-4 py-2 text-sm font-semibold">By business unit</h2>
-          <table className="table-fin">
+          <table className="tbl">
             <thead>
               <tr>
                 <th>BU</th>
                 <th className="num">Units</th>
                 <th className="num">Revenue</th>
-                <th className="num">Cash</th>
+                <th className="num">Cash inflow</th>
               </tr>
             </thead>
             <tbody>
@@ -107,7 +108,7 @@ export default async function Dashboard() {
                   <td className="num">{fmt(b.cash)}</td>
                 </tr>
               ))}
-              <tr className="total">
+              <tr className="tbl-total">
                 <td>Total</td>
                 <td className="num">{fmt(sum([...byBu.values()].map((b) => b.units)))}</td>
                 <td className="num">{fmt(sum(revenue))}</td>
@@ -117,9 +118,9 @@ export default async function Dashboard() {
           </table>
         </section>
 
-        <section className="card overflow-hidden">
+        <section className="frame">
           <h2 className="border-b border-slate-200 px-4 py-2 text-sm font-semibold">Submission progress by property manager</h2>
-          <table className="table-fin">
+          <table className="tbl">
             <thead>
               <tr>
                 <th>Coordinator</th>

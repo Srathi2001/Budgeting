@@ -16,6 +16,10 @@ function input(over: Partial<LeaseInput>): LeaseInput {
     currentRent: null,
     currentStart: null,
     currentEnd: null,
+    currentSchedule: null,
+    securityDeposit: null,
+    r1Schedule: null,
+    r2Schedule: null,
     renew1: true,
     noRenewal: false,
     r1Rent: null,
@@ -157,5 +161,58 @@ describe('renewal derivation', () => {
     expect(r1.rent).toBe(52000);
     expect(formatDay(r1.start)).toBe('2027-03-15');
     expect(r1.derived.rent).toBe(false);
+  });
+});
+
+describe('cheque schedules, VAT and deposits', () => {
+  const base = { currentRent: 100000, currentStart: d('2026-07-01'), currentEnd: d('2027-06-30') };
+
+  it('uses the actual schedule of the current lease', () => {
+    const res = computeLease(
+      input({ ...base, currentSchedule: [{ date: d('2027-01-15'), amount: 50000 }, { date: d('2026-07-01'), amount: 50000 }], r2Renew: false }),
+      2027,
+      A,
+    );
+    expect(res.contracts[0].scheduleSource).toBe('ACTUAL');
+    expect(res.cash[0]).toBe(50000); // January cheque of the current lease
+    expect(res.warnings.filter((w) => /schedule/.test(w))).toHaveLength(0);
+  });
+
+  it('renewals default to 4 equal cheques, an edited schedule replaces them', () => {
+    const eq4 = computeLease(input({ ...base }), 2027, A, { min: 100000, max: 100000 });
+    const r1 = eq4.contracts.find((c) => c.kind === 'RENEWAL1')!;
+    expect(r1.scheduleSource).toBe('EQUAL');
+    expect(r1.schedule).toHaveLength(4);
+    const edited = computeLease(input({ ...base, r1Schedule: [{ date: d('2027-07-01'), amount: 100000 }] }), 2027, A, { min: 100000, max: 100000 });
+    expect(edited.contracts.find((c) => c.kind === 'RENEWAL1')!.scheduleSource).toBe('CUSTOM');
+    expect(edited.cash[6]).toBe(100000);
+  });
+
+  it('warns when a schedule does not add up to the rent', () => {
+    const res = computeLease(input({ ...base, currentSchedule: [{ date: d('2026-07-01'), amount: 60000 }] }), 2027, A);
+    expect(res.warnings.join()).toMatch(/cheque schedule totals 60,000/);
+  });
+
+  it('VAT on commercial rent and on fees, none on residential rent', () => {
+    const c = computeLease(input({ ...base, rc: 'C', area: 1000, r1Rent: 100000 }), 2027, A);
+    const r = computeLease(input({ ...base, r1Rent: 100000 }), 2027, A);
+    const julyCheque = 25000;
+    // July: renewal cheque + admin + Ejari, all with 5% except residential rent
+    expect(c.vat[6]).toBeCloseTo((julyCheque + 1000 + 200) * 0.05);
+    expect(r.vat[6]).toBeCloseTo((500 + 200) * 0.05);
+  });
+
+  it('deposit refunded when the tenant leaves, new deposit taken from the new tenant', () => {
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 120000, securityDeposit: 5000 }), 2027, A);
+    expect(res.depositOut[6]).toBe(5000); // lease ends 30 Jun -> refund in July
+    const r1 = res.contracts.find((c) => c.kind === 'RENEWAL1')!;
+    const mi = new Date(r1.start * 86400000).getUTCMonth();
+    expect(res.depositIn[mi]).toBeCloseTo(120000 * 0.05);
+    expect(res.totals.cashFlow).toBeGreaterThan(res.totals.cash);
+  });
+
+  it('a renewing tenant moves no deposit', () => {
+    const res = computeLease(input({ ...base }), 2027, A, { min: 100000, max: 100000 });
+    expect(res.depositIn.every((v) => v === 0) && res.depositOut.every((v) => v === 0)).toBe(true);
   });
 });

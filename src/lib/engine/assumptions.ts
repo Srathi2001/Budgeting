@@ -31,6 +31,10 @@ export interface Assumptions {
   mfPct: number;
   /** Agency commission on new-tenant leases, % of annual rent. */
   agencyPct: number;
+  /** VAT on commercial / labour rent and on all fees (residential rent is exempt). Included in cash inflow. */
+  vatRate: number;
+  /** Security deposit taken from a new tenant, % of annual rent (Fusion leases: median 5%). */
+  depositPct: number;
 }
 
 export const DEFAULT_ASSUMPTIONS: Assumptions = {
@@ -52,6 +56,8 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
   ejariFee: 200,
   mfPct: 0.05,
   agencyPct: 0.025,
+  vatRate: 0.05,
+  depositPct: 0.05,
 };
 
 export function withDefaults(partial: Partial<Assumptions> | null | undefined): Assumptions {
