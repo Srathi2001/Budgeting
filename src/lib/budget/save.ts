@@ -11,9 +11,29 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD
 const money = z.number().finite().min(0).max(1e10);
 const schedule = z.array(z.object({ date: isoDate, amount: z.number().finite().min(0).max(1e10) })).max(24);
 
-// Current-lease facts (tenant, rent, dates, deposit, schedule) are not here: they come from Fusion only.
+const text = (max: number) => z.string().max(max).nullable();
+
 export const PatchSchema = z
   .object({
+    // current lease (also loaded from Fusion; an upload overwrites these)
+    leaseNumber: text(60),
+    leaseVersion: text(20),
+    tenantCode: text(40),
+    tenant: text(200),
+    customerClass: text(60),
+    currentStart: isoDate.nullable(),
+    rentStart: isoDate.nullable(),
+    currentEnd: isoDate.nullable(),
+    currentRent: money.nullable(),
+    vatAmount: money.nullable(),
+    securityDeposit: money.nullable(),
+    leaseStatus: text(40),
+    leaseRemarks: text(2000),
+    currentSchedule: schedule.nullable(),
+    vacant: z.boolean(),
+    mergedUnitNumber: text(80),
+    unitStatus: text(40),
+    resiCommercial: text(40),
     staffOwner: z.enum(['STAFF', 'OWNER']).nullable(),
     mfCurrent: z.boolean().nullable(),
     renew1: z.boolean(),

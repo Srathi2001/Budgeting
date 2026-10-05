@@ -3,9 +3,11 @@
 Replaces the Excel round trip in the budget process. Before: PM templates (`Budget <PM> <BU> X.xlsx`) went out to property managers, came back filled in, and were pasted into the `Revenue Master` of `H.E. MJN_Budget 2026.xlsm`.
 
 Now:
-* **Units and current leases come from Oracle Fusion.** They are read-only in the tool.
-* **Property managers enter only the budget assumptions** for each unit.
+* **Units and current leases are loaded from Oracle Fusion and can be edited in the tool.** The next Fusion upload overwrites edited lease fields.
+* **Property managers enter the budget assumptions** for each unit.
 * **Revenue and cash are recalculated on every save.**
+
+**Filters work like Excel:** every Lease Budget column, and the filter bars on the Dashboard, Revenue Analysis and Lease Budget, open a checkbox list. It has a search box, (Select All), counts for each value, and multiple selection.
 
 **Stack:** Next.js 16 (App Router), PostgreSQL with Drizzle ORM, and AG Grid Community for the Lease Budget grid. The UI is dark mode.
 
@@ -16,7 +18,7 @@ Every field has one owner. In the Lease Budget grid, each column group's header 
 | Owner | Fields | Editable by |
 | --- | --- | --- |
 | **Unit master** (grey) | BU, property, unit code, PC, bedroom, area, R/C, MF, merged unit no., unit status, unit type, Resi/Commercial (Fusion), landlord, category | Fusion Unit Dump; a few fields can be corrected by Finance or PMs |
-| **Oracle Fusion** (teal) | lease number, version, tenant code and name, customer class, lease start, rent start, lease end, actual lease amount, VAT, security deposit, lease status, remarks | **Nobody**: loaded from Fusion only |
+| **Oracle Fusion** (teal) | lease number, version, tenant code and name, customer class, lease start, rent start, lease end, actual lease amount, VAT, security deposit, lease status, remarks, vacant, current-lease cheque schedule | Property managers (own properties), Finance. A Fusion upload overwrites these fields. |
 | **Budget inputs** (amber) | staff/owner, renew Y/N, not re-let, budget rate, increase %, cheques per year, renewal overrides (1st, 2nd and 3rd), notes | Property managers (own properties), Finance |
 | **Calculated** (violet) | RERA index row, low/high/average, old and new rent psf, % difference, increase allowed, staff discount, vacancy loss | — |
 

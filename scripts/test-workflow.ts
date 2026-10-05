@@ -69,8 +69,10 @@ async function main() {
   check('negative rate rejected', res.errors.length === 1);
   res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { r1Start: '31/12/2026' } }]);
   check('bad date format rejected', res.errors.length === 1);
-  res = await applyLineChanges(fin, open.id, [{ lineId: original.id, patch: { currentRent: 1 } as never }]);
-  check('Fusion lease facts cannot be edited, even by Finance', res.errors.length === 1);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentRent: 72000, tenant: 'EDITED TENANT' } }]);
+  check('PM can edit current-lease fields', res.errors.length === 0 && res.rows[0].tenant === 'EDITED TENANT' && res.rows[0].current?.rent === 72000);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentRent: -1 } }]);
+  check('negative lease amount rejected', res.errors.length === 1);
 
   // 4. Permissions
   res = await applyLineChanges(pm, open.id, [{ lineId: theirs.l.id, patch: { notes: 'HACK' } }]);

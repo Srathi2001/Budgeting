@@ -26,6 +26,8 @@ import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine } from './actions';
 import { ScheduleEditor } from './schedule-editor';
+import { ExcelFilter } from '@/components/excel-filter';
+import { MultiSelect } from '@/components/multi-select';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -90,19 +92,24 @@ const inputClass = (p: CellClassParams<Row>) => (p.data?.editable && !p.node.isR
 const money = (p: ValueFormatterParams) => fmt(p.value as number | null);
 const money2 = (p: ValueFormatterParams) => fmt(p.value as number | null, 2);
 
-/** Read-only fact from Oracle Fusion. */
+/** Current-lease field: loaded from Oracle Fusion, editable in the tool (a Fusion upload overwrites it). */
 function fusionCol(field: keyof Row, headerName: string, kind: 'text' | 'money' | 'date' = 'text', extra: Partial<ColDef<Row>> = {}): ColDef<Row> {
   return {
     colId: field as string,
     field,
     headerName,
     headerClass: 'hdr-fusion',
-    cellClass: 'cell-fusion',
-    editable: false,
+    headerTooltip: 'Loaded from Oracle Fusion. You can edit it; the next Fusion upload replaces it.',
+    cellClass: (p) => (p.data?.editable && !p.node.isRowPinned() ? 'cell-fusion cell-input' : 'cell-fusion'),
+    editable,
     cellDataType: false,
-    filter: kind === 'text',
-    ...(kind === 'money' ? { type: 'rightAligned', valueFormatter: money } : {}),
-    ...(kind === 'date' ? { valueFormatter: (p: ValueFormatterParams) => ymdToDmy(p.value) } : {}),
+    ...(kind === 'text' ? { valueParser: (p: { newValue: unknown }) => (p.newValue === '' ? null : p.newValue) } : {}),
+    ...(kind === 'money'
+      ? { type: 'rightAligned', valueFormatter: money, valueParser: (p: { newValue: unknown }) => parseNum(p.newValue) }
+      : {}),
+    ...(kind === 'date'
+      ? { valueFormatter: (p: ValueFormatterParams) => ymdToDmy(p.value), valueParser: (p: { newValue: unknown }) => parseDate(p.newValue) }
+      : {}),
     ...extra,
   };
 }
@@ -179,7 +186,6 @@ function unitCol(field: keyof Row, headerName: string, opts: { edit?: 'text' | '
     headerName,
     headerClass: 'hdr-unit',
     cellDataType: false,
-    filter: !isMoney,
     ...(isMoney ? { type: 'rightAligned', valueFormatter: money } : {}),
     ...extra,
   };
@@ -235,7 +241,7 @@ export function MasterGrid({
   staffDiscount,
   rows,
   properties,
-  selectedProperty,
+  selectedProperties,
 }: {
   versionId: number;
   year: number;
@@ -243,7 +249,8 @@ export function MasterGrid({
   staffDiscount: number;
   rows: Row[];
   properties: P[];
-  selectedProperty: number | null;
+  /** properties in view; empty = all */
+  selectedProperties: number[];
 }) {
   const router = useRouter();
   const apiRef = useRef<GridApi<Row> | null>(null);
@@ -327,14 +334,13 @@ export function MasterGrid({
         headerName: 'Unit',
         headerClass: 'hdr-unit',
         children: [
-          { colId: 'propertyName', field: 'propertyName', headerName: 'Property', headerClass: 'hdr-unit', pinned: 'left', filter: true, maxWidth: 220 },
+          { colId: 'propertyName', field: 'propertyName', headerName: 'Property', headerClass: 'hdr-unit', pinned: 'left', maxWidth: 220 },
           {
             colId: 'unitCode',
             field: 'unitCode',
             headerName: 'Unit Code',
             headerClass: 'hdr-unit',
             pinned: 'left',
-            filter: true,
             cellClass: (p) => (p.node.isRowPinned() ? 'font-semibold' : ''),
           },
           {
@@ -359,20 +365,20 @@ export function MasterGrid({
           unitCol('coordinator', 'PC'),
           unitCol('bedroom', 'Bedroom / Code', { edit: 'text' }),
           unitCol('area', 'Area (sq.ft)', { edit: 'money' }),
-          { ...unitCol('rc', 'Type (R/C)', { edit: 'text' }), cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['R', 'C', 'L'] }, filter: true },
+          { ...unitCol('rc', 'Type (R/C)', { edit: 'text' }), cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['R', 'C', 'L'] } },
           { ...inputCol('mfCurrent', 'MF (Y/N)', 'yn'), headerClass: 'hdr-unit' },
-          unitCol('mergedUnitNumber', 'Merged Unit No.'),
-          unitCol('unitStatus', 'Unit Status'),
-          unitCol('unitType', 'Unit Type', { edit: 'text', filter: true }),
-          unitCol('resiCommercial', 'Resi / Commercial (Fusion)'),
+          unitCol('mergedUnitNumber', 'Merged Unit No.', { edit: 'text' }),
+          unitCol('unitStatus', 'Unit Status', { edit: 'text' }),
+          unitCol('unitType', 'Unit Type', { edit: 'text' }),
+          unitCol('resiCommercial', 'Resi / Commercial (Fusion)', { edit: 'text' }),
           unitCol('landlord', 'Landlord', { edit: 'text' }),
-          unitCol('pivotCategory', 'Category', { edit: 'text', filter: true }),
+          unitCol('pivotCategory', 'Category', { edit: 'text' }),
           unitCol('rooms', 'Rooms', { edit: 'int' }),
           unitCol('capacity', 'Capacity', { edit: 'int' }),
         ],
       },
       {
-        headerName: 'Current lease · Oracle Fusion (read-only)',
+        headerName: 'Current lease · Oracle Fusion',
         headerClass: 'hdr-fusion',
         children: [
           fusionCol('leaseNumber', 'Lease Number'),
@@ -388,7 +394,7 @@ export function MasterGrid({
           fusionCol('securityDeposit', 'Security Deposit', 'money'),
           fusionCol('leaseStatus', 'Lease Status'),
           fusionCol('leaseRemarks', 'Lease Remarks', 'text', { maxWidth: 280, tooltipField: 'leaseRemarks' }),
-          { ...fusionCol('vacant', 'Vacant'), valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? yn(p.data.vacant) : null) },
+          { ...inputCol('vacant', 'Vacant', 'ynReq'), headerClass: 'hdr-fusion' },
         ],
       },
       {
@@ -498,22 +504,23 @@ export function MasterGrid({
   );
 
   const visibleRows = useMemo(() => (onlyIssues ? rows.filter((r) => r.warnings.length) : rows), [rows, onlyIssues]);
+  // adding a unit needs exactly one property in view
+  const selectedProperty = selectedProperties.length === 1 ? selectedProperties[0] : null;
   const editableSelected = selectedProperty ? properties.find((p) => p.id === selectedProperty)?.editable : false;
   const leased = rows.filter((r) => r.currentEnd).length;
+  const pParam = selectedProperties.length ? selectedProperties.join(',') : 'all';
 
   return (
     <div className="flex h-screen flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
-        <select className="input w-72" value={selectedProperty ?? 'all'} onChange={(e) => startNav(() => router.push(`/master?p=${e.target.value}`))}>
-          <option value="all">All properties ({properties.length})</option>
-          {properties.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.code} · {p.name}
-              {p.editable ? '' : ' (read only)'}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          label="Property"
+          width="w-72"
+          value={selectedProperties.map(String)}
+          options={properties.map((p) => ({ value: String(p.id), label: `${p.code} · ${p.name}${p.editable ? '' : ' (read only)'}` }))}
+          onChange={(v) => startNav(() => router.push(`/master?p=${v.length ? v.join(',') : 'all'}`))}
+        />
         <input className="input w-56" placeholder="Search unit, tenant…" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
         <label className="flex items-center gap-1 text-[13px]">
           <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue
@@ -539,7 +546,7 @@ export function MasterGrid({
               + Add unit
             </button>
           )}
-          <a className="btn" href={`/api/export/master?p=${selectedProperty ?? 'all'}`}>
+          <a className="btn" href={`/api/export/master?p=${pParam}`}>
             Export to Excel
           </a>
         </div>
@@ -573,7 +580,8 @@ export function MasterGrid({
           theme={theme}
           rowData={visibleRows}
           columnDefs={columnDefs}
-          defaultColDef={{ resizable: true, sortable: true, minWidth: 56 }}
+          // every column gets the Excel-style checkbox filter
+          defaultColDef={{ resizable: true, sortable: true, minWidth: 56, filter: ExcelFilter }}
           autoSizeStrategy={{ type: 'fitCellContents', defaultMaxWidth: 300, continuous: true }}
           // measure every column when auto-fitting, not only the ones on screen
           suppressColumnVirtualisation
@@ -632,7 +640,7 @@ function Legend() {
   return (
     <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 bg-white px-4 py-1.5 text-[11px] text-slate-500">
       {item('#64748b', 'Unit master')}
-      {item('#14b8a6', 'Oracle Fusion (read-only)')}
+      {item('#14b8a6', 'Oracle Fusion (editable; an upload overwrites)')}
       {item('#f59e0b', 'Budget inputs')}
       {item('#a78bfa', 'Calculated')}
       {item('#3b82f6', 'Revenue')}
@@ -715,7 +723,7 @@ function RowDetail({
 }) {
   const kind = row.rc === 'R' ? 'Residential' : row.rc === 'C' ? 'Commercial' : 'Labour';
   const contracts = [
-    row.current && { key: 'current', title: 'Current lease · Fusion', c: row.current, field: null, note: 'Cheques from Fusion lease schedules once connected' },
+    row.current && { key: 'current', title: 'Current lease', c: row.current, field: 'currentSchedule' as const, note: 'Actual cheques; Fusion lease schedules will fill this once connected' },
     row.r1 && { key: 'r1', title: row.renew1 ? '1st renewal' : '1st renewal · new tenant', c: row.r1, field: 'r1Schedule' as const, note: undefined },
     row.r2 && { key: 'r2', title: '2nd renewal', c: row.r2, field: 'r2Schedule' as const, note: undefined },
     row.r3 && { key: 'r3', title: '3rd renewal', c: row.r3, field: 'r3Schedule' as const, note: undefined },
@@ -764,7 +772,8 @@ function RowDetail({
 
       {contracts.length === 0 && (
         <p className="mb-3 text-xs text-slate-500">
-          No current lease from Fusion. To budget a lease-up, set Renew = N, a budget rate, and the 1st renewal start date.
+          No current lease. Enter it in the Current lease columns (or load it from Fusion), or budget a lease-up with Renew = N, a budget
+          rate and the 1st renewal start date.
         </p>
       )}
 

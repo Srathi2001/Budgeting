@@ -15,7 +15,8 @@ export async function GET(request: Request) {
   if (!version) return new Response('No version', { status: 404 });
   const p = new URL(request.url).searchParams.get('p');
   const visible = await visibleProperties(user);
-  const ids = p && p !== 'all' ? visible.filter((x) => x.id === Number(p)).map((x) => x.id) : visible.map((x) => x.id);
+  const wanted = new Set((p && p !== 'all' ? p.split(',') : []).map(Number));
+  const ids = wanted.size ? visible.filter((x) => wanted.has(x.id)).map((x) => x.id) : visible.map((x) => x.id);
   const rows = await loadMasterRows(version.id, { propertyIds: ids });
   const staffDiscount = withDefaults(version.assumptions).staffDiscount;
   const yy = String(version.year).slice(2);

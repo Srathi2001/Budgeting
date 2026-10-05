@@ -108,8 +108,23 @@ export interface MasterRow {
   editable: boolean;
 }
 
-/** Budget inputs a property manager can change. Current-lease facts come from Fusion only. */
+/** Fields a user can change. Current-lease fields are also loaded from Fusion (an upload overwrites them). */
 export const LINE_FIELDS = [
+  'leaseNumber',
+  'leaseVersion',
+  'tenantCode',
+  'tenant',
+  'customerClass',
+  'currentStart',
+  'rentStart',
+  'currentEnd',
+  'currentRent',
+  'vatAmount',
+  'securityDeposit',
+  'leaseStatus',
+  'leaseRemarks',
+  'currentSchedule',
+  'vacant',
   'staffOwner',
   'mfCurrent',
   'renew1',
@@ -137,8 +152,20 @@ export const LINE_FIELDS = [
   'notes',
 ] as const;
 
-/** Unit master fields editable in the tool until the Fusion unit sync takes them over. */
-export const UNIT_FIELDS = ['bedroom', 'area', 'rc', 'pivotCategory', 'unitType', 'rooms', 'capacity', 'landlord'] as const;
+/** Unit master fields editable in the tool (a Fusion Unit Dump upload overwrites status / merged no. / usage / landlord). */
+export const UNIT_FIELDS = [
+  'bedroom',
+  'area',
+  'rc',
+  'pivotCategory',
+  'unitType',
+  'rooms',
+  'capacity',
+  'landlord',
+  'mergedUnitNumber',
+  'unitStatus',
+  'resiCommercial',
+] as const;
 
 export type LineField = (typeof LINE_FIELDS)[number];
 export type UnitField = (typeof UNIT_FIELDS)[number];

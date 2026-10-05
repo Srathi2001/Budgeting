@@ -605,9 +605,9 @@ export function FusionPanel({
   return (
     <div className="space-y-4">
       <p className="max-w-4xl text-[13px] text-slate-600">
-        Current leases and unit attributes come from Oracle Fusion only and are read-only in the Lease Budget. Until the Fusion
-        connection is set up, upload the two standard Fusion exports here. Each upload replaces the previous one for <b>{versionName}</b>{' '}
-        and recalculates every unit.
+        Current leases and unit attributes can be typed in the Lease Budget or loaded from Oracle Fusion. Until the Fusion connection
+        is set up, upload the two standard Fusion exports here. Each upload overwrites the lease and unit fields it contains for{' '}
+        <b>{versionName}</b> (including anything typed in) and recalculates every unit.
       </p>
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="card p-4">

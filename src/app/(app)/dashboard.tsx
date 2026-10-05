@@ -6,6 +6,7 @@ import type { DashboardData, DashUnit, ExpiryOutcome } from '@/lib/budget/dashbo
 import { CATEGORIES } from '@/lib/budget/category';
 import { MONTHS } from '@/lib/format';
 import { ChartCard, Columns, HBars, Legend, LineChart, StatTile, SERIES, MUTED_SERIES, compact } from '@/components/charts';
+import { MultiSelect } from '@/components/multi-select';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
@@ -18,21 +19,36 @@ const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
 const OUTCOME_COLOR: Record<ExpiryOutcome, string> = { Renew: SERIES[0], 'New tenant': SERIES[1], 'Not re-let': SERIES[2] };
 
 export function Dashboard({ data, locked }: { data: DashboardData; locked: boolean }) {
-  const [bu, setBu] = useState('');
-  const [pm, setPm] = useState('');
-  const [cat, setCat] = useState('');
-  const [prop, setProp] = useState('');
+  // multi-select filters; an empty list means "All"
+  const [bu, setBu] = useState<string[]>([]);
+  const [pm, setPm] = useState<string[]>([]);
+  const [cat, setCat] = useState<string[]>([]);
+  const [prop, setProp] = useState<string[]>([]);
   const yy = String(data.year).slice(2);
   const B = `${data.year}B`;
   const P = `${data.year - 1}B`;
+  const pass = (sel: string[], v: string) => sel.length === 0 || sel.includes(v);
 
   const propById = useMemo(() => new Map(data.properties.map((p) => [p.id, p])), [data.properties]);
-  const propOptions = data.properties.filter((p) => (!bu || p.bu === bu) && (!pm || p.pm === pm)).sort((a, b) => a.name.localeCompare(b.name));
+  const propOptions = data.properties.filter((p) => pass(bu, p.bu) && pass(pm, p.pm)).sort((a, b) => a.name.localeCompare(b.name));
 
   const units = useMemo(
-    () => data.units.filter((u) => (!bu || u.bu === bu) && (!pm || u.pm === pm) && (!cat || u.category === cat) && (!prop || String(u.propertyId) === prop)),
+    () =>
+      data.units.filter(
+        (u) =>
+          (bu.length === 0 || bu.includes(u.bu)) &&
+          (pm.length === 0 || pm.includes(u.pm)) &&
+          (cat.length === 0 || cat.includes(u.category)) &&
+          (prop.length === 0 || prop.includes(String(u.propertyId))),
+      ),
     [data.units, bu, pm, cat, prop],
   );
+  // value counts shown next to each option, Excel-style
+  const count = (key: (u: DashUnit) => string) => {
+    const m = new Map<string, number>();
+    for (const u of data.units) m.set(key(u), (m.get(key(u)) ?? 0) + 1);
+    return m;
+  };
 
   const m = useMemo(() => {
     const budget = units.reduce((a, u) => add12(a, u.revenue), z12());
@@ -51,7 +67,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
     }
     const props = [...byProp.entries()].map(([id, v]) => ({ id, name: propById.get(id)?.name ?? String(id), ...v, change: v.budget - v.prior }));
     const buCat = data.bus
-      .filter((b) => !bu || b === bu)
+      .filter((b) => bu.length === 0 || bu.includes(b))
       .map((b) => ({
         label: b,
         values: CATEGORIES.map((c) => sum(units.filter((u) => u.bu === b && u.category === c).flatMap((u) => u.revenue ?? []))),
@@ -82,7 +98,11 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
   const change = m.priorTotal ? (m.total - m.priorTotal) / m.priorTotal : null;
   const noLeases = data.units.every((u: DashUnit) => !u.leased);
   const monthLabels = MONTHS.map((x) => x.slice(0, 3));
-  const filtered = !!(bu || pm || cat || prop);
+  const filtered = bu.length + pm.length + cat.length + prop.length > 0;
+  const buN = count((u) => u.bu);
+  const pmN = count((u) => u.pm);
+  const catN = count((u) => u.category);
+  const propN = count((u) => String(u.propertyId));
 
   return (
     <div className="space-y-4 p-6">
@@ -97,12 +117,42 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
 
       {/* one filter row; it scopes every tile and chart below */}
       <div className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
-        <Filter label="Business unit" value={bu} onChange={(v) => { setBu(v); setProp(''); }} options={data.bus.map((b) => [b, b])} />
-        <Filter label="Property manager" value={pm} onChange={(v) => { setPm(v); setProp(''); }} options={data.pms.map((p) => [p, p.charAt(0) + p.slice(1).toLowerCase()])} />
-        <Filter label="Category" value={cat} onChange={setCat} options={CATEGORIES.map((c) => [c, c])} />
-        <Filter label="Property" value={prop} onChange={setProp} options={propOptions.map((p) => [String(p.id), `${p.name} · ${p.code}`])} wide />
+        <MultiSelect
+          label="Business unit"
+          value={bu}
+          onChange={(v) => {
+            setBu(v);
+            setProp([]);
+          }}
+          options={data.bus.map((b) => ({ value: b, label: b, count: buN.get(b) }))}
+        />
+        <MultiSelect
+          label="Property manager"
+          value={pm}
+          onChange={(v) => {
+            setPm(v);
+            setProp([]);
+          }}
+          options={data.pms.map((p) => ({ value: p, label: p.charAt(0) + p.slice(1).toLowerCase(), count: pmN.get(p) }))}
+        />
+        <MultiSelect label="Category" value={cat} onChange={setCat} options={CATEGORIES.map((c) => ({ value: c, label: c, count: catN.get(c) ?? 0 }))} />
+        <MultiSelect
+          label="Property"
+          width="w-72"
+          value={prop}
+          onChange={setProp}
+          options={propOptions.map((p) => ({ value: String(p.id), label: `${p.name} · ${p.code}`, count: propN.get(String(p.id)) }))}
+        />
         {filtered && (
-          <button className="btn btn-xs" onClick={() => { setBu(''); setPm(''); setCat(''); setProp(''); }}>
+          <button
+            className="btn btn-xs"
+            onClick={() => {
+              setBu([]);
+              setPm([]);
+              setCat([]);
+              setProp([]);
+            }}
+          >
             Clear filters
           </button>
         )}
@@ -111,7 +161,11 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
 
       {noLeases && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-700">
-          No current leases are loaded for {data.versionName} yet, so the {B} figures are empty. Load the latest Fusion export in{' '}
+          No current leases are entered for {data.versionName} yet, so the {B} figures are empty. Enter them in the{' '}
+          <Link href="/master" className="font-semibold underline">
+            Lease Budget
+          </Link>{' '}
+          or load the latest Fusion export in{' '}
           <Link href="/admin?tab=fusion" className="font-semibold underline">
             Admin → Fusion data
           </Link>
@@ -222,33 +276,5 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         </ChartCard>
       </div>
     </div>
-  );
-}
-
-function Filter({
-  label,
-  value,
-  onChange,
-  options,
-  wide,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: [string, string][];
-  wide?: boolean;
-}) {
-  return (
-    <label className="flex items-center gap-2">
-      <span className="text-slate-500">{label}</span>
-      <select className={`input ${wide ? 'w-72' : 'w-40'}`} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">All</option>
-        {options.map(([v, l]) => (
-          <option key={v} value={v}>
-            {l}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
