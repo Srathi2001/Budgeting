@@ -1,5 +1,5 @@
 // Parser for the finance master workbook (H.E. MJN_Budget 2026.xlsm).
-// Reads the Revenue Master, Camps New, Other Income and Revenue Analysis sheets
+// Reads the Revenue Master, Camps New and Revenue Analysis sheets
 // into plain records. Sheet names in this workbook use 'x' where a space would be.
 
 import * as XLSX from 'xlsx';
@@ -198,59 +198,6 @@ export function parseCamps(wb: XLSX.WorkBook): ParsedLease[] {
   return out;
 }
 
-export interface ParsedOtherIncome {
-  propertyCode: string;
-  propertyName: string;
-  buCode: string | null;
-  glCode: string;
-  glName: string;
-  owner: string | null;
-  amount: number;
-}
-
-export function parseOtherIncome(wb: XLSX.WorkBook): ParsedOtherIncome[] {
-  const ws = wb.Sheets['OtherxIncome'] ?? wb.Sheets['Other Income'];
-  if (!ws) return [];
-  const glCols = cols('E', 25); // E..AC
-  const out: ParsedOtherIncome[] = [];
-  const last = XLSX.utils.decode_range(ws['!ref']!).e.r + 1;
-  for (let r = 6; r <= last; r++) {
-    const code = str(cell(ws, 'B', r));
-    const name = str(cell(ws, 'C', r));
-    // property rows have a code that looks like 30B101 / 10B105N / 602A06N
-    if (!code || !/^\d{2,3}[A-Z]\d{2,3}N?$/i.test(code)) continue;
-    for (const c of glCols) {
-      const amount = num(cell(ws, c, r));
-      const gl = str(cell(ws, c, 4));
-      if (!gl || !amount) continue;
-      out.push({
-        propertyCode: code,
-        propertyName: name ?? code,
-        buCode: str(cell(ws, 'D', r)),
-        glCode: gl,
-        glName: str(cell(ws, c, 5)) ?? gl,
-        owner: str(cell(ws, c, 2)),
-        amount,
-      });
-    }
-  }
-  return out;
-}
-
-export interface ParsedGl {
-  code: string;
-  name: string;
-  owner: string | null;
-}
-
-export function parseGlAccounts(wb: XLSX.WorkBook): ParsedGl[] {
-  const ws = wb.Sheets['OtherxIncome'] ?? wb.Sheets['Other Income'];
-  if (!ws) return [];
-  return cols('E', 25)
-    .map((c) => ({ code: str(cell(ws, c, 4)), name: str(cell(ws, c, 5)), owner: str(cell(ws, c, 2)) }))
-    .filter((g): g is ParsedGl => !!g.code && !!g.name);
-}
-
 export interface ParsedAnalysisRow {
   buLabel: string | null;
   propertyCode: string;
@@ -288,7 +235,7 @@ export function parseRevenueAnalysis(wb: XLSX.WorkBook): ParsedAnalysisRow[] {
 export function readWorkbook(data: Buffer | ArrayBuffer): XLSX.WorkBook {
   return XLSX.read(data, {
     type: 'buffer',
-    sheets: ['RevenuexMaster', 'CampsxNew', 'OtherxIncome', 'RevenuexAnalysis'],
+    sheets: ['RevenuexMaster', 'CampsxNew', 'RevenuexAnalysis'],
     cellDates: false,
   });
 }

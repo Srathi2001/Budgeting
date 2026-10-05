@@ -58,6 +58,12 @@ export function lineToInput(
     r2End: parseDay(line.r2End),
     r2Mf: line.r2Mf,
     r2Schedule: toCheques(line.r2Schedule),
+    r3Renew: line.r3Renew,
+    r3Rent: line.r3Rent,
+    r3Start: parseDay(line.r3Start),
+    r3End: parseDay(line.r3End),
+    r3Mf: line.r3Mf,
+    r3Schedule: toCheques(line.r3Schedule),
     budgetRate: line.budgetRate,
     increasePctOverride: line.increasePctOverride,
     cheques: line.cheques,
@@ -69,7 +75,7 @@ export type StoredCalc = Omit<LeaseResult, keyof MonthlySeries> & {
   revenue: number[];
   /** rent cheques ex VAT */
   cash: number[];
-  /** total cash inflow: rent + fees + VAT + deposits in - deposits out */
+  /** total cash inflow: rent + VAT + deposits in - deposits out */
   cashFlow: number[];
 };
 
@@ -116,10 +122,6 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
         month: m + 1,
         revenue: res.revenue[m],
         cash: res.cash[m],
-        adminFee: res.adminFee[m],
-        ejariFee: res.ejariFee[m],
-        mfFee: res.mfFee[m],
-        agencyFee: res.agencyFee[m],
         vat: res.vat[m],
         depositIn: res.depositIn[m],
         depositOut: res.depositOut[m],
@@ -140,6 +142,7 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
       increasePct: res.increasePct,
       reraGap: res.reraGap,
       reraAverage: res.reraAverage,
+      rera: res.rera,
       vacancyLoss: res.vacancyLoss,
       totals: res.totals,
       warnings: res.warnings,

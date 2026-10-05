@@ -1,45 +1,123 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------------------------
+   Dark theme. The UI is written with Tailwind's slate / sky / emerald / amber / red scales;
+   here those scales are redefined for a dark canvas (neutrals: light <-> dark; accents: tints
+   become dark tints, strong shades become bright text), so every page converts consistently.
+   ------------------------------------------------------------------------------------------- */
 @theme {
   --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+
+  --color-white: #121821; /* surfaces: cards, tables, inputs */
+  --color-slate-50: #0b1016; /* page background */
+  --color-slate-100: #18212c; /* subtle fills, hover */
+  --color-slate-200: #263241; /* borders */
+  --color-slate-300: #34445a; /* strong borders, input borders */
+  --color-slate-400: #64748b; /* faint text */
+  --color-slate-500: #8b98a9; /* muted text */
+  --color-slate-600: #a5b1c0; /* secondary text */
+  --color-slate-700: #c3ccd7; /* body text */
+  --color-slate-800: #d9e0e8;
+  --color-slate-900: #ebeff4; /* headings */
+  --color-slate-950: #f6f8fa;
+
+  --color-sky-50: oklch(29.3% 0.066 243.157);
+  --color-sky-100: oklch(33% 0.08 241);
+  --color-sky-200: oklch(90.1% 0.058 230.902);
+  --color-sky-300: oklch(82.8% 0.111 230.318);
+  --color-sky-400: oklch(74.6% 0.16 232.661);
+  --color-sky-600: oklch(74.6% 0.16 232.661);
+  --color-sky-700: oklch(78% 0.13 231);
+  --color-sky-800: oklch(85% 0.09 231);
+  --color-sky-900: oklch(90.1% 0.058 230.902);
+
+  --color-emerald-50: oklch(26.2% 0.051 172.552);
+  --color-emerald-100: oklch(30% 0.06 168);
+  --color-emerald-600: oklch(76.5% 0.177 163.223);
+  --color-emerald-700: oklch(80% 0.15 164);
+  --color-emerald-800: oklch(87% 0.11 164);
+
+  --color-amber-50: oklch(27.9% 0.077 45.635);
+  --color-amber-100: oklch(31% 0.08 50);
+  --color-amber-200: oklch(40% 0.1 55);
+  --color-amber-600: oklch(82.8% 0.189 84.429);
+  --color-amber-700: oklch(85% 0.16 86);
+  --color-amber-800: oklch(90% 0.12 92);
+
+  --color-red-50: oklch(25.8% 0.092 26.042);
+  --color-red-200: oklch(39.6% 0.141 25.723);
+  --color-red-600: oklch(70.4% 0.191 22.216);
+  --color-red-700: oklch(75% 0.16 22);
+}
+
+:root {
+  color-scheme: dark;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --hdr-bg: #15233a;
+  --hdr-fg: #a9c7f5;
+  --band-bg: #1a2c47;
+  --band-fg: #d6e4fb;
+  --line: #263241;
+  --line-strong: #34445a;
+  --surface: #121821;
+  --surface-2: #0f151d;
 }
 
 body {
   background: var(--color-slate-50);
-  color: var(--color-slate-900);
+  color: var(--color-slate-700);
+}
+
+::selection {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+* {
+  scrollbar-color: #34445a transparent;
 }
 
 @layer components {
   .input {
-    @apply rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[13px] shadow-xs outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 disabled:bg-slate-100;
+    @apply rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[13px] text-slate-800 outline-none focus:border-sky-400;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1 text-[13px] font-medium text-slate-700 shadow-xs hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1 text-[13px] font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-sky-700 bg-sky-700 px-3 py-1 text-[13px] font-medium text-white shadow-xs hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-50;
+    background: var(--accent-strong);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover {
+    background: var(--accent);
   }
   .btn-xs {
     @apply px-2 py-0.5 text-xs;
   }
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-red-600 px-3 py-1 text-[13px] font-medium text-white shadow-xs hover:bg-red-700 disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1 text-[13px] font-medium disabled:opacity-50;
+    background: #b91c1c;
+    color: #fff;
   }
   .card {
-    @apply rounded-lg border border-slate-200 bg-white shadow-xs;
+    @apply rounded-lg border border-slate-200 bg-white;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
   }
   .seg {
-    @apply inline-flex overflow-hidden rounded-md border border-slate-300 bg-white text-[13px] shadow-xs;
+    @apply inline-flex overflow-hidden rounded-md border border-slate-300 bg-white text-[13px];
   }
   .seg > * {
-    @apply border-l border-slate-300 px-2.5 py-1 text-slate-700 first:border-l-0 hover:bg-slate-50;
+    @apply border-l border-slate-300 px-2.5 py-1 text-slate-600 first:border-l-0 hover:text-slate-900;
   }
   .seg > .on {
-    @apply bg-sky-700 text-white hover:bg-sky-700;
+    background: var(--accent-strong);
+    color: #fff;
   }
   .page-title {
     @apply text-lg font-semibold text-slate-900;
@@ -51,15 +129,12 @@ body {
 
 /* ---------------------------------------------------------------------------------------------
    Financial tables
-   .frame        scroll container (sticky header + sticky first column live inside it)
-   .tbl          the table; numbers are right-aligned tabular figures
    ------------------------------------------------------------------------------------------- */
 .frame {
   overflow: auto;
-  border: 1px solid var(--color-slate-200);
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+  background: var(--surface);
 }
 .frame-tall {
   max-height: calc(100vh - 150px);
@@ -71,7 +146,7 @@ body {
   border-spacing: 0;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
-  color: var(--color-slate-800);
+  color: var(--color-slate-700);
 }
 .tbl.tbl-fit {
   width: auto;
@@ -80,24 +155,25 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #f1f5f9;
-  color: #475569;
+  background: var(--hdr-bg);
+  color: var(--hdr-fg);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   text-align: left;
   white-space: nowrap;
   padding: 7px 10px;
-  border-bottom: 1px solid #cbd5e1;
+  border-bottom: 2px solid var(--accent);
   vertical-align: bottom;
 }
 .tbl thead tr.tbl-band th {
   text-transform: none;
   font-size: 11px;
-  color: #334155;
-  background: #e8eef5;
-  border-bottom: 1px solid #cbd5e1;
+  letter-spacing: 0.01em;
+  color: var(--band-fg);
+  background: var(--band-bg);
+  border-bottom: 1px solid var(--line-strong);
   text-align: center;
   padding: 4px 10px;
 }
@@ -107,9 +183,9 @@ body {
 .tbl tbody td {
   padding: 0 10px;
   height: 30px;
-  border-bottom: 1px solid #eef2f6;
+  border-bottom: 1px solid var(--line);
   white-space: nowrap;
-  background: #fff;
+  background: var(--surface);
 }
 .tbl.tbl-compact tbody td {
   height: 26px;
@@ -119,32 +195,31 @@ body {
   padding: 5px 8px;
 }
 .tbl tbody tr:hover td {
-  background: #f6f9fc;
+  background: #172130;
 }
 .tbl .num,
 .tbl th.num {
   text-align: right;
 }
 .tbl .muted {
-  color: #64748b;
+  color: var(--color-slate-500);
 }
 .tbl .neg {
-  color: #b91c1c;
+  color: #f87171;
 }
 .tbl .pos {
-  color: #047857;
+  color: #34d399;
 }
 .tbl .na {
-  color: #cbd5e1;
+  color: #3d4a5c;
   text-align: right;
 }
 .tbl .sep {
-  border-left: 1px solid #e2e8f0;
+  border-left: 1px solid var(--line-strong);
 }
 .tbl .wrap {
   white-space: normal;
 }
-/* sticky first column */
 .tbl .stick {
   position: sticky;
   left: 0;
@@ -154,45 +229,43 @@ body {
   z-index: 3;
 }
 .tbl .stick-edge {
-  box-shadow: inset -1px 0 0 #e2e8f0;
+  box-shadow: inset -1px 0 0 var(--line-strong);
 }
-/* group / subtotal / total rows */
 .tbl tr.tbl-group td {
-  background: #f1f5f9;
+  background: #0f1a28;
   height: 26px;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #475569;
+  color: #7fa7e6;
+  border-top: 1px solid var(--line-strong);
 }
 .tbl tr.tbl-sub td {
   font-weight: 600;
-  background: #fafbfd;
-  border-bottom: 1px solid #e2e8f0;
+  color: var(--color-slate-800);
+  background: #141c27;
+  border-bottom: 1px solid var(--line-strong);
 }
 .tbl tr.tbl-total td {
   position: sticky;
   bottom: 0;
   z-index: 1;
   font-weight: 700;
-  background: #f1f5f9;
-  border-top: 1px solid #94a3b8;
+  color: var(--color-slate-900);
+  background: var(--hdr-bg);
+  border-top: 2px solid var(--accent);
   border-bottom: none;
 }
 .tbl tr.tbl-total td.stick {
   z-index: 2;
 }
-/* pivot levels */
 .tbl tr.lvl-0 td {
   font-weight: 600;
-}
-.tbl tr.lvl-0 td.stick,
-.tbl tr.lvl-0 td {
-  background: #f8fafc;
+  color: var(--color-slate-900);
+  background: #151f2c;
 }
 
-/* inline edit cell: looks like text until hovered / focused */
 .cell-edit {
   width: 100%;
   min-width: 0;
@@ -204,34 +277,92 @@ body {
   color: inherit;
 }
 .cell-edit:hover {
-  border-color: #cbd5e1;
-  background: #fff;
+  border-color: var(--line-strong);
+  background: #0f151d;
 }
 .cell-edit:focus {
   outline: none;
-  border-color: #0369a1;
-  background: #fff;
-  box-shadow: 0 0 0 2px #e0f2fe;
+  border-color: var(--accent);
+  background: #0f151d;
 }
 .cell-edit::placeholder {
-  color: #94a3b8;
+  color: #4b596b;
+}
+input[type='date'].cell-edit::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
 }
 
-/* AG Grid cell states for the Lease Budget grid */
+/* ---------------------------------------------------------------------------------------------
+   Lease Budget grid (AG Grid). Column groups are colour-coded by where the data comes from.
+   ------------------------------------------------------------------------------------------- */
+.ag-header-group-cell.hdr-unit,
+.ag-header-cell.hdr-unit {
+  --hdr-line: #64748b;
+  --hdr-text: #cbd5e1;
+}
+.ag-header-group-cell.hdr-fusion,
+.ag-header-cell.hdr-fusion {
+  --hdr-line: #14b8a6;
+  --hdr-text: #99f6e4;
+  background-color: #10262a;
+}
+.ag-header-group-cell.hdr-input,
+.ag-header-cell.hdr-input {
+  --hdr-line: #f59e0b;
+  --hdr-text: #fde68a;
+  background-color: #2a2213;
+}
+.ag-header-group-cell.hdr-rera,
+.ag-header-cell.hdr-rera {
+  --hdr-line: #a78bfa;
+  --hdr-text: #ddd6fe;
+  background-color: #1e1a33;
+}
+.ag-header-group-cell.hdr-revenue,
+.ag-header-cell.hdr-revenue {
+  --hdr-line: #3b82f6;
+  --hdr-text: #bfdbfe;
+  background-color: #132544;
+}
+.ag-header-group-cell.hdr-cash,
+.ag-header-cell.hdr-cash {
+  --hdr-line: #10b981;
+  --hdr-text: #a7f3d0;
+  background-color: #10291f;
+}
+.ag-header-group-cell[class*='hdr-'] {
+  border-top: 3px solid var(--hdr-line) !important;
+}
+.ag-header-group-cell[class*='hdr-'] .ag-header-group-text,
+.ag-header-cell[class*='hdr-'] .ag-header-cell-text {
+  color: var(--hdr-text);
+}
+
+.cell-fusion {
+  color: #9fb4c8;
+}
 .cell-input {
-  background-color: #fffbea;
+  background-color: rgba(245, 158, 11, 0.07);
 }
 .cell-override {
-  background-color: #fff3c4;
+  background-color: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
   font-weight: 600;
 }
 .cell-derived {
-  color: #475569;
-  background-color: #f8fafc;
+  color: #8b98a9;
 }
 .cell-month {
   font-variant-numeric: tabular-nums;
 }
+.cell-issue {
+  color: #fbbf24;
+  font-weight: 700;
+  text-align: center;
+}
 .row-warning .ag-cell:first-child {
   box-shadow: inset 3px 0 0 #f59e0b;
+}
+.group-start {
+  border-left: 1px solid #3a4a60 !important;
 }

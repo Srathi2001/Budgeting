@@ -4,6 +4,7 @@ import 'dotenv/config';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { db, schema } from '../src/db';
 import { applyLineChanges } from '../src/lib/budget/save';
+import { recalcLines } from '../src/lib/budget/calc';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -17,13 +18,13 @@ async function main() {
   const [pm] = await db.select().from(schema.users).where(eq(schema.users.email, 'ruchi@budget.local'));
   const [fin] = await db.select().from(schema.users).where(eq(schema.users.email, 'finance@budget.local'));
 
-  // a residential, renewing unit of one of Ruchi's properties
+  // a residential unit of one of Ruchi's properties
   const [mine] = await db
     .select({ l: schema.leaseLines, p: schema.properties })
     .from(schema.leaseLines)
     .innerJoin(schema.properties, eq(schema.properties.id, schema.leaseLines.propertyId))
     .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
-    .where(and(eq(schema.leaseLines.versionId, open.id), eq(schema.properties.coordinator, 'RUCHI'), eq(schema.units.rc, 'R'), eq(schema.leaseLines.renew1, true)))
+    .where(and(eq(schema.leaseLines.versionId, open.id), eq(schema.properties.coordinator, 'RUCHI'), eq(schema.units.rc, 'R')))
     .limit(1);
   const [theirs] = await db
     .select({ l: schema.leaseLines })
@@ -32,7 +33,15 @@ async function main() {
     .where(and(eq(schema.leaseLines.versionId, open.id), ne(schema.properties.coordinator, 'RUCHI')))
     .limit(1);
   const original = mine.l;
-  const before = (original.calc as { totals: { revenue: number } }).totals.revenue;
+
+  // give it a current lease the way the Fusion sync would (lease facts are not editable in the tool)
+  await db
+    .update(schema.leaseLines)
+    .set({ tenant: 'TEST TENANT', currentRent: 60000, currentStart: '2026-07-01', currentEnd: '2027-06-30', renew1: true, budgetRate: null })
+    .where(eq(schema.leaseLines.id, original.id));
+  await recalcLines(db, open.id, [original.id]);
+  const [seeded] = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.id, original.id));
+  const before = (seeded.calc as { totals: { revenue: number } }).totals.revenue;
 
   // 1. PM switches the unit to a new tenant at a higher budget rate
   let res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: false, budgetRate: 99999 } }]);
@@ -50,25 +59,27 @@ async function main() {
   check('audit trail written', !!audit && JSON.stringify(audit.changes).includes('budgetRate'));
 
   // 2. Override and revert the renewal rent
-  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: true, budgetRate: original.budgetRate, r1Rent: 12345 } }]);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: true, budgetRate: null, r1Rent: 12345 } }]);
   check('override wins', res.rows[0].r1?.rent === 12345);
   res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { r1Rent: null } }]);
   check('clearing override reverts to derived', res.rows[0].r1?.rent !== 12345 && Math.abs(res.rows[0].revenueTotal - before) < 0.05, `${res.rows[0].revenueTotal} vs ${before}`);
 
   // 3. Validation
-  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentRent: -5 } }]);
-  check('negative rent rejected', res.errors.length === 1);
-  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentStart: '31/12/2026' } }]);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { budgetRate: -5 } }]);
+  check('negative rate rejected', res.errors.length === 1);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { r1Start: '31/12/2026' } }]);
   check('bad date format rejected', res.errors.length === 1);
+  res = await applyLineChanges(fin, open.id, [{ lineId: original.id, patch: { currentRent: 1 } as never }]);
+  check('Fusion lease facts cannot be edited, even by Finance', res.errors.length === 1);
 
   // 4. Permissions
-  res = await applyLineChanges(pm, open.id, [{ lineId: theirs.l.id, patch: { tenant: 'HACK' } }]);
+  res = await applyLineChanges(pm, open.id, [{ lineId: theirs.l.id, patch: { notes: 'HACK' } }]);
   check("PM cannot edit another PM's property", res.errors[0]?.message === 'Not your property');
   await db
     .insert(schema.submissions)
     .values({ versionId: open.id, propertyId: original.propertyId, status: 'SUBMITTED' })
     .onConflictDoUpdate({ target: [schema.submissions.versionId, schema.submissions.propertyId], set: { status: 'SUBMITTED' } });
-  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { tenant: 'X' } }]);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { notes: 'X' } }]);
   check('PM cannot edit a submitted property', /submitted/.test(res.errors[0]?.message ?? ''));
   res = await applyLineChanges(fin, open.id, [{ lineId: original.id, patch: { notes: 'finance note' } }]);
   check('Finance can still edit a submitted property', res.errors.length === 0);
@@ -78,11 +89,24 @@ async function main() {
     .where(and(eq(schema.submissions.versionId, open.id), eq(schema.submissions.propertyId, original.propertyId)));
 
   const [lockedLine] = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, locked.id)).limit(1);
-  res = await applyLineChanges(fin, locked.id, [{ lineId: lockedLine.id, patch: { tenant: 'X' } }]);
+  res = await applyLineChanges(fin, locked.id, [{ lineId: lockedLine.id, patch: { notes: 'X' } }]);
   check('locked version is read only, even for Finance', /locked/.test(res.errors[0]?.message ?? ''));
 
   // restore
-  await applyLineChanges(fin, open.id, [{ lineId: original.id, patch: { notes: original.notes, renew1: original.renew1, budgetRate: original.budgetRate } }]);
+  await db
+    .update(schema.leaseLines)
+    .set({
+      tenant: original.tenant,
+      currentRent: original.currentRent,
+      currentStart: original.currentStart,
+      currentEnd: original.currentEnd,
+      notes: original.notes,
+      renew1: original.renew1,
+      budgetRate: original.budgetRate,
+      r1Rent: original.r1Rent,
+    })
+    .where(eq(schema.leaseLines.id, original.id));
+  await recalcLines(db, open.id, [original.id]);
   await db.delete(schema.auditLog).where(eq(schema.auditLog.entityId, String(original.id)));
   console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
   process.exit(failures ? 1 : 0);

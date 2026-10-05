@@ -18,8 +18,6 @@ import {
   readWorkbook,
   parseRevenueMaster,
   parseCamps,
-  parseOtherIncome,
-  parseGlAccounts,
   parseRevenueAnalysis,
   normPropertyCode,
   type ParsedLease,
@@ -31,14 +29,12 @@ import { rollForward } from '../src/lib/budget/rollforward';
 const BU_NAMES: Record<string, string> = { '501': 'REHL', '502': 'MJN', '522': 'PMC' };
 const CAMP_CODES = new Set(['10B110N', '10B133N', '10B134N', '602A07N', '602A12N']);
 const MALL_CODES = new Set(['10B131N']);
-/** Other-income GL accounts the lease engine fills automatically. */
-const AUTO_GL: Record<string, string> = { '52401': 'ADMIN', '52601': 'AGENCY', '52702': 'MF', '52703': 'EJARI' };
 
 const t = schema;
 
 async function reset() {
-  await db.execute(sql`truncate table audit_log, submissions, property_notes, comparatives, other_income,
-    gl_accounts, rera_index, line_monthly, lease_lines, budget_versions, units, properties, business_units, users
+  await db.execute(sql`truncate table audit_log, submissions, property_notes, comparatives,
+    rera_index, line_monthly, lease_lines, budget_versions, units, properties, business_units, users
     restart identity cascade`);
 }
 
@@ -171,6 +167,8 @@ async function main() {
     r2Start: formatDay(l.r2Start),
     r2End: formatDay(l.r2End),
     r2Mf: l.r2Mf ?? false,
+    // the workbook has no 3rd renewals
+    r3Renew: false,
     notes: `Imported from ${l.source === 'CAMPS' ? 'Camps New' : 'Revenue Master'} row ${l.row}`,
   }));
   for (let i = 0; i < lines.length; i += 500) await db.insert(t.leaseLines).values(lines.slice(i, i + 500));
@@ -189,25 +187,7 @@ async function main() {
   }
   console.log(`  ${rera.size} RERA index rows`);
 
-  // ---- GL accounts, other income ------------------------------------------------------------
-  const gls = parseGlAccounts(wb);
-  await db.insert(t.glAccounts).values(
-    gls.map((g, i) => ({ code: g.code, name: g.name, owner: g.owner, autoSource: AUTO_GL[g.code] ?? null, sort: i })),
-  );
   const byNorm = new Map([...propMap.entries()].map(([code, id]) => [normPropertyCode(code), id]));
-  const oi = parseOtherIncome(wb);
-  const oiRows = oi
-    .filter((o) => byNorm.has(normPropertyCode(o.propertyCode)) && !AUTO_GL[o.glCode])
-    .map((o) => ({
-      versionId: v2026.id,
-      propertyId: byNorm.get(normPropertyCode(o.propertyCode))!,
-      glCode: o.glCode,
-      // the workbook only has annual figures: spread evenly
-      months: Array.from({ length: 12 }, () => Math.round((o.amount / 12) * 100) / 100),
-      note: 'Imported annual amount, spread evenly',
-    }));
-  if (oiRows.length) await db.insert(t.otherIncome).values(oiRows);
-  console.log(`  ${gls.length} GL accounts, ${oiRows.length} manual other-income lines (auto GLs ${Object.keys(AUTO_GL).join('/')} are calculated)`);
 
   // ---- comparatives & comments from Revenue Analysis ---------------------------------------
   const analysis = parseRevenueAnalysis(wb);

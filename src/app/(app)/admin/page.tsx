@@ -1,9 +1,29 @@
 import Link from 'next/link';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
-import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel } from './panels';
+import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, FusionPanel } from './panels';
+
+async function FusionTab({ version }: { version: schema.BudgetVersion }) {
+  const { rows } = await db.execute(sql`
+    select count(*)::int as units,
+      count(*) filter (where l.current_end is not null)::int as leased,
+      count(*) filter (where u.unit_status is not null)::int as with_status,
+      (select max(at) from audit_log where entity = 'fusion_sync' and action = 'leases' and version_id = ${version.id}) as lease_sync,
+      (select max(at) from audit_log where entity = 'fusion_sync' and action = 'units' and version_id = ${version.id}) as unit_sync
+    from lease_lines l join units u on u.id = l.unit_id where l.version_id = ${version.id}`);
+  const s = rows[0] as { units: number; leased: number; with_status: number; lease_sync: Date | null; unit_sync: Date | null };
+  const when = (d: Date | null) => (d ? new Date(d).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : null);
+  return (
+    <FusionPanel
+      versionId={version.id}
+      versionName={version.name}
+      locked={version.status === 'LOCKED'}
+      stats={{ units: s.units, leased: s.leased, unitsWithStatus: s.with_status, lastLeaseSync: when(s.lease_sync), lastUnitSync: when(s.unit_sync) }}
+    />
+  );
+}
 import { comparativeLabels } from '@/lib/budget/comparatives';
 
 async function ComparativesTab({ version }: { version: schema.BudgetVersion }) {
@@ -30,6 +50,7 @@ async function ComparativesTab({ version }: { version: schema.BudgetVersion }) {
 export const metadata = { title: 'Admin · Budget' };
 
 const TABS = [
+  ['fusion', 'Fusion data'],
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
   ['rera', 'RERA index'],
@@ -44,7 +65,7 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
   const { version, all } = await getActiveVersion();
   const v = version!;
   const sp = await props.searchParams;
-  const tab = (TABS.find(([k]) => k === sp.tab)?.[0] ?? 'versions') as (typeof TABS)[number][0];
+  const tab = (TABS.find(([k]) => k === sp.tab)?.[0] ?? 'fusion') as (typeof TABS)[number][0];
 
   return (
     <div className="space-y-4 p-6">
@@ -81,6 +102,7 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
         />
       )}
       {tab === 'comparatives' && <ComparativesTab version={v} />}
+      {tab === 'fusion' && <FusionTab version={v} />}
       {tab === 'properties' && (
         <PropertiesPanel rows={await db.select().from(schema.properties).orderBy(asc(schema.properties.buCode), asc(schema.properties.code))} />
       )}

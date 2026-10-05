@@ -66,11 +66,6 @@ const AssumptionsSchema = z.object({
   campIncrease: z.number().min(-1).max(2),
   defaultCheques: z.number().int().min(1).max(12),
   chequeSpanDays: z.number().min(28).max(400),
-  adminFeeResidential: z.number().min(0),
-  adminFeeCommercial: z.number().min(0),
-  ejariFee: z.number().min(0),
-  mfPct: z.number().min(0).max(1),
-  agencyPct: z.number().min(0).max(1),
   vatRate: z.number().min(0).max(1),
   depositPct: z.number().min(0).max(1),
 }) satisfies z.ZodType<Assumptions>;
@@ -233,5 +228,33 @@ export async function importComparatives(versionId: number, form: FormData): Pro
     }
     await audit(user.id, versionId, 'comparative', 'import', { file: file.name, values: saved, unknown });
     return `Imported ${saved} values${unknown.length ? `; unknown property codes: ${unknown.slice(0, 8).join(', ')}` : ''}`;
+  });
+}
+
+// ---- Oracle Fusion data -------------------------------------------------------------------------
+
+export async function importFusionLeases(versionId: number, form: FormData): Promise<Result> {
+  const user = await requireFinance();
+  return wrap(async () => {
+    const file = form.get('file');
+    if (!(file instanceof File) || !file.size) throw new Error('Choose the Lease Status Summary Report (.xlsx)');
+    const { parseLeaseReport, applyFusionLeases } = await import('@/lib/import/fusion');
+    const leases = parseLeaseReport(Buffer.from(await file.arrayBuffer()));
+    const r = await applyFusionLeases(versionId, leases, user.id);
+    return `Loaded ${r.matched} leases` +
+      (r.createdUnits.length ? `; ${r.createdUnits.length} new units added` : '') +
+      (r.cleared ? `; ${r.cleared} units no longer leased` : '') +
+      (r.unknownProperties.length ? `; ${r.unknownProperties.length} rows skipped (unknown property: ${r.unknownProperties.slice(0, 5).join(', ')})` : '');
+  });
+}
+
+export async function importFusionUnits(versionId: number, form: FormData): Promise<Result> {
+  const user = await requireFinance();
+  return wrap(async () => {
+    const file = form.get('file');
+    if (!(file instanceof File) || !file.size) throw new Error('Choose the Unit Dump (.xlsx)');
+    const { parseUnitDump, applyUnitDump } = await import('@/lib/import/fusion');
+    const r = await applyUnitDump(versionId, parseUnitDump(Buffer.from(await file.arrayBuffer())), user.id);
+    return `Updated ${r.updated} units (${r.available} available)` + (r.unknown ? `; ${r.unknown} codes not in the budget unit list` : '');
   });
 }

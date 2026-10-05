@@ -5,7 +5,7 @@
 //   Revenue sheet -> daily rate x days of each contract falling in each month
 //   Cash sheet    -> equal cheques spaced chequeSpanDays / cheques apart, unless the contract has an
 //                    actual cheque schedule (current lease from Fusion, or one edited for a renewal)
-//   Admin/EF/MF/AF sheets -> fees booked in the month a contract starts
+//   Cash inflow   -> rent cheques + VAT on commercial / labour rent + security deposits in / out
 
 import { type Assumptions } from './assumptions';
 import { type Day, monthsOfYear, overlapDays, dayFromYMD } from './dates';
@@ -57,6 +57,14 @@ export interface LeaseInput {
   r2Mf: boolean | null;
   r2Schedule: Cheque[] | null;
 
+  // 3rd renewal: derived when the 2nd renewal also ends inside the budget year (short contracts)
+  r3Renew: boolean | null;
+  r3Rent: number | null;
+  r3Start: Day | null;
+  r3End: Day | null;
+  r3Mf: boolean | null;
+  r3Schedule: Cheque[] | null;
+
   /** Budget rate for a new tenant. R: annual rent; C/L: per sq.ft per year; camps: per bed per month. */
   budgetRate: number | null;
   /** Overrides the RERA / labour / camp renewal increase (fraction). */
@@ -70,7 +78,7 @@ export interface ReraRange {
   max: number;
 }
 
-export type ContractKind = 'CURRENT' | 'RENEWAL1' | 'RENEWAL2';
+export type ContractKind = 'CURRENT' | 'RENEWAL1' | 'RENEWAL2' | 'RENEWAL3';
 
 export interface Contract {
   kind: ContractKind;
@@ -90,11 +98,7 @@ export interface Contract {
 export interface MonthlySeries {
   revenue: number[];
   cash: number[];
-  adminFee: number[];
-  ejariFee: number[];
-  mfFee: number[];
-  agencyFee: number[];
-  /** Output VAT collected with rent cheques (commercial / labour) and fees. */
+  /** Output VAT collected with rent cheques (commercial / labour rent; residential is exempt). */
   vat: number[];
   depositIn: number[];
   depositOut: number[];
@@ -107,10 +111,12 @@ export interface LeaseResult extends MonthlySeries {
   /** How far the current rent sits below the RERA average (fraction), when an index exists. */
   reraGap: number | null;
   reraAverage: number | null;
+  /** RERA index range used for the unit (Main sheet "Low" / "High"). */
+  rera: ReraRange | null;
   /** Revenue lost to the vacancy gap between a non-renewed lease and the next tenant, within the year. */
   vacancyLoss: number;
-  /** cash = rent cheques (ex VAT); cashFlow = rent + fees + VAT + deposits in - deposits out */
-  totals: { revenue: number; cash: number; otherIncome: number; cashFlow: number };
+  /** cash = rent cheques (ex VAT); cashFlow = rent + VAT + deposits in - deposits out */
+  totals: { revenue: number; cash: number; cashFlow: number };
   warnings: string[];
 }
 
@@ -151,10 +157,15 @@ function newTenantRent(input: LeaseInput): number | null {
   return input.area ? input.budgetRate * input.area : null;
 }
 
-/** Equal cheques, the first on the start date, then every span / n days (Cash sheet: 370 / 4). */
-export function equalSchedule(start: Day, rent: number, cheques: number, spanDays: number): Cheque[] {
-  const n = Math.max(1, Math.round(cheques));
-  const interval = spanDays / n;
+/**
+ * Equal cheques, the first on the start date, then every span / n days (Cash sheet: 370 / 4).
+ * `cheques` is per year: a multi-year contract gets that many cheques for every year it runs.
+ */
+export function equalSchedule(start: Day, rent: number, cheques: number, spanDays: number, lengthDays = 365): Cheque[] {
+  const perYear = Math.max(1, Math.round(cheques));
+  const years = Math.max(1, Math.round(lengthDays / 365));
+  const n = perYear * years;
+  const interval = spanDays / perYear;
   const amount = rent / n;
   return Array.from({ length: n }, (_, k) => ({ date: start + Math.floor(k * interval), amount }));
 }
@@ -174,11 +185,11 @@ export function buildContracts(
   const add = (t: ContractTerms, given: Cheque[] | null, source: ScheduleSource) => {
     const c: Contract = given?.length
       ? { ...t, schedule: [...given].sort((x, y) => x.date - y.date), scheduleSource: source }
-      : { ...t, schedule: equalSchedule(t.start, t.rent, cheques, a.chequeSpanDays), scheduleSource: 'EQUAL' };
+      : { ...t, schedule: equalSchedule(t.start, t.rent, cheques, a.chequeSpanDays, t.end - t.start + 1), scheduleSource: 'EQUAL' };
     if (given?.length) {
       const total = given.reduce((s, q) => s + q.amount, 0);
       if (t.rent > 0 && Math.abs(total - t.rent) / t.rent > 0.01) {
-        const label = { CURRENT: 'Current', RENEWAL1: '1st renewal', RENEWAL2: '2nd renewal' }[t.kind];
+        const label = { CURRENT: 'Current', RENEWAL1: '1st renewal', RENEWAL2: '2nd renewal', RENEWAL3: '3rd renewal' }[t.kind];
         warnings.push(`${label} cheque schedule totals ${Math.round(total).toLocaleString('en-US')}, rent is ${Math.round(t.rent).toLocaleString('en-US')}`);
       }
     }
@@ -269,10 +280,11 @@ export function buildContracts(
 
   // ---- 2nd renewal (Main!W..AA: only when the 1st renewal ends inside the budget year) ----
   const r2Wanted = input.r2Start !== null || r1.end < yearEnd;
+  let r2: Contract | null = null;
   if (r2Wanted && input.r2Renew !== false) {
     const r2Start = input.r2Start ?? r1.end + 1;
     const r2End = input.r2End ?? r2Start + a.renewalTermDays - 1;
-    add(
+    r2 = add(
       {
         kind: 'RENEWAL2',
         rent: input.r2Rent ?? r1.rent,
@@ -292,6 +304,31 @@ export function buildContracts(
     );
   }
 
+  // ---- 3rd renewal (consolidated template "3RD RENEWAL": when the 2nd also ends inside the year) ----
+  const r3Wanted = !!r2 && (input.r3Start !== null || r2.end < yearEnd);
+  if (r2 && r3Wanted && input.r3Renew !== false) {
+    const r3Start = input.r3Start ?? r2.end + 1;
+    const r3End = input.r3End ?? r3Start + a.renewalTermDays - 1;
+    add(
+      {
+        kind: 'RENEWAL3',
+        rent: input.r3Rent ?? r2.rent,
+        start: r3Start,
+        end: r3End,
+        mf: input.r3Mf ?? r2.mf,
+        newTenant: false,
+        derived: {
+          rent: input.r3Rent === null,
+          start: input.r3Start === null,
+          end: input.r3End === null,
+          mf: input.r3Mf === null,
+        },
+      },
+      input.r3Schedule,
+      'CUSTOM',
+    );
+  }
+
   return { contracts, increasePct, reraGap, reraAverage, warnings };
 }
 
@@ -303,19 +340,8 @@ export function computeLease(
 ): LeaseResult {
   const chain = buildContracts(input, year, a, rera);
   const months = monthsOfYear(year);
-  const s: MonthlySeries = {
-    revenue: zeros(),
-    cash: zeros(),
-    adminFee: zeros(),
-    ejariFee: zeros(),
-    mfFee: zeros(),
-    agencyFee: zeros(),
-    vat: zeros(),
-    depositIn: zeros(),
-    depositOut: zeros(),
-  };
+  const s: MonthlySeries = { revenue: zeros(), cash: zeros(), vat: zeros(), depositIn: zeros(), depositOut: zeros() };
   const monthIndexOf = (d: Day) => months.findIndex((m) => d >= m.start && d <= m.end);
-  const adminFee = input.rc === 'R' ? a.adminFeeResidential : a.adminFeeCommercial;
   // Residential rent is VAT exempt; commercial and labour accommodation rent is standard rated
   const rentVat = input.rc === 'R' ? 0 : a.vatRate;
 
@@ -338,24 +364,9 @@ export function computeLease(
       s.vat[mi] += q.amount * rentVat;
     }
 
-    // Fees: booked and collected in the month the contract starts; all fees carry VAT
+    // Security deposit received from a new tenant when the lease starts
     const si = monthIndexOf(c.start);
-    if (si < 0) continue;
-    // Admin sheet: charged on every contract start except a 1st renewal that goes to a new tenant
-    const fees = {
-      admin: !(c.kind === 'RENEWAL1' && c.newTenant) ? adminFee : 0,
-      ejari: a.ejariFee,
-      mf: c.mf ? c.rent * a.mfPct : 0,
-      agency: c.newTenant ? c.rent * a.agencyPct : 0,
-    };
-    s.adminFee[si] += fees.admin;
-    s.ejariFee[si] += fees.ejari;
-    s.mfFee[si] += fees.mf;
-    s.agencyFee[si] += fees.agency;
-    s.vat[si] += (fees.admin + fees.ejari + fees.mf + fees.agency) * a.vatRate;
-
-    // Security deposit received from a new tenant
-    if (c.newTenant) s.depositIn[si] += c.rent * a.depositPct;
+    if (si >= 0 && c.newTenant) s.depositIn[si] += c.rent * a.depositPct;
   }
 
   const cur = chain.contracts.find((c) => c.kind === 'CURRENT');
@@ -380,30 +391,25 @@ export function computeLease(
   const out: MonthlySeries = {
     revenue: round(s.revenue),
     cash: round(s.cash),
-    adminFee: round(s.adminFee),
-    ejariFee: round(s.ejariFee),
-    mfFee: round(s.mfFee),
-    agencyFee: round(s.agencyFee),
     vat: round(s.vat),
     depositIn: round(s.depositIn),
     depositOut: round(s.depositOut),
   };
   const sum = (arr: number[]) => round2(arr.reduce((x, y) => x + y, 0));
-  const otherIncome = round2(sum(out.adminFee) + sum(out.ejariFee) + sum(out.mfFee) + sum(out.agencyFee));
   return {
     ...chain,
     ...out,
+    rera,
     vacancyLoss: round2(vacancyLoss),
     totals: {
       revenue: sum(out.revenue),
       cash: sum(out.cash),
-      otherIncome,
-      cashFlow: round2(sum(out.cash) + otherIncome + sum(out.vat) + sum(out.depositIn) - sum(out.depositOut)),
+      cashFlow: round2(sum(out.cash) + sum(out.vat) + sum(out.depositIn) - sum(out.depositOut)),
     },
   };
 }
 
-/** Total cash inflow for one month of a series: rent + fees + VAT + deposits received - deposits refunded. */
+/** Total cash inflow for one month: rent cheques + VAT + deposits received - deposits refunded. */
 export function cashFlowOf(s: MonthlySeries, i: number) {
-  return s.cash[i] + s.adminFee[i] + s.ejariFee[i] + s.mfFee[i] + s.agencyFee[i] + s.vat[i] + s.depositIn[i] - s.depositOut[i];
+  return s.cash[i] + s.vat[i] + s.depositIn[i] - s.depositOut[i];
 }

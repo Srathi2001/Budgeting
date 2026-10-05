@@ -14,6 +14,8 @@ import {
   upsertUser,
   updateProperty,
   importComparatives,
+  importFusionLeases,
+  importFusionUnits,
 } from './actions';
 import { saveComparative } from '../analysis/actions';
 
@@ -141,11 +143,6 @@ export function AssumptionsPanel({
             campIncrease: n(f.get('campIncrease')) / 100,
             defaultCheques: n(f.get('defaultCheques')),
             chequeSpanDays: n(f.get('chequeSpanDays')),
-            adminFeeResidential: n(f.get('adminFeeResidential')),
-            adminFeeCommercial: n(f.get('adminFeeCommercial')),
-            ejariFee: n(f.get('ejariFee')),
-            mfPct: n(f.get('mfPct')) / 100,
-            agencyPct: n(f.get('agencyPct')) / 100,
             vatRate: n(f.get('vatRate')) / 100,
             depositPct: n(f.get('depositPct')) / 100,
           }),
@@ -160,12 +157,7 @@ export function AssumptionsPanel({
       {field('campIncrease', 'Labour camp renewal increase', a.campIncrease, 'Camps (rate per bed)', 100, '%')}
       {field('defaultCheques', 'Cheques per contract', a.defaultCheques, 'Default when a unit has no cheque count', 1, '')}
       {field('chequeSpanDays', 'Cheque schedule span', a.chequeSpanDays, 'Cheque interval = span ÷ cheques (template: 370 ÷ 4 = 92.5 days)', 1, 'days')}
-      {field('adminFeeResidential', 'Admin fee: residential', a.adminFeeResidential, 'Per contract start', 1, 'AED')}
-      {field('adminFeeCommercial', 'Admin fee: commercial / labour', a.adminFeeCommercial, 'Per contract start', 1, 'AED')}
-      {field('ejariFee', 'Ejari fee', a.ejariFee, 'Per contract start', 1, 'AED')}
-      {field('mfPct', 'Maintenance service fee (MF)', a.mfPct, 'Of annual rent, on contracts with MF = Y', 100, '%')}
-      {field('agencyPct', 'Agency commission', a.agencyPct, 'Of annual rent, on new-tenant leases', 100, '%')}
-      {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent and all fees; residential rent exempt. Included in cash inflow', 100, '%')}
+      {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. Included in cash inflow', 100, '%')}
       {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
 
       <div className="pt-3">
@@ -591,6 +583,75 @@ export function ComparativesPanel({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ---- Oracle Fusion data -------------------------------------------------------------------------
+
+export function FusionPanel({
+  versionId,
+  versionName,
+  locked,
+  stats,
+}: {
+  versionId: number;
+  versionName: string;
+  locked: boolean;
+  stats: { units: number; leased: number; lastLeaseSync: string | null; lastUnitSync: string | null; unitsWithStatus: number };
+}) {
+  const leases = useAction();
+  const units = useAction();
+  return (
+    <div className="space-y-4">
+      <p className="max-w-4xl text-[13px] text-slate-600">
+        Current leases and unit attributes come from Oracle Fusion only and are read-only in the Lease Budget. Until the Fusion
+        connection is set up, upload the two standard Fusion exports here. Each upload replaces the previous one for <b>{versionName}</b>{' '}
+        and recalculates every unit.
+      </p>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="card p-4">
+          <h3 className="text-sm font-semibold">2 · Lease Status Summary Report</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Lease number, version, tenant, customer class, lease / rent start, lease end, actual lease amount, VAT, security deposit,
+            status and remarks — one row per leased unit. Units of the reported BUs that are not in the report lose their lease.
+          </p>
+          <div className="mt-3 text-xs text-slate-600">
+            {stats.leased} of {stats.units} units have a lease · last loaded {stats.lastLeaseSync ?? 'never'}
+          </div>
+          {!locked && (
+            <form className="mt-3 flex flex-wrap items-center gap-2" action={(f) => leases.run(() => importFusionLeases(versionId, f))}>
+              <input type="file" name="file" accept=".xlsx,.xls" required className="text-xs" />
+              <button className="btn-primary" disabled={leases.pending}>
+                {leases.pending ? 'Loading…' : 'Load leases'}
+              </button>
+              <leases.Msg />
+            </form>
+          )}
+        </section>
+        <section className="card order-first p-4">
+          <h3 className="text-sm font-semibold">1 · Unit Dump (load first)</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Unit status, merged unit number, unit usage (Resi / Commercial as per Fusion) and landlord. Load it first: leases on merged units are matched to their member units through the merged unit number.
+          </p>
+          <div className="mt-3 text-xs text-slate-600">
+            {stats.unitsWithStatus} units have a Fusion status · last loaded {stats.lastUnitSync ?? 'never'}
+          </div>
+          {!locked && (
+            <form className="mt-3 flex flex-wrap items-center gap-2" action={(f) => units.run(() => importFusionUnits(versionId, f))}>
+              <input type="file" name="file" accept=".xlsx,.xls" required className="text-xs" />
+              <button className="btn-primary" disabled={units.pending}>
+                {units.pending ? 'Loading…' : 'Load units'}
+              </button>
+              <units.Msg />
+            </form>
+          )}
+        </section>
+      </div>
+      <p className="text-xs text-slate-500">
+        Once Fusion access is available, these uploads are replaced by a scheduled sync from Fusion (BI Publisher report service), using
+        the same mapping. Lease cheque schedules will come from the lease Schedules in Fusion.
+      </p>
     </div>
   );
 }

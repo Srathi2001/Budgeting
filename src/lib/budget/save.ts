@@ -11,17 +11,11 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD
 const money = z.number().finite().min(0).max(1e10);
 const schedule = z.array(z.object({ date: isoDate, amount: z.number().finite().min(0).max(1e10) })).max(24);
 
+// Current-lease facts (tenant, rent, dates, deposit, schedule) are not here: they come from Fusion only.
 export const PatchSchema = z
   .object({
-    tenant: z.string().max(200).nullable(),
-    vacant: z.boolean(),
     staffOwner: z.enum(['STAFF', 'OWNER']).nullable(),
     mfCurrent: z.boolean().nullable(),
-    currentRent: money.nullable(),
-    currentStart: isoDate.nullable(),
-    currentEnd: isoDate.nullable(),
-    currentSchedule: schedule.nullable(),
-    securityDeposit: money.nullable(),
     renew1: z.boolean(),
     noRenewal: z.boolean(),
     r1Rent: money.nullable(),
@@ -35,6 +29,12 @@ export const PatchSchema = z
     r2End: isoDate.nullable(),
     r2Mf: z.boolean().nullable(),
     r2Schedule: schedule.nullable(),
+    r3Renew: z.boolean().nullable(),
+    r3Rent: money.nullable(),
+    r3Start: isoDate.nullable(),
+    r3End: isoDate.nullable(),
+    r3Mf: z.boolean().nullable(),
+    r3Schedule: schedule.nullable(),
     budgetRate: money.nullable(),
     increasePctOverride: z.number().min(-1).max(5).nullable(),
     cheques: z.number().int().min(1).max(12).nullable(),
@@ -46,6 +46,7 @@ export const PatchSchema = z
     unitType: z.string().max(80).nullable(),
     rooms: z.number().int().min(0).nullable(),
     capacity: z.number().int().min(0).nullable(),
+    landlord: z.string().max(120).nullable(),
   })
   .partial()
   .strict();

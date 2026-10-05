@@ -1,63 +1,88 @@
 # Revenue Budget Tool (MJN · REHL · PMC)
 
-Replaces the Excel round trip in the budget process. Before: PM templates (`Budget <PM> <BU> X.xlsx`) went out to property managers, came back filled in, and were pasted into the `Revenue Master` of `H.E. MJN_Budget 2026.xlsm`. Now property managers enter and edit lease data directly. Revenue, cash, and lease fees are recalculated on every save, and the analysis pages update immediately.
+Replaces the Excel round trip in the budget process. Before: PM templates (`Budget <PM> <BU> X.xlsx`) went out to property managers, came back filled in, and were pasted into the `Revenue Master` of `H.E. MJN_Budget 2026.xlsm`.
 
-**Stack:** Next.js 16 (App Router), PostgreSQL with Drizzle ORM, and AG Grid Community for the spreadsheet-style Lease Budget grid.
+Now:
+* **Units and current leases come from Oracle Fusion.** They are read-only in the tool.
+* **Property managers enter only the budget assumptions** for each unit.
+* **Revenue and cash are recalculated on every save.**
+
+**Stack:** Next.js 16 (App Router), PostgreSQL with Drizzle ORM, and AG Grid Community for the Lease Budget grid. The UI is dark mode.
+
+## Where the data comes from
+
+Every field has one owner. In the Lease Budget grid, each column group's header is colour-coded by owner:
+
+| Owner | Fields | Editable by |
+| --- | --- | --- |
+| **Unit master** (grey) | BU, property, unit code, PC, bedroom, area, R/C, MF, merged unit no., unit status, unit type, Resi/Commercial (Fusion), landlord, category | Fusion Unit Dump; a few fields can be corrected by Finance or PMs |
+| **Oracle Fusion** (teal) | lease number, version, tenant code and name, customer class, lease start, rent start, lease end, actual lease amount, VAT, security deposit, lease status, remarks | **Nobody**: loaded from Fusion only |
+| **Budget inputs** (amber) | staff/owner, renew Y/N, not re-let, budget rate, increase %, cheques per year, renewal overrides (1st, 2nd and 3rd), notes | Property managers (own properties), Finance |
+| **Calculated** (violet) | RERA index row, low/high/average, old and new rent psf, % difference, increase allowed, staff discount, vacancy loss | — |
+
+The grid follows the column order of `Consolidated Revenue Budget 2026_Template.xlsx`, plus the RERA working from the PM templates. Columns auto-fit to their content.
+
+## Loading Fusion data (Admin → Fusion data)
+
+Until the Fusion connection exists, Finance uploads the two standard Fusion exports. Load them in this order:
+
+1. **Unit Dump** (`MJN+REHL+PMC … Unit Dump.xlsx`). Updates unit status, merged unit number, unit usage and landlord. Columns are found by header; values are also recognised by pattern, because some sheets in the export have shifted columns.
+2. **Lease Status Summary Report.** Gives the current lease of every leased unit:
+   * Fusion records a lease on merged units under the **merged unit code**. Such a lease is spread over its member units by area, or equally when area is missing.
+   * A lease row whose unit isn't known yet is added as a new unit under its property.
+   * For the business units in the report, units without a row lose their lease and become vacant.
+
+Both steps recalculate the whole version. Later, a scheduled Fusion sync (BI Publisher report service) will replace the uploads and use the same mapping in [`src/lib/import/fusion.ts`](src/lib/import/fusion.ts). Cheque schedules for current leases will come from the Fusion lease Schedules.
 
 ## Screens
 
 | Page | What it replaces |
 | --- | --- |
-| **Lease Budget** | `Revenue Master` sheet and the PM template `Main` sheet. One row per unit: current lease, 1st and 2nd renewal, budget rate, deposit, cheques. Revenue and cash by month are calculated. The row panel shows each contract's cheque schedule: actual for the current lease (Fusion lease schedules once connected; manual until then), 4 equal cheques by default for renewals, editable. |
-| **Other Income** | `Other Income` sheet. Admin fee, agency commission, MF, and Ejari are calculated from leases. Other GL lines are entered by month. |
-| **Monthly Summary** | PM template `Summary` sheet and `Camps CF`. Revenue, other income, and cash inflow by property by month, plus a portfolio cash flow breakdown (rent, fees, VAT, deposits). |
-| **Revenue Analysis** | `Revenue Analysis` sheet. 2027B vs 2026F, 2026B, 2025A, 2024A. Roll up or drill down by business unit, property manager, category, property, and unit in any order, by year, quarter, or month. |
-| **Building P&L** | `Buildingwise P&L` sheet. Revenue side only; cost columns are placeholders for now. |
-| **Submissions** | New. PM submits a property; Finance approves or returns it with a note. Includes an activity log. |
-| **Admin** | Versions (lock, roll forward, recalculate), assumptions, RERA index, comparatives (enter or upload from Excel), properties and coordinators, users. |
+| **Dashboard** | New. Filters: business unit, property manager, category, property. Six headline tiles and seven charts, each with a table view. |
+| **Lease Budget** | `Revenue Master` sheet and the PM template `Main` sheet. One row per unit. Click a row for its contracts and cheque schedules. |
+| **Monthly Summary** | PM template `Summary` sheet and `Camps CF`. Revenue and cash inflow by property by month, plus a portfolio cash flow breakdown. |
+| **Revenue Analysis** | `Revenue Analysis` sheet. 2027B vs 2026F, 2026B, 2025A, 2024A. Roll up or drill down by BU, PM, category, property and unit in any order; by year, quarter or month. |
+| **Building P&L** | `Buildingwise P&L` sheet. Rental revenue only; cost columns are placeholders. |
+| **Submissions** | New. PM submits a property; Finance approves or returns it. Includes an activity log. |
+| **Admin** | Fusion data, budget versions, assumptions, RERA index, comparatives, properties, users. |
 
-Every page exports to Excel. The Lease Budget export uses the same column layout (A–BF) as the finance workbook's `Revenue Master` sheet, so rows can be pasted straight across while both run in parallel.
+**Dashboard charts:**
+* revenue by month (current vs prior budget)
+* revenue vs cash inflow
+* revenue mix (BU by category)
+* occupancy by month
+* top 10 properties
+* biggest movers
+* lease expiry profile by outcome (renew / new tenant / not re-let)
 
-**Comparatives:**
-* The current and prior-year budgets are held per unit, so they drill to any level.
-* Forecast and actuals are held per property; they show for any group made of whole properties, and as "–" below that.
-* Until Fusion actuals are connected, Finance enters 2026F and 2025A in Admin → Comparatives, by typing or by uploading an Excel file with a `Code` column and one column per label.
-
-## Calculation logic (from the PM templates)
+## Calculation logic
 
 All of it lives in [`src/lib/engine/lease.ts`](src/lib/engine/lease.ts), with tests in `lease.test.ts`. Every rate and threshold is an editable assumption per budget version (Admin → Assumptions).
 
 * **1st renewal**
-  * Start date: end + 1 if the tenant renews. Otherwise end + 60 days (vacancy gap) for a new tenant.
-  * End date: start + 364.
-  * Rent if renewing: current rent × (1 + increase). The increase comes from the RERA index.
-    * The gap between the current rent and the RERA average sets the band: ≤11% → 0%, >11% → 5%, >21% → 10%, >31% → 15%, >41% → 20%.
+  * Start: end + 1 if the tenant renews; otherwise end + 60 days (vacancy gap) for a new tenant.
+  * End: start + 364.
+  * Rent if renewing: current rent × (1 + RERA increase).
+    * The gap to the RERA average sets the band: ≤11% → 0%, >11% → 5%, >21% → 10%, >31% → 15%, >41% → 20%.
     * Staff rents are grossed up by 20% before comparing.
-    * Labour (`L`) units get a flat 10%; camps get 20%.
+    * Labour units get 10%; camps get 20%.
   * Rent for a new tenant: the budget rate. That is annual rent for residential, AED/sq.ft for commercial, and AED/bed/month for camps.
-  * MF: commercial never; residential keeps MF, or gets MF when a new tenant comes in.
-* **2nd renewal** is created automatically when the 1st renewal ends before 31 December.
-* **Overrides:** every derived renewal value (rent, dates, MF, increase %) can be overridden in the grid (bold yellow). Delete the value to go back to the calculated one (grey).
-* **Revenue:** daily rate (rent ÷ contract days) × days falling in each month, for each contract.
+* **2nd and 3rd renewals** are added automatically while a renewal ends before 31 December (short contracts).
+* **Overrides:** any derived renewal value can be overridden in the grid (amber). Delete it to return to the calculated value (grey).
+* **Revenue:** rent ÷ contract days × days in each month.
 * **Rent cheques:**
-  * The contract's cheque schedule is used when there is one: actual for the current lease, or edited for a renewal.
-  * Otherwise: equal cheques, the first on the start date, then every 370 ÷ n days (default 4 cheques).
-  * Dates are whole days, so the Excel issue where a cheque landing on the last day of a month at 12:00 was dropped does not occur.
-  * A schedule that doesn't add up to the rent raises a warning.
-* **Cash inflow** = rent cheques + fees + VAT + security deposits received − deposits refunded.
-  * **VAT** (5%): applies to commercial and labour rent and to all fees. Residential rent is exempt.
-  * **Deposits:** 5% of annual rent is taken from each new tenant (the median across Fusion leases). The current tenant's deposit is refunded the month after their lease ends when they leave.
-  * Renewing tenants move no deposit.
-* **Fees, booked in the contract start month:**
-  * Admin fee: 500 residential / 1,000 commercial; not charged on a new-tenant 1st renewal.
-  * Ejari: 200.
-  * MF: 5% of rent.
-  * Agency: 2.5% of rent on new-tenant leases.
-* **Vacancy loss:** days between a lease ending and the new tenant starting × the new daily rate. Can be overridden per property in Revenue Analysis.
+  * Actual schedule for the current lease (Fusion).
+  * Renewals default to 4 equal cheques a year. Multi-year leases get that many for every year of the term. The row panel lets you change the count or edit individual dates and amounts.
+* **Cash inflow** = rent cheques + 5% VAT on commercial and labour rent (residential is exempt) + security deposits received − deposits refunded.
+  * Deposits: 5% of annual rent from each new tenant (the median across Fusion leases), refunded the month after a tenant leaves.
 
-**Validation:** `npm run validate:2026 -- "<path to H.E. MJN_Budget 2026.xlsm>"` recomputes every 2026 unit (1,217 leases + 204 camp contracts) and compares the results with the workbook.
-* **Revenue:** matches to within AED 1 in total (255,776,650).
-* **Cash:** differs only where the workbook dropped a cheque (formula issue above), on two rows with inconsistent dates, and on the mall, which has no cash schedule in the workbook.
+**Validation:** `npm run validate:2026 -- "<path to H.E. MJN_Budget 2026.xlsm>"` recomputes every 2026 unit against the workbook. Revenue matches to within AED 1 in total (255,776,650).
+
+## Budget versions
+
+* **2026 Budget (imported):** locked baseline, reproducing the workbook. It supplies the 2026B comparison at unit level.
+* **2027 Budget:** the units of 2026, with **no lease details**. Leases come only from the Fusion upload.
+* **Roll forward** (Admin → Budget versions) creates next year in the same way: units, budget rates, cheque counts and the RERA index carry over; leases do not.
 
 ## Getting started
 
@@ -68,31 +93,21 @@ copy .env.example .env          # then set AUTH_SECRET (32+ random chars) and th
 docker compose up -d            # Postgres 17 on localhost:5432
 npm install
 npm run db:push                 # create tables
-npm run db:import               # import the 2026 workbook + PM templates, roll forward to 2027
+npm run db:import               # import the 2026 workbook + PM templates, create the 2027 version
 npm run dev                     # http://localhost:3000
 ```
 
-**No Docker?** `npm run db:dev` starts an embedded Postgres (PGlite) on port 5433, with data in `.pgdata/`. Point `DATABASE_URL` at `postgres://postgres:postgres@127.0.0.1:5433/postgres` and set `DB_POOL_MAX=1`. This is for development only; use a real Postgres server for the shared deployment.
+**No Docker?** `npm run db:dev` starts an embedded Postgres (PGlite) on port 5433, with data in `.pgdata/`. Point `DATABASE_URL` at `postgres://postgres:postgres@127.0.0.1:5433/postgres` and set `DB_POOL_MAX=1`. This is for development only.
 
-### What the import does (`scripts/import-2026.ts`)
-1. **Properties and units.** Business units (501 REHL, 502 MJN, 522 PMC), 44 properties, and 1,421 units come from `Revenue Master` and `Camps New`. The coordinator (PC) on each property decides which property manager may edit it.
-2. **2026 baseline.** A locked **2026 Budget (imported)** version holds the workbook's values exactly, so it reproduces the 2026 figures.
-3. **Reference data:**
-   * The RERA index, from the `RERA Index Range` sheets of the PM templates in `PM_TEMPLATES_DIR`.
-   * Other income GL lines.
-   * Revenue Analysis comparatives and comments.
-4. **Users.** One login each for admin, finance, and each coordinator (`ruchi@budget.local`, …), all with the password from `SEED_PASSWORD` (default `ChangeMe!2027`). **Change these in Admin → Users.**
-5. **2027 roll forward.** An open **2027 Budget** is rolled forward from 2026. For each unit, the contract in force on 1 January 2027 becomes the current contract, and renewals are derived again. The approved 2026 budget (Revenue Analysis) becomes the 2026B comparative.
-
-Re-run from scratch with `npm run db:import -- --reset`.
+Logins: `admin@budget.local`, `finance@budget.local`, and one per coordinator (`ruchi@…`, `azin@…`, `meghal@…`, `packi@…`). All use the password `SEED_PASSWORD` (default `ChangeMe!2027`). **Change these in Admin → Users.**
 
 ## Roles
 
-* **PM:** sees and edits only the properties where they are the coordinator, while the property is in draft or returned. Submits properties to Finance.
-* **Finance:** sees and edits everything in open versions. Approves or returns submissions, maintains assumptions, the RERA index, comparatives, properties, and users. Can lock a version.
+* **PM:** edits the budget inputs of their own properties while those properties are in draft or returned. Submits properties to Finance.
+* **Finance:** edits everything in open versions. Loads Fusion data, approves or returns submissions, and maintains assumptions, the RERA index, comparatives and users. Can lock a version.
 * **Admin:** Finance, plus can create other admins.
 
-Every change is written to `audit_log`, showing who changed what, from which value to which value.
+Every change is written to `audit_log`.
 
 ## Useful scripts
 
@@ -100,14 +115,15 @@ Every change is written to `audit_log`, showing who changed what, from which val
 | --- | --- |
 | `npm test` | engine unit tests |
 | `npm run validate:2026 -- <xlsm>` | engine vs the 2026 workbook, unit by unit |
-| `npx tsx scripts/test-workflow.ts` | save path: edits, overrides, permissions, locking, audit (restores data afterwards) |
+| `npx tsx scripts/fusion-import.ts <versionId> <lease report.xlsx> [unit dump.xlsx]` | Fusion upload from the command line |
+| `npx tsx scripts/clear-leases.ts <versionId>` | remove all lease details from a version, keeping its units |
+| `npx tsx scripts/test-workflow.ts` | save path: edits, permissions, Fusion fields read-only, locking, audit |
 | `npx tsx scripts/compare-versions.ts 1 2` | revenue by property, version 1 vs 2, plus open warnings |
-| `npx tsx scripts/recalc.ts` | recalculate the open version |
+| `npx tsx scripts/recalc.ts [versionId]` | recalculate versions |
 | `npx tsx scripts/smoke.ts` | fetch every page and export against a running server |
 
-## Not built yet / next steps
+## Next steps
 
-* The cost side of the Building P&L (columns are in place but empty).
-* Uploading a filled-in Excel template back into the tool, for PMs who prefer to work offline.
-* Loading the current lease status from Fusion, to refresh "current contract" before a budget round.
-* Multi-cell paste in the grid (an AG Grid Enterprise feature; Community edits one cell at a time).
+* Fusion API connection: scheduled sync of units, leases and lease cheque schedules, plus GL actuals for comparatives.
+* The cost side of the Building P&L.
+* Multi-cell paste in the grid (an AG Grid Enterprise feature).

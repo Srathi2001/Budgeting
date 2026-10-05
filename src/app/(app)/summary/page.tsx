@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
-import { propertyRollups, autoOtherTotal, cashFlow, type PropertyRollup } from '@/lib/budget/reports';
+import { propertyRollups, cashFlow, type PropertyRollup } from '@/lib/budget/reports';
 import { MONTHS, sum } from '@/lib/format';
 import { Num } from '@/components/num';
 
@@ -8,7 +8,6 @@ export const metadata = { title: 'Monthly Summary · Budget' };
 
 const VIEWS = {
   revenue: { label: 'Rental revenue', get: (r: PropertyRollup) => r.revenue },
-  other: { label: 'Other income', get: (r: PropertyRollup) => autoOtherTotal(r).map((v, i) => v + r.manualOther[i]) },
   cash: { label: 'Cash inflow', get: (r: PropertyRollup) => cashFlow(r) },
   flow: { label: 'Cash flow breakdown', get: (r: PropertyRollup) => cashFlow(r) },
 } as const;
@@ -30,7 +29,7 @@ export default async function SummaryPage(props: PageProps<'/summary'>) {
           <h1 className="page-title">Monthly summary · {version!.year}</h1>
           <p className="page-sub">
             {view === 'cash' || view === 'flow'
-              ? 'Cash inflow = rent cheques + fees + VAT + security deposits received − refunded · AED'
+              ? 'Cash inflow = rent cheques + VAT + security deposits received − refunded · AED'
               : 'By property and month · AED'}
           </p>
         </div>
@@ -130,12 +129,9 @@ function BuRows({ bu, rows, get, total }: { bu: string; rows: PropertyRollup[]; 
 
 function CashFlowTable({ rolls, yy }: { rolls: PropertyRollup[]; yy: string }) {
   const m = (f: (r: PropertyRollup, i: number) => number) => MONTHS.map((_, i) => sum(rolls.map((r) => f(r, i))));
-  const fees = (r: PropertyRollup, i: number) => autoOtherTotal(r)[i];
   const lines: { label: string; vals: number[]; kind?: 'sub' | 'total' | 'neg' }[] = [
     { label: 'Rent cheques (ex VAT)', vals: m((r, i) => r.cash[i]) },
-    { label: 'Lease fees: admin, Ejari, MF, agency', vals: m(fees) },
-    { label: 'Other income (manual lines)', vals: m((r, i) => r.manualOther[i]) },
-    { label: 'VAT collected', vals: m((r, i) => r.vat[i]) },
+    { label: 'VAT collected on rent', vals: m((r, i) => r.vat[i]) },
   ];
   const operating = MONTHS.map((_, i) => sum(lines.map((l) => l.vals[i])));
   const depIn = m((r, i) => r.depositIn[i]);
@@ -143,7 +139,7 @@ function CashFlowTable({ rolls, yy }: { rolls: PropertyRollup[]; yy: string }) {
   const all = MONTHS.map((_, i) => operating[i] + depIn[i] + depOut[i]);
   const rows = [
     ...lines,
-    { label: 'Cash from operations', vals: operating, kind: 'sub' as const },
+    { label: 'Rent collections incl. VAT', vals: operating, kind: 'sub' as const },
     { label: 'Security deposits received', vals: depIn },
     { label: 'Security deposits refunded', vals: depOut },
     { label: 'Total cash inflow', vals: all, kind: 'total' as const },

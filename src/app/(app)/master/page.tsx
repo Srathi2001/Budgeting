@@ -1,5 +1,6 @@
 import { requireUser, getActiveVersion, visibleProperties, editablePropertyIds } from '@/lib/auth/dal';
 import { loadMasterRows } from '@/lib/budget/master';
+import { withDefaults } from '@/lib/engine/assumptions';
 import { MasterGrid } from './master-grid';
 
 export const metadata = { title: 'Lease Budget · Budget' };
@@ -20,6 +21,7 @@ export default async function MasterPage(props: PageProps<'/master'>) {
       versionId={version!.id}
       year={version!.year}
       locked={version!.status === 'LOCKED'}
+      staffDiscount={withDefaults(version!.assumptions).staffDiscount}
       rows={rows}
       properties={props_.map((p) => ({ id: p.id, code: p.code, name: p.name, editable: editable.has(p.id) }))}
       selectedProperty={selected}

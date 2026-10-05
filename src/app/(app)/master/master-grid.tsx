@@ -6,6 +6,7 @@ import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
   ModuleRegistry,
+  colorSchemeDark,
   themeQuartz,
   type CellClassParams,
   type CellValueChangedEvent,
@@ -28,13 +29,26 @@ import { ScheduleEditor } from './schedule-editor';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const theme = themeQuartz.withParams({
+const theme = themeQuartz.withPart(colorSchemeDark).withParams({
+  fontFamily: 'inherit',
   fontSize: 12,
   rowHeight: 28,
   headerHeight: 30,
   spacing: 5,
-  headerBackgroundColor: '#f1f5f9',
-  fontFamily: 'inherit',
+  backgroundColor: '#121821',
+  foregroundColor: '#c3ccd7',
+  chromeBackgroundColor: '#15233a',
+  headerBackgroundColor: '#15233a',
+  headerTextColor: '#a9c7f5',
+  headerFontWeight: 600,
+  borderColor: '#263241',
+  columnBorder: true,
+  headerColumnBorder: true,
+  oddRowBackgroundColor: '#131b25',
+  rowHoverColor: '#18263a',
+  selectedRowBackgroundColor: '#1a2c47',
+  accentColor: '#3b82f6',
+  wrapperBorderRadius: 8,
 });
 
 type Row = MasterRow;
@@ -74,21 +88,33 @@ const fromYn = (v: unknown): boolean | null => (v === 'Y' ? true : v === 'N' ? f
 const editable = (p: EditableCallbackParams<Row>) => !!p.data?.editable && !p.node.isRowPinned();
 const inputClass = (p: CellClassParams<Row>) => (p.data?.editable && !p.node.isRowPinned() ? 'cell-input' : '');
 const money = (p: ValueFormatterParams) => fmt(p.value as number | null);
+const money2 = (p: ValueFormatterParams) => fmt(p.value as number | null, 2);
+
+/** Read-only fact from Oracle Fusion. */
+function fusionCol(field: keyof Row, headerName: string, kind: 'text' | 'money' | 'date' = 'text', extra: Partial<ColDef<Row>> = {}): ColDef<Row> {
+  return {
+    colId: field as string,
+    field,
+    headerName,
+    headerClass: 'hdr-fusion',
+    cellClass: 'cell-fusion',
+    editable: false,
+    cellDataType: false,
+    filter: kind === 'text',
+    ...(kind === 'money' ? { type: 'rightAligned', valueFormatter: money } : {}),
+    ...(kind === 'date' ? { valueFormatter: (p: ValueFormatterParams) => ymdToDmy(p.value) } : {}),
+    ...extra,
+  };
+}
 
 /** Column for a field that holds a PM override; blank override shows the engine's derived value. */
-function overrideCol(
-  field: keyof Row,
-  derived: (r: Row) => unknown,
-  kind: 'money' | 'date' | 'yn',
-  headerName: string,
-  width = 100,
-): ColDef<Row> {
+function overrideCol(field: keyof Row, derived: (r: Row) => unknown, kind: 'money' | 'date' | 'yn', headerName: string): ColDef<Row> {
   return {
     colId: field as string,
     headerName,
-    width,
+    headerClass: 'hdr-input',
     editable,
-    headerTooltip: 'Blank = calculated (grey). Type a value to override (bold). Delete to revert.',
+    headerTooltip: 'Blank = calculated (grey). Type a value to override (amber). Delete to revert.',
     valueGetter: (p: ValueGetterParams<Row>) => {
       if (!p.data) return null;
       const o = p.data[field];
@@ -109,8 +135,8 @@ function overrideCol(
   };
 }
 
-function inputCol(field: keyof Row, headerName: string, kind: 'text' | 'money' | 'int' | 'date' | 'yn' | 'ynReq', width = 100, extra: Partial<ColDef<Row>> = {}): ColDef<Row> {
-  const base: ColDef<Row> = { colId: field as string, field, headerName, width, editable, cellClass: inputClass, cellDataType: false };
+function inputCol(field: keyof Row, headerName: string, kind: 'text' | 'money' | 'int' | 'yn' | 'ynReq', extra: Partial<ColDef<Row>> = {}): ColDef<Row> {
+  const base: ColDef<Row> = { colId: field as string, field, headerName, headerClass: 'hdr-input', editable, cellClass: inputClass, cellDataType: false };
   switch (kind) {
     case 'money':
     case 'int':
@@ -124,8 +150,6 @@ function inputCol(field: keyof Row, headerName: string, kind: 'text' | 'money' |
         },
         ...extra,
       };
-    case 'date':
-      return { ...base, valueFormatter: (p) => ymdToDmy(p.value), valueParser: (p) => parseDate(p.newValue), ...extra };
     case 'yn':
     case 'ynReq':
       return {
@@ -145,15 +169,45 @@ function inputCol(field: keyof Row, headerName: string, kind: 'text' | 'money' |
   }
 }
 
-function monthCols(key: 'revenue' | 'cashFlow', totalKey: 'revenueTotal' | 'cashFlowTotal'): ColDef<Row>[] {
+/** Unit master column; editable fields are marked as inputs. */
+function unitCol(field: keyof Row, headerName: string, opts: { edit?: 'text' | 'money' | 'int'; money?: boolean } & Partial<ColDef<Row>> = {}): ColDef<Row> {
+  const { edit, money: isMoney, ...extra } = opts;
+  if (edit) return { ...inputCol(field, headerName, edit === 'text' ? 'text' : edit, extra), headerClass: 'hdr-unit' };
+  return {
+    colId: field as string,
+    field,
+    headerName,
+    headerClass: 'hdr-unit',
+    cellDataType: false,
+    filter: !isMoney,
+    ...(isMoney ? { type: 'rightAligned', valueFormatter: money } : {}),
+    ...extra,
+  };
+}
+
+function derivedCol(colId: string, headerName: string, get: (r: Row) => unknown, fmtKind: 'money' | 'money2' | 'pct' | 'text', headerTooltip?: string): ColDef<Row> {
+  return {
+    colId,
+    headerName,
+    headerClass: 'hdr-rera',
+    headerTooltip,
+    cellClass: 'cell-derived',
+    type: fmtKind === 'text' ? undefined : 'rightAligned',
+    valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? get(p.data) : null),
+    valueFormatter:
+      fmtKind === 'money' ? money : fmtKind === 'money2' ? money2 : fmtKind === 'pct' ? (p) => (p.value === null || p.value === undefined ? '' : pct(p.value as number)) : undefined,
+  };
+}
+
+function monthCols(key: 'revenue' | 'cashFlow', totalKey: 'revenueTotal' | 'cashFlowTotal', hdr: string): ColDef<Row>[] {
   return [
     ...MONTHS.map(
       (m, i): ColDef<Row> => ({
         colId: `${key}_${i}`,
         headerName: m,
-        width: 88,
+        headerClass: hdr,
         type: 'rightAligned',
-        cellClass: 'cell-month',
+        cellClass: `cell-month${i === 0 ? ' group-start' : ''}`,
         valueGetter: (p) => p.data?.[key]?.[i] ?? 0,
         valueFormatter: money,
       }),
@@ -161,14 +215,16 @@ function monthCols(key: 'revenue' | 'cashFlow', totalKey: 'revenueTotal' | 'cash
     {
       colId: totalKey,
       headerName: 'Total',
-      width: 105,
+      headerClass: hdr,
       type: 'rightAligned',
-      cellClass: 'cell-month font-semibold',
+      cellClass: 'cell-month font-semibold group-start',
       valueGetter: (p) => p.data?.[totalKey] ?? 0,
       valueFormatter: money,
     },
   ];
 }
+
+const psf = (rent: number | null | undefined, area: number | null) => (rent && area ? rent / area : null);
 
 // ---------- component --------------------------------------------------------------------------
 
@@ -176,6 +232,7 @@ export function MasterGrid({
   versionId,
   year,
   locked,
+  staffDiscount,
   rows,
   properties,
   selectedProperty,
@@ -183,6 +240,7 @@ export function MasterGrid({
   versionId: number;
   year: number;
   locked: boolean;
+  staffDiscount: number;
   rows: Row[];
   properties: P[];
   selectedProperty: number | null;
@@ -196,7 +254,7 @@ export function MasterGrid({
   const [selected, setSelected] = useState<Row | null>(null);
   const [showRevenue, setShowRevenue] = useState(true);
   const [showCash, setShowCash] = useState(false);
-  const [onlyWarnings, setOnlyWarnings] = useState(false);
+  const [onlyIssues, setOnlyIssues] = useState(false);
   const [adding, setAdding] = useState(false);
   const [, startNav] = useTransition();
 
@@ -215,7 +273,7 @@ export function MasterGrid({
     });
     api.setGridOption('pinnedBottomRowData', [
       {
-        unitCode: `Total (${t.count} units)`,
+        unitCode: `Total · ${t.count} units`,
         currentRent: t.currentRent,
         revenue: t.revenue,
         cashFlow: t.cashFlow,
@@ -267,73 +325,91 @@ export function MasterGrid({
     const defs: (ColDef<Row> | ColGroupDef<Row>)[] = [
       {
         headerName: 'Unit',
+        headerClass: 'hdr-unit',
         children: [
-          { colId: 'propertyName', field: 'propertyName', headerName: 'Property', width: 190, pinned: 'left', filter: true },
+          { colId: 'propertyName', field: 'propertyName', headerName: 'Property', headerClass: 'hdr-unit', pinned: 'left', filter: true, maxWidth: 220 },
           {
             colId: 'unitCode',
             field: 'unitCode',
             headerName: 'Unit Code',
-            width: 150,
+            headerClass: 'hdr-unit',
             pinned: 'left',
             filter: true,
             cellClass: (p) => (p.node.isRowPinned() ? 'font-semibold' : ''),
           },
-          inputCol('tenant', 'Tenant', 'text', 200, { pinned: 'left', filter: true }),
           {
-            colId: 'warnings',
-            headerName: '⚠',
-            width: 46,
+            colId: 'issues',
+            headerName: 'Issues',
+            headerClass: 'hdr-unit',
+            headerTooltip: 'Number of warnings on the row (hover a number to read them). Blank = no issues.',
             pinned: 'left',
             valueGetter: (p) => (p.data?.warnings?.length ? p.data.warnings.length : ''),
             tooltipValueGetter: (p) => p.data?.warnings?.join('\n') || undefined,
-            cellClass: 'text-amber-600 font-semibold text-center',
+            cellClass: 'cell-issue',
           },
         ],
       },
       {
-        headerName: 'Unit details',
+        headerName: 'Unit master',
+        headerClass: 'hdr-unit',
         children: [
-          { colId: 'buCode', field: 'buCode', headerName: 'BU', width: 60, filter: true },
-          { colId: 'coordinator', field: 'coordinator', headerName: 'PC', width: 80, filter: true },
-          inputCol('bedroom', 'BR', 'text', 60),
-          inputCol('area', 'SQF', 'money', 80),
-          { ...inputCol('rc', 'R/C', 'text', 60), cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['R', 'C', 'L'] }, filter: true },
-          inputCol('unitType', 'Unit Type', 'text', 130, { filter: true }),
-          inputCol('rooms', 'Rooms', 'int', 70, { hide: true }),
-          inputCol('capacity', 'Capacity', 'int', 80, { hide: true }),
-          inputCol('vacant', 'Vacant', 'ynReq', 70, { filter: true }),
+          unitCol('buName', 'Reference sheet', { valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? `Revenue Budget_${p.data.buName}` : null) }),
+          unitCol('buCode', 'BU'),
+          unitCol('propertyCode', 'Property Code'),
+          unitCol('coordinator', 'PC'),
+          unitCol('bedroom', 'Bedroom / Code', { edit: 'text' }),
+          unitCol('area', 'Area (sq.ft)', { edit: 'money' }),
+          { ...unitCol('rc', 'Type (R/C)', { edit: 'text' }), cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['R', 'C', 'L'] }, filter: true },
+          { ...inputCol('mfCurrent', 'MF (Y/N)', 'yn'), headerClass: 'hdr-unit' },
+          unitCol('mergedUnitNumber', 'Merged Unit No.'),
+          unitCol('unitStatus', 'Unit Status'),
+          unitCol('unitType', 'Unit Type', { edit: 'text', filter: true }),
+          unitCol('resiCommercial', 'Resi / Commercial (Fusion)'),
+          unitCol('landlord', 'Landlord', { edit: 'text' }),
+          unitCol('pivotCategory', 'Category', { edit: 'text', filter: true }),
+          unitCol('rooms', 'Rooms', { edit: 'int' }),
+          unitCol('capacity', 'Capacity', { edit: 'int' }),
+        ],
+      },
+      {
+        headerName: 'Current lease · Oracle Fusion (read-only)',
+        headerClass: 'hdr-fusion',
+        children: [
+          fusionCol('leaseNumber', 'Lease Number'),
+          fusionCol('leaseVersion', 'Version'),
+          fusionCol('tenantCode', 'Tenant Code'),
+          fusionCol('tenant', 'Tenant Name', 'text', { maxWidth: 260 }),
+          fusionCol('customerClass', 'Customer Class'),
+          fusionCol('currentStart', 'Lease Start', 'date'),
+          fusionCol('rentStart', 'Rent Start', 'date'),
+          fusionCol('currentEnd', 'Lease End', 'date'),
+          fusionCol('currentRent', 'Actual Lease Amount', 'money'),
+          fusionCol('vatAmount', 'VAT', 'money'),
+          fusionCol('securityDeposit', 'Security Deposit', 'money'),
+          fusionCol('leaseStatus', 'Lease Status'),
+          fusionCol('leaseRemarks', 'Lease Remarks', 'text', { maxWidth: 280, tooltipField: 'leaseRemarks' }),
+          { ...fusionCol('vacant', 'Vacant'), valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? yn(p.data.vacant) : null) },
+        ],
+      },
+      {
+        headerName: 'Budget inputs',
+        headerClass: 'hdr-input',
+        children: [
           {
-            ...inputCol('staffOwner', 'Staff/Owner', 'text', 95),
+            ...inputCol('staffOwner', 'Staff / Owner', 'text'),
             cellEditor: 'agSelectCellEditor',
             cellEditorParams: { values: ['', 'STAFF', 'OWNER'] },
             valueParser: (p) => (p.newValue ? p.newValue : null),
           },
-        ],
-      },
-      {
-        headerName: 'Current contract',
-        children: [
-          inputCol('mfCurrent', 'MF', 'yn', 55),
-          inputCol('currentRent', 'Rent', 'money', 105),
-          inputCol('currentStart', 'Start', 'date', 95),
-          inputCol('currentEnd', 'End', 'date', 95),
-          inputCol('securityDeposit', 'Deposit', 'money', 90, {
-            headerTooltip: 'Security deposit held. Blank = assumed % of rent. Refunded in cash flow when the tenant leaves.',
-          }),
-        ],
-      },
-      {
-        headerName: `1st renewal`,
-        children: [
-          inputCol('renew1', 'Renew', 'ynReq', 70, { headerTooltip: 'Y = same tenant renews (RERA increase). N = new tenant after the vacancy gap at the budget rate.' }),
-          inputCol('noRenewal', 'Not re-let', 'ynReq', 85, { headerTooltip: 'Y = unit is not let again after the current contract' }),
-          inputCol('budgetRate', 'Budget rate', 'money', 100, {
+          inputCol('renew1', 'Renew (Y/N)', 'ynReq', { headerTooltip: 'Y = tenant renews (RERA increase). N = new tenant after the vacancy gap, at the budget rate.' }),
+          inputCol('noRenewal', 'Not re-let', 'ynReq', { headerTooltip: 'Y = unit is not let again after the current lease' }),
+          inputCol('budgetRate', 'Budget Rate', 'money', {
             headerTooltip: 'New-tenant rate. Residential: annual rent · Commercial/labour: AED per sq.ft per year · Camps: AED per bed per month',
           }),
           {
             colId: 'increasePctOverride',
-            headerName: 'Incr. %',
-            width: 75,
+            headerName: 'Increase %',
+            headerClass: 'hdr-input',
             editable,
             type: 'rightAligned',
             headerTooltip: 'Renewal increase. Calculated from the RERA index (grey); type a % to override.',
@@ -350,48 +426,68 @@ export function MasterGrid({
             valueFormatter: (p) => (p.value === null || p.value === undefined ? '' : `${p.value}%`),
             cellClass: (p) => (p.data?.increasePctOverride !== null && p.data?.increasePctOverride !== undefined ? 'cell-override' : 'cell-derived'),
           },
-          {
-            colId: 'reraAverage',
-            headerName: 'RERA avg',
-            width: 85,
-            type: 'rightAligned',
-            valueGetter: (p) => p.data?.reraAverage ?? null,
-            valueFormatter: money,
-            cellClass: 'cell-derived',
-            hide: true,
-          },
-          overrideCol('r1Mf', (r) => r.r1?.mf ?? null, 'yn', 'MF', 55),
-          overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Rent', 105),
-          overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Start', 95),
-          overrideCol('r1End', (r) => r.r1?.end ?? null, 'date', 'End', 95),
+          inputCol('cheques', 'Cheques / yr', 'int', { headerTooltip: 'Equal cheques per year for renewals (blank = 4). Exact dates/amounts in the row panel.' }),
+          inputCol('notes', 'Notes', 'text', { cellEditor: 'agLargeTextCellEditor', cellEditorPopup: true, maxWidth: 260 }),
+        ],
+      },
+      {
+        headerName: 'RERA index',
+        headerClass: 'hdr-rera',
+        children: [
+          derivedCol('reraKey', 'Index', (r) => `${r.propertyCode}-${r.bedroom ?? ''}`, 'text', 'Property code - bedroom code: the RERA index row used'),
+          derivedCol('reraMin', 'Low', (r) => r.reraMin, 'money'),
+          derivedCol('reraMax', 'High', (r) => r.reraMax, 'money'),
+          derivedCol('reraAvg', 'Average', (r) => r.reraAverage, 'money'),
+          derivedCol('oldPsf', 'Old Rent psf', (r) => psf(r.currentRent, r.area), 'money2'),
+          derivedCol('newPsf', 'New Rent psf', (r) => psf(r.r1?.rent, r.area), 'money2'),
+          derivedCol('reraGap', '% Difference', (r) => r.reraGap, 'pct', 'How far the current rent is below the RERA average'),
+          derivedCol('incAllowed', 'Increase Allowed', (r) => r.increasePct, 'pct', 'From the RERA bands (or labour / camp increase)'),
+          derivedCol('staffDisc', 'Staff Discount', (r) => (r.staffOwner === 'STAFF' ? staffDiscount : 0), 'pct'),
+        ],
+      },
+      {
+        headerName: '1st renewal',
+        headerClass: 'hdr-input',
+        children: [
+          overrideCol('r1Mf', (r) => r.r1?.mf ?? null, 'yn', 'MF'),
+          overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Start Date'),
+          overrideCol('r1End', (r) => r.r1?.end ?? null, 'date', 'End Date'),
+          overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Amount'),
         ],
       },
       {
         headerName: '2nd renewal',
+        headerClass: 'hdr-input',
         children: [
-          inputCol('r2Renew', 'Renew', 'yn', 65, { headerTooltip: 'Blank = automatic when the 1st renewal ends before 31 Dec. N = no 2nd renewal.' }),
-          overrideCol('r2Mf', (r) => r.r2?.mf ?? null, 'yn', 'MF', 55),
-          overrideCol('r2Rent', (r) => r.r2?.rent ?? null, 'money', 'Rent', 105),
-          overrideCol('r2Start', (r) => r.r2?.start ?? null, 'date', 'Start', 95),
-          overrideCol('r2End', (r) => r.r2?.end ?? null, 'date', 'End', 95),
+          inputCol('r2Renew', 'Renew', 'yn', { headerTooltip: 'Blank = automatic when the 1st renewal ends inside the year. N = none.' }),
+          overrideCol('r2Mf', (r) => r.r2?.mf ?? null, 'yn', 'MF'),
+          overrideCol('r2Start', (r) => r.r2?.start ?? null, 'date', 'Start Date'),
+          overrideCol('r2End', (r) => r.r2?.end ?? null, 'date', 'End Date'),
+          overrideCol('r2Rent', (r) => r.r2?.rent ?? null, 'money', 'Amount'),
         ],
       },
       {
-        headerName: 'Other',
+        headerName: '3rd renewal',
+        headerClass: 'hdr-input',
         children: [
-          inputCol('cheques', 'Cheques', 'int', 80, {
-            headerTooltip: 'Equal cheques per renewal (blank = 4). Edit exact dates/amounts in the row panel below the grid.',
-          }),
-          { colId: 'vacancyLoss', headerName: 'Vacancy loss', width: 100, type: 'rightAligned', valueGetter: (p) => p.data?.vacancyLoss ?? 0, valueFormatter: money },
-          { colId: 'otherIncomeTotal', headerName: 'Fees', width: 85, type: 'rightAligned', valueGetter: (p) => p.data?.otherIncomeTotal ?? 0, valueFormatter: money, headerTooltip: 'Admin + Ejari + MF + Agency fees from this unit' },
-          inputCol('notes', 'Notes', 'text', 220, { cellEditor: 'agLargeTextCellEditor', cellEditorPopup: true }),
+          inputCol('r3Renew', 'Renew', 'yn', { headerTooltip: 'Blank = automatic when the 2nd renewal ends inside the year. N = none.' }),
+          overrideCol('r3Mf', (r) => r.r3?.mf ?? null, 'yn', 'MF'),
+          overrideCol('r3Start', (r) => r.r3?.start ?? null, 'date', 'Start Date'),
+          overrideCol('r3End', (r) => r.r3?.end ?? null, 'date', 'End Date'),
+          overrideCol('r3Rent', (r) => r.r3?.rent ?? null, 'money', 'Amount'),
         ],
       },
+      {
+        headerName: 'Vacancy',
+        headerClass: 'hdr-rera',
+        children: [derivedCol('vacancyLoss', 'Vacancy Loss', (r) => r.vacancyLoss, 'money', 'Gap between the lease ending and the next tenant, at the new rent')],
+      },
     ];
-    if (showRevenue) defs.push({ headerName: `Revenue ${year}`, children: monthCols('revenue', 'revenueTotal') });
-    if (showCash) defs.push({ headerName: `Cash inflow ${year} (incl. fees, VAT, deposits)`, children: monthCols('cashFlow', 'cashFlowTotal') });
+    if (showRevenue) defs.push({ headerName: `Revenue budget ${year}`, headerClass: 'hdr-revenue', children: monthCols('revenue', 'revenueTotal', 'hdr-revenue') });
+    if (showCash)
+      defs.push({ headerName: `Cash inflow ${year} (rent + VAT + deposits)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'cashFlowTotal', 'hdr-cash') });
     return defs;
-  }, [showRevenue, showCash, year]);
+  }, [showRevenue, showCash, year, staffDiscount]);
 
   const onGridReady = useCallback(
     (e: GridReadyEvent<Row>) => {
@@ -401,18 +497,15 @@ export function MasterGrid({
     [refreshTotals],
   );
 
-  const visibleRows = useMemo(() => (onlyWarnings ? rows.filter((r) => r.warnings.length) : rows), [rows, onlyWarnings]);
+  const visibleRows = useMemo(() => (onlyIssues ? rows.filter((r) => r.warnings.length) : rows), [rows, onlyIssues]);
   const editableSelected = selectedProperty ? properties.find((p) => p.id === selectedProperty)?.editable : false;
+  const leased = rows.filter((r) => r.currentEnd).length;
 
   return (
     <div className="flex h-screen flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
-        <h1 className="mr-2 text-base font-semibold">Lease Budget</h1>
-        <select
-          className="input w-72"
-          value={selectedProperty ?? 'all'}
-          onChange={(e) => startNav(() => router.push(`/master?p=${e.target.value}`))}
-        >
+        <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
+        <select className="input w-72" value={selectedProperty ?? 'all'} onChange={(e) => startNav(() => router.push(`/master?p=${e.target.value}`))}>
           <option value="all">All properties ({properties.length})</option>
           {properties.map((p) => (
             <option key={p.id} value={p.id}>
@@ -421,26 +514,24 @@ export function MasterGrid({
             </option>
           ))}
         </select>
-        <input
-          className="input w-56"
-          placeholder="Search unit, tenant…"
-          onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)}
-        />
-        <label className="flex items-center gap-1 text-sm">
+        <input className="input w-56" placeholder="Search unit, tenant…" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
+        <label className="flex items-center gap-1 text-[13px]">
           <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue
         </label>
-        <label className="flex items-center gap-1 text-sm">
+        <label className="flex items-center gap-1 text-[13px]">
           <input type="checkbox" checked={showCash} onChange={(e) => setShowCash(e.target.checked)} /> Cash
         </label>
-        <label className="flex items-center gap-1 text-sm">
-          <input type="checkbox" checked={onlyWarnings} onChange={(e) => setOnlyWarnings(e.target.checked)} /> Warnings only
+        <label className="flex items-center gap-1 text-[13px]">
+          <input type="checkbox" checked={onlyIssues} onChange={(e) => setOnlyIssues(e.target.checked)} /> Issues only
         </label>
+        <button className="btn btn-xs" onClick={() => apiRef.current?.autoSizeAllColumns()} title="Fit every column to its content">
+          Auto-fit columns
+        </button>
+        <span className="text-xs text-slate-500">
+          {leased} of {rows.length} units have a Fusion lease
+        </span>
         <div className="ml-auto flex items-center gap-2">
-          <span
-            className={`text-xs ${
-              status.kind === 'error' ? 'text-red-600' : status.kind === 'saved' ? 'text-emerald-700' : 'text-slate-500'
-            }`}
-          >
+          <span className={`text-xs ${status.kind === 'error' ? 'text-red-600' : status.kind === 'saved' ? 'text-emerald-700' : 'text-slate-500'}`}>
             {locked ? 'Version locked: read only' : status.kind === 'saving' ? (status.text ?? 'Saving…') : status.text}
           </span>
           {editableSelected && (
@@ -453,6 +544,7 @@ export function MasterGrid({
           </a>
         </div>
       </div>
+      <Legend />
 
       {adding && selectedProperty && (
         <AddUnitForm
@@ -476,12 +568,15 @@ export function MasterGrid({
         </div>
       )}
 
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 p-2">
         <AgGridReact<Row>
           theme={theme}
           rowData={visibleRows}
           columnDefs={columnDefs}
-          defaultColDef={{ resizable: true, sortable: true, suppressHeaderMenuButton: false }}
+          defaultColDef={{ resizable: true, sortable: true, minWidth: 56 }}
+          autoSizeStrategy={{ type: 'fitCellContents', defaultMaxWidth: 300, continuous: true }}
+          // measure every column when auto-fitting, not only the ones on screen
+          suppressColumnVirtualisation
           getRowId={(p: GetRowIdParams<Row>) => String(p.data.lineId)}
           onGridReady={onGridReady}
           onCellValueChanged={onCellValueChanged}
@@ -527,6 +622,29 @@ export function MasterGrid({
   );
 }
 
+function Legend() {
+  const item = (color: string, label: string) => (
+    <span className="flex items-center gap-1.5">
+      <span className="inline-block h-0.5 w-4" style={{ background: color }} />
+      {label}
+    </span>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 bg-white px-4 py-1.5 text-[11px] text-slate-500">
+      {item('#64748b', 'Unit master')}
+      {item('#14b8a6', 'Oracle Fusion (read-only)')}
+      {item('#f59e0b', 'Budget inputs')}
+      {item('#a78bfa', 'Calculated')}
+      {item('#3b82f6', 'Revenue')}
+      {item('#10b981', 'Cash')}
+      <span className="flex items-center gap-1.5">
+        <span className="inline-block h-3 w-4 rounded-sm" style={{ background: 'rgba(245,158,11,0.18)' }} /> overridden value
+      </span>
+      <span className="text-slate-400">Click a row for its contracts and cheque schedules</span>
+    </div>
+  );
+}
+
 function AddUnitForm({
   onAdd,
   onCancel,
@@ -537,7 +655,7 @@ function AddUnitForm({
   const [error, setError] = useState<string | null>(null);
   return (
     <form
-      className="flex flex-wrap items-end gap-2 border-b border-slate-200 bg-sky-50 px-4 py-2 text-sm"
+      className="flex flex-wrap items-end gap-2 border-b border-slate-200 bg-sky-50 px-4 py-2 text-[13px]"
       action={async (f) => {
         const err = await onAdd({
           unitCode: String(f.get('unitCode') ?? ''),
@@ -597,24 +715,31 @@ function RowDetail({
 }) {
   const kind = row.rc === 'R' ? 'Residential' : row.rc === 'C' ? 'Commercial' : 'Labour';
   const contracts = [
-    row.current && { key: 'current', title: 'Current lease', c: row.current, field: 'currentSchedule' as const, note: 'Actual cheques will come from Fusion lease schedules' },
+    row.current && { key: 'current', title: 'Current lease · Fusion', c: row.current, field: null, note: 'Cheques from Fusion lease schedules once connected' },
     row.r1 && { key: 'r1', title: row.renew1 ? '1st renewal' : '1st renewal · new tenant', c: row.r1, field: 'r1Schedule' as const, note: undefined },
     row.r2 && { key: 'r2', title: '2nd renewal', c: row.r2, field: 'r2Schedule' as const, note: undefined },
-  ].filter(Boolean) as { key: string; title: string; c: NonNullable<Row['r1']>; field: 'currentSchedule' | 'r1Schedule' | 'r2Schedule'; note?: string }[];
+    row.r3 && { key: 'r3', title: '3rd renewal', c: row.r3, field: 'r3Schedule' as const, note: undefined },
+  ].filter(Boolean) as {
+    key: string;
+    title: string;
+    c: NonNullable<Row['r1']>;
+    field: 'r1Schedule' | 'r2Schedule' | 'r3Schedule' | null;
+    note?: string;
+  }[];
 
   return (
-    <div className="max-h-[46vh] overflow-auto border-t-2 border-slate-300 bg-white px-4 py-3 text-sm">
+    <div className="max-h-[46vh] overflow-auto border-t-2 border-sky-700 bg-white px-4 py-3 text-[13px]">
       <div className="mb-3 flex items-start gap-3">
         <div>
           <div className="font-semibold text-slate-900">
-            {row.unitCode} <span className="font-normal text-slate-400">·</span> {row.tenant ?? '—'}
+            {row.unitCode} <span className="font-normal text-slate-400">·</span> {row.tenant ?? 'No current lease'}
           </div>
           <div className="text-xs text-slate-500">
             {row.propertyName} · {kind}
             {row.area ? ` · ${fmt(row.area)} sq.ft` : ''}
+            {row.leaseNumber ? ` · lease ${row.leaseNumber} v${row.leaseVersion ?? '–'}` : ''}
             {row.increasePct !== null ? ` · renewal increase ${pct(row.increasePct)}` : ''}
             {row.reraAverage ? ` · RERA avg ${fmt(row.reraAverage)}` : ''}
-            {` · deposit ${row.securityDeposit !== null ? fmt(row.securityDeposit) : 'assumed % of rent'}`}
           </div>
         </div>
         <div className="ml-auto flex gap-2">
@@ -630,11 +755,17 @@ function RowDetail({
       </div>
 
       {row.warnings.length > 0 && (
-        <ul className="mb-3 list-disc rounded-md bg-amber-50 py-1.5 pr-3 pl-7 text-xs text-amber-800">
+        <ul className="mb-3 list-disc rounded-md border border-amber-200 bg-amber-50 py-1.5 pr-3 pl-7 text-xs text-amber-700">
           {row.warnings.map((w) => (
             <li key={w}>{w}</li>
           ))}
         </ul>
+      )}
+
+      {contracts.length === 0 && (
+        <p className="mb-3 text-xs text-slate-500">
+          No current lease from Fusion. To budget a lease-up, set Renew = N, a budget rate, and the 1st renewal start date.
+        </p>
       )}
 
       <div className="flex gap-3 overflow-x-auto pb-1">
@@ -653,9 +784,9 @@ function RowDetail({
               title={title}
               contract={c}
               year={year}
-              editable={row.editable}
+              editable={row.editable && field !== null}
               overrideNote={note}
-              onSave={(items) => onSave({ [field]: items } as RowPatch)}
+              onSave={(items) => field && onSave({ [field]: items } as RowPatch)}
             />
           </div>
         ))}
@@ -678,11 +809,11 @@ function RowDetail({
             [
               ['Revenue', row.revenue, row.revenueTotal],
               ['Rent cheques (ex VAT)', row.cash, row.cashTotal],
-              ['Cash inflow (incl. fees, VAT, deposits)', row.cashFlow, row.cashFlowTotal],
+              ['Cash inflow (incl. VAT, deposits)', row.cashFlow, row.cashFlowTotal],
             ] as const
           ).map(([label, vals, total]) => (
             <tr key={label}>
-              <td className="text-slate-700">{label}</td>
+              <td>{label}</td>
               {vals.map((v, i) => (
                 <td key={i} className="num">
                   {fmt(v)}

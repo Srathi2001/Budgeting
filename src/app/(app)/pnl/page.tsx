@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
-import { propertyRollups, autoOtherTotal, cashFlow } from '@/lib/budget/reports';
+import { propertyRollups, cashFlow } from '@/lib/budget/reports';
 import { sum } from '@/lib/format';
 import { Num, Pct } from '@/components/num';
 
@@ -16,14 +16,11 @@ export default async function PnlPage() {
 
   const lines = rolls
     .map((r) => {
-      const rental = sum(r.revenue);
-      const other = sum(autoOtherTotal(r)) + sum(r.manualOther);
-      return { r, rental, other, total: rental + other, cash: sum(cashFlow(r)) };
+      const total = sum(r.revenue);
+      return { r, total, cash: sum(cashFlow(r)) };
     })
     .sort((a, b) => a.r.buCode.localeCompare(b.r.buCode) || b.total - a.total);
   const T = {
-    rental: sum(lines.map((l) => l.rental)),
-    other: sum(lines.map((l) => l.other)),
     total: sum(lines.map((l) => l.total)),
     cash: sum(lines.map((l) => l.cash)),
   };
@@ -44,9 +41,7 @@ export default async function PnlPage() {
           <thead>
             <tr className="tbl-band">
               <th className="stick" colSpan={3} />
-              <th className="sep" colSpan={3}>
-                Revenue
-              </th>
+              <th className="sep">Revenue</th>
               <th className="sep" colSpan={COST_COLUMNS.length + 1}>
                 Costs (to be budgeted)
               </th>
@@ -59,9 +54,7 @@ export default async function PnlPage() {
               <th className="stick stick-edge w-[300px]">Property</th>
               <th className="w-16">BU</th>
               <th className="num w-14">Units</th>
-              <th className="num sep w-28">Rental</th>
-              <th className="num w-24">Other inc.</th>
-              <th className="num w-28">Total</th>
+              <th className="num sep w-28">Rental revenue</th>
               {COST_COLUMNS.map((c, i) => (
                 <th key={c} className={`num w-24 text-slate-400 ${i === 0 ? 'sep' : ''}`}>
                   {c}
@@ -74,7 +67,7 @@ export default async function PnlPage() {
             </tr>
           </thead>
           <tbody>
-            {lines.map(({ r, rental, other, total, cash }) => (
+            {lines.map(({ r, total, cash }) => (
               <tr key={r.propertyId}>
                 <td className="stick stick-edge">
                   <div className="flex w-[280px] items-baseline gap-2 overflow-hidden">
@@ -86,9 +79,7 @@ export default async function PnlPage() {
                 </td>
                 <td className="muted">{r.buName}</td>
                 <td className="num muted">{r.kind === 'CAMP' ? 'Camp' : r.units}</td>
-                <Num v={rental} className="sep" />
-                <Num v={other} />
-                <Num v={total} bold />
+                <Num v={total} bold className="sep" />
                 {COST_COLUMNS.map((c, i) => (
                   <td key={c} className={`na ${i === 0 ? 'sep' : ''}`}>
                     ·
@@ -104,9 +95,7 @@ export default async function PnlPage() {
               <td className="stick stick-edge">Total</td>
               <td />
               <td className="num">{sum(lines.map((l) => l.r.units))}</td>
-              <Num v={T.rental} className="sep" />
-              <Num v={T.other} />
-              <Num v={T.total} />
+              <Num v={T.total} className="sep" />
               {COST_COLUMNS.map((c, i) => (
                 <td key={c} className={i === 0 ? 'sep' : ''} />
               ))}

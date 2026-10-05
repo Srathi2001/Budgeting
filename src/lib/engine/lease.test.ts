@@ -20,6 +20,12 @@ function input(over: Partial<LeaseInput>): LeaseInput {
     securityDeposit: null,
     r1Schedule: null,
     r2Schedule: null,
+    r3Renew: null,
+    r3Rent: null,
+    r3Start: null,
+    r3End: null,
+    r3Mf: null,
+    r3Schedule: null,
     renew1: true,
     noRenewal: false,
     r1Rent: null,
@@ -109,23 +115,37 @@ describe('renewal derivation', () => {
     expect(res.warnings.join()).toMatch(/RERA/);
   });
 
-  it('new tenant: vacancy gap, budget rate, agency fee, MF and no admin fee on that lease', () => {
+  it('new tenant: vacancy gap, budget rate, MF and vacancy loss', () => {
     const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000 }), 2027, A);
     const r1 = res.contracts.find((c) => c.kind === 'RENEWAL1')!;
     expect(formatDay(r1.start)).toBe('2027-04-29'); // 28 Feb + 60 days
     expect(r1.rent).toBe(65000);
     expect(r1.mf).toBe(true);
-    expect(res.agencyFee[3]).toBeCloseTo(65000 * 0.025);
-    expect(res.mfFee[3]).toBeCloseTo(65000 * 0.05);
-    expect(res.ejariFee[3]).toBe(200);
-    expect(res.adminFee[3]).toBe(0);
+    expect(r1.newTenant).toBe(true);
     expect(res.vacancyLoss).toBeGreaterThan(0);
   });
 
   it('commercial new tenant: budget rate is per sq.ft', () => {
     const res = computeLease(input({ ...base, rc: 'C', area: 1000, renew1: false, budgetRate: 80 }), 2027, A);
     expect(res.contracts.find((c) => c.kind === 'RENEWAL1')!.rent).toBe(80000);
-    expect(res.adminFee[3]).toBe(0);
+  });
+
+  it('3rd renewal is added when the 2nd also ends inside the year', () => {
+    const res = computeLease(
+      input({
+        currentRent: 6000,
+        currentStart: d('2026-11-01'),
+        currentEnd: d('2027-01-31'),
+        r1End: d('2027-04-30'),
+        r2End: d('2027-07-31'),
+      }),
+      2027,
+      A,
+      { min: 6000, max: 6000 },
+    );
+    const r3 = res.contracts.find((c) => c.kind === 'RENEWAL3');
+    expect(r3 && formatDay(r3.start)).toBe('2027-08-01');
+    expect(res.revenue.every((v) => v > 0)).toBe(true);
   });
 
   it('camps renew at the camp increase', () => {
@@ -193,13 +213,12 @@ describe('cheque schedules, VAT and deposits', () => {
     expect(res.warnings.join()).toMatch(/cheque schedule totals 60,000/);
   });
 
-  it('VAT on commercial rent and on fees, none on residential rent', () => {
+  it('VAT on commercial rent, none on residential rent', () => {
     const c = computeLease(input({ ...base, rc: 'C', area: 1000, r1Rent: 100000 }), 2027, A);
     const r = computeLease(input({ ...base, r1Rent: 100000 }), 2027, A);
-    const julyCheque = 25000;
-    // July: renewal cheque + admin + Ejari, all with 5% except residential rent
-    expect(c.vat[6]).toBeCloseTo((julyCheque + 1000 + 200) * 0.05);
-    expect(r.vat[6]).toBeCloseTo((500 + 200) * 0.05);
+    expect(c.vat[6]).toBeCloseTo(25000 * 0.05); // July renewal cheque
+    expect(r.vat.every((v) => v === 0)).toBe(true);
+    expect(c.totals.cashFlow).toBeCloseTo(c.totals.cash * 1.05);
   });
 
   it('deposit refunded when the tenant leaves, new deposit taken from the new tenant', () => {
@@ -214,5 +233,18 @@ describe('cheque schedules, VAT and deposits', () => {
   it('a renewing tenant moves no deposit', () => {
     const res = computeLease(input({ ...base }), 2027, A, { min: 100000, max: 100000 });
     expect(res.depositIn.every((v) => v === 0) && res.depositOut.every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe('multi-year leases', () => {
+  it('get the per-year cheque count for every year of the term', () => {
+    const res = computeLease(
+      input({ currentRent: 300000, currentStart: d('2025-01-01'), currentEnd: d('2027-12-31'), noRenewal: true }),
+      2027,
+      A,
+    );
+    expect(res.contracts[0].schedule).toHaveLength(12);
+    expect(res.totals.cash).toBeCloseTo(100000, 0);
+    expect(res.totals.revenue).toBeCloseTo(100000, -2);
   });
 });

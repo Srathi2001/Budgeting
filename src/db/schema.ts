@@ -71,6 +71,11 @@ export const units = pgTable(
     unitType: text('unit_type'),
     rooms: integer('rooms'),
     capacity: integer('capacity'),
+    // Fusion unit attributes (Unit Dump)
+    mergedUnitNumber: text('merged_unit_number'),
+    unitStatus: text('unit_status'), // Leased / Available / Pending …
+    resiCommercial: text('resi_commercial'), // unit usage as per Fusion
+    landlord: text('landlord'),
     active: boolean('active').notNull().default(true),
   },
   (t) => [uniqueIndex('units_code_uq').on(t.unitCode), index('units_property_idx').on(t.propertyId)],
@@ -96,6 +101,17 @@ export const leaseLines = pgTable(
     versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
     unitId: integer('unit_id').notNull().references(() => units.id),
     propertyId: integer('property_id').notNull().references(() => properties.id),
+
+    // ---- current lease: facts from Oracle Fusion (read-only in the tool) ----
+    leaseNumber: text('lease_number'),
+    leaseVersion: text('lease_version'),
+    tenantCode: text('tenant_code'),
+    customerClass: text('customer_class'),
+    rentStart: day('rent_start'),
+    leaseStatus: text('lease_status'),
+    leaseRemarks: text('lease_remarks'),
+    vatAmount: money('vat_amount'),
+    leaseSyncedAt: timestamp('lease_synced_at', { withTimezone: true }),
 
     tenant: text('tenant'),
     vacant: boolean('vacant').notNull().default(false),
@@ -125,6 +141,13 @@ export const leaseLines = pgTable(
     r2Mf: boolean('r2_mf'),
     r2Schedule: jsonb('r2_schedule').$type<ScheduleItem[]>(),
 
+    r3Renew: boolean('r3_renew'),
+    r3Rent: money('r3_rent'),
+    r3Start: day('r3_start'),
+    r3End: day('r3_end'),
+    r3Mf: boolean('r3_mf'),
+    r3Schedule: jsonb('r3_schedule').$type<ScheduleItem[]>(),
+
     budgetRate: money('budget_rate'),
     increasePctOverride: decimal('increase_pct_override'),
     cheques: integer('cheques'),
@@ -151,10 +174,6 @@ export const lineMonthly = pgTable(
     month: integer('month').notNull(),
     revenue: money('revenue').notNull().default(0),
     cash: money('cash').notNull().default(0),
-    adminFee: money('admin_fee').notNull().default(0),
-    ejariFee: money('ejari_fee').notNull().default(0),
-    mfFee: money('mf_fee').notNull().default(0),
-    agencyFee: money('agency_fee').notNull().default(0),
     vat: money('vat').notNull().default(0),
     depositIn: money('deposit_in').notNull().default(0),
     depositOut: money('deposit_out').notNull().default(0),
@@ -174,31 +193,6 @@ export const reraIndex = pgTable(
     max: money('max').notNull(),
   },
   (t) => [uniqueIndex('rera_uq').on(t.versionId, t.propertyCode, t.bedroom)],
-);
-
-export const glAccounts = pgTable('gl_accounts', {
-  code: text('code').primaryKey(),
-  name: text('name').notNull(),
-  owner: text('owner'), // Landlord / ANPM
-  /** When set, the account is filled by the lease engine: ADMIN / EJARI / MF / AGENCY */
-  autoSource: text('auto_source'),
-  sort: integer('sort').notNull().default(0),
-});
-
-/** Manually budgeted other income: one row per property per GL account, 12 monthly amounts. */
-export const otherIncome = pgTable(
-  'other_income',
-  {
-    id: serial('id').primaryKey(),
-    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
-    propertyId: integer('property_id').notNull().references(() => properties.id),
-    glCode: text('gl_code').notNull().references(() => glAccounts.code),
-    months: jsonb('months').$type<number[]>().notNull(),
-    note: text('note'),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedBy: integer('updated_by'),
-  },
-  (t) => [uniqueIndex('other_income_uq').on(t.versionId, t.propertyId, t.glCode)],
 );
 
 /** Comparative figures shown in Revenue Analysis (e.g. 2026B, 2026F, 2025A) per property. */
