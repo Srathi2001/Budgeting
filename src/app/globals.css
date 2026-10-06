@@ -426,7 +426,7 @@ body {
 
 /* ---------------------------------------------------------------------------------------------
    Lease Budget grid (AG Grid). Column groups are told apart by cell state, not colour:
-   editable = boxed white, Oracle = locked gray, calculated = faint gray, override = bold.
+   editable = underlined white, Oracle = locked gray, calculated = faint gray, override = bold.
    ------------------------------------------------------------------------------------------- */
 .ag-header-group-cell {
   background-color: var(--header-2);
@@ -465,40 +465,77 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/*
- * Other Income grid: a long list of property blocks. Blocks are set apart by space and their
- * totals; inside a block, no rule per row and no box per cell. An editable cell is marked by an
- * underline (its box shows on hover / while typing).
- */
-.oi-grid tbody td {
-  border-bottom: 0;
+/* ---------------------------------------------------------------------------------------------
+   Light tables (every grid: .tbl, .anh-grid, the Lease Budget AG Grid). Rows sit on a faint
+   hairline; groups are set apart by space above their heading and a rule above their subtotal;
+   an editable cell is underlined, not boxed (its box shows on hover and while typing). No rules
+   between columns except where a column group starts.
+   ------------------------------------------------------------------------------------------- */
+:root,
+[data-theme] {
+  --line-soft: color-mix(in srgb, var(--line) 45%, var(--surface));
 }
-.oi-grid td.input {
-  background: var(--cell-input);
-  box-shadow: inset 0 -1px 0 var(--control-border);
+
+.tbl tbody td,
+.anh-grid tbody td {
+  border-bottom-color: var(--line-soft);
 }
-.oi-grid td.input:hover,
-.oi-grid td.input:focus-within {
-  box-shadow: inset 0 0 0 1px var(--ink);
+.tbl .sep {
+  border-left-color: var(--line);
 }
-.oi-grid tr.section td {
-  /* space above each property block */
+
+/* space above each group heading (not the first) */
+.tbl tbody tr.tbl-group td,
+.tbl tbody tr.lvl-0 td,
+.anh-grid tbody tr.section td {
   border-top: 14px solid var(--surface);
   background-clip: padding-box;
 }
-.oi-grid tbody tr.section:first-child td {
+.tbl tbody tr.tbl-group:first-child td,
+.tbl tbody tr.lvl-0:first-child td,
+.anh-grid tbody tr.section:first-child td {
   border-top: 0;
 }
-.oi-grid tr.subtotal td {
+/* the last line of a group runs into its subtotal rule */
+.tbl tbody tr:has(+ tr.tbl-sub) td,
+.anh-grid tbody tr:has(+ tr.subtotal) td {
+  border-bottom-color: transparent;
+}
+.tbl tr.tbl-sub td {
+  border-top-color: var(--line);
+}
+.anh-grid tr.subtotal td {
   background: var(--surface);
   border-top: 1px solid var(--line);
 }
-.oi-grid tr.bu-total td {
+/* a subtotal of subtotals (e.g. a business unit) keeps the band */
+.anh-grid tr.bu-total td {
   background: var(--cell-subtotal);
   border-top: 1px solid var(--line-strong);
 }
-.oi-legend i.input {
+
+/* editable cells: underlined; boxed on hover / while typing */
+.anh-grid td.input,
+.cell-input {
   box-shadow: inset 0 -1px 0 var(--control-border);
+}
+.anh-grid td.input:hover,
+.anh-grid td.input:focus-within,
+.cell-input:hover {
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.anh-legend-cells i.input,
+.anh-legend-cells i.dirty {
+  box-shadow: inset 0 -1px 0 var(--control-border);
+}
+.cell-edit {
+  border-color: transparent transparent var(--control-border);
+  background: transparent;
+}
+.cell-edit:hover,
+.cell-edit:focus {
+  border-color: var(--ink);
+  background: var(--cell-input);
 }
 
 .cell-fusion {
@@ -511,14 +548,13 @@ body {
   color: var(--ink-2);
   font-style: italic;
 }
+/* underlined, boxed on hover: see "Light tables" above */
 .cell-input {
   background-color: var(--cell-input);
   color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--control-border);
 }
 .cell-input:hover {
   background-color: var(--cell-input-hover);
-  box-shadow: inset 0 0 0 1px var(--ink);
 }
 /* editable, currently showing the calculated value */
 .cell-input.cell-derived {
@@ -540,8 +576,9 @@ body {
 .row-warning .ag-cell:first-child {
   box-shadow: inset var(--rule) 0 0 var(--ink);
 }
+/* first column of a column group: the only vertical rule in the grid body */
 .group-start {
-  border-left: 1px solid var(--line-strong) !important;
+  border-left: 1px solid var(--line) !important;
 }
 .ag-cell-focus:not(.ag-cell-range-selected) {
   box-shadow: inset 0 0 0 var(--rule) var(--cell-selected) !important;

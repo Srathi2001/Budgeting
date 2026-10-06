@@ -195,7 +195,7 @@ export function OtherIncome({
       </div>
 
       <div className="flex items-center justify-between gap-4">
-        <div className="anh-legend-cells oi-legend" aria-label="Cell legend">
+        <div className="anh-legend-cells" aria-label="Cell legend">
           <span>
             <i className="input" />
             Editable
@@ -217,7 +217,7 @@ export function OtherIncome({
       </div>
 
       <div className="anh-grid-wrap max-h-[calc(100vh-15rem)]">
-        <table className="anh-grid oi-grid">
+        <table className="anh-grid">
           <thead>
             <tr className="h2">
               <th colSpan={3} />

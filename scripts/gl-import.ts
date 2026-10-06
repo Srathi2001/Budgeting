@@ -1,4 +1,4 @@
-// Other income actuals from the Oracle Account Analysis Report (same as Admin → GL actuals).
+// Other income actuals from the Oracle Account Analysis Report (same as Admin → Account Analysis Report).
 // Reads the file as a stream, so the full-ledger export (hundreds of MB) is fine.
 //
 //   npx tsx scripts/gl-import.ts <versionId> <Account Analysis Report.xls>           preview only

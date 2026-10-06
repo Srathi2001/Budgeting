@@ -49,7 +49,9 @@ const theme = themeQuartz.withParams({
   headerFontSize: 11,
   headerFontWeight: 700,
   borderColor: 'var(--line)',
-  columnBorder: true,
+  // light rules: a faint line per row, a vertical line only where a column group starts (group-start)
+  rowBorder: { color: 'var(--line-soft)' },
+  columnBorder: false,
   headerColumnBorder: { color: 'var(--ink-2)' },
   oddRowBackgroundColor: 'var(--surface)',
   rowHoverColor: 'var(--cell-input-hover)',
@@ -231,6 +233,19 @@ function derivedCol(colId: string, headerName: string, get: (r: Row) => unknown,
     valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? get(p.data) : null),
     valueFormatter:
       fmtKind === 'money' ? money : fmtKind === 'money2' ? money2 : fmtKind === 'pct' ? (p) => (p.value === null || p.value === undefined ? '' : pct(p.value as number)) : undefined,
+  };
+}
+
+/** Adds the column-group rule to a column, keeping its own cell classes. */
+function groupStart(c: ColDef<Row>): ColDef<Row> {
+  const own = c.cellClass;
+  return {
+    ...c,
+    cellClass: (p: CellClassParams<Row>) => {
+      const base = typeof own === 'function' ? own(p) : own;
+      const list = Array.isArray(base) ? base : base ? [base] : [];
+      return list.includes('group-start') ? list : [...list, 'group-start'];
+    },
   };
 }
 
@@ -517,7 +532,8 @@ export function MasterGrid({
     ];
     if (showRevenue) defs.push({ headerName: `Revenue by month ${year}`, headerClass: 'hdr-revenue', children: monthCols('revenue', 'hdr-revenue') });
     if (showCash) defs.push({ headerName: `Cash inflow by month ${year} (rent + VAT + deposits)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'hdr-cash') });
-    return defs;
+    // the one vertical rule per column group (the pinned Unit group ends at the pinned edge)
+    return defs.map((d, i) => (i > 0 && 'children' in d ? { ...d, children: [groupStart(d.children[0] as ColDef<Row>), ...d.children.slice(1)] } : d));
   }, [showRevenue, showCash, year, isAdmin, mfPct]);
 
   const onGridReady = useCallback(

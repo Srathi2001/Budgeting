@@ -70,7 +70,7 @@ export const metadata = { title: 'Admin · Budget' };
 
 const TABS = [
   ['fusion', 'Lease data'],
-  ['gl', 'GL actuals'],
+  ['gl', 'Account Analysis Report'],
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
   ['rera', 'RERA index'],

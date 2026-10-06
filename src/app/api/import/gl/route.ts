@@ -1,5 +1,5 @@
 // Reads an uploaded Account Analysis Report as a stream (the full-ledger export is hundreds of MB)
-// and returns what the import would write; nothing is saved here (Admin → GL actuals applies it).
+// and returns what the import would write; nothing is saved here (Admin → Account Analysis Report applies it).
 // Not behind the proxy: the proxy buffers request bodies and cuts them at 10 MB.
 import { getCurrentUser, isFinance } from '@/lib/auth/dal';
 import { planGlImport, scanOtherIncome } from '@/lib/import/gl-other-income';
