@@ -55,6 +55,8 @@ export const properties = pgTable('properties', {
   buCode: text('bu_code').notNull().references(() => businessUnits.code),
   coordinator: text('coordinator'),
   kind: propertyKindEnum('kind').notNull().default('BUILDING'),
+  /** Community (Al Qusais, Mirdiff, …); null = derived from the property name */
+  location: text('location'),
   active: boolean('active').notNull().default(true),
 });
 

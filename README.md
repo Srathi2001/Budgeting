@@ -66,6 +66,7 @@ Cheque schedules aren't in the report: current leases default to equal cheques u
 * top 10 properties
 * biggest movers
 * lease expiry profile by outcome (renew / new tenant / not re-let)
+* rent per sq ft by building, by location, by unit type, and by unit size and category. Passing rent (current contract, annualised) ÷ let sq ft, area-weighted; camps are left out because they're priced per bed. Location comes from Admin → Properties, or from the property name when left blank.
 
 ## Calculation logic
 

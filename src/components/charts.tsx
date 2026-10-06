@@ -276,12 +276,15 @@ export function Columns({
   stacked = false,
   height = 220,
   fmt = compact,
+  tipFmt = full,
 }: {
   labels: string[];
   series: { name: string; color: string; values: number[] }[];
   stacked?: boolean;
   height?: number;
   fmt?: (n: number) => string;
+  /** value format in the tooltip (default: whole numbers) */
+  tipFmt?: (n: number) => string;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -301,8 +304,8 @@ export function Columns({
           y: PAD.t,
           title: labels[hover],
           rows: [
-            ...series.map((s) => ({ color: s.color, label: s.name, value: full(s.values[hover]) })),
-            ...(stacked && series.length > 1 ? [{ label: 'Total', value: full(totals[hover]) }] : []),
+            ...series.map((s) => ({ color: s.color, label: s.name, value: tipFmt(s.values[hover]) })),
+            ...(stacked && series.length > 1 ? [{ label: 'Total', value: tipFmt(totals[hover]) }] : []),
           ],
         };
   return (
@@ -364,6 +367,7 @@ export function HBars({
   diverging = false,
   labelWidth = 170,
   fmt = compact,
+  tipFmt = full,
   note,
 }: {
   rows: { label: string; values: number[]; note?: string }[];
@@ -371,13 +375,16 @@ export function HBars({
   diverging?: boolean;
   labelWidth?: number;
   fmt?: (n: number) => string;
+  /** value format in the tooltip (default: whole numbers) */
+  tipFmt?: (n: number) => string;
   note?: (row: { label: string; values: number[]; note?: string }) => string | undefined;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
   const rowH = 26;
   const height = rows.length * rowH + 4;
-  const valW = 64;
+  // room right of the longest bar for its value (and note, when there is one)
+  const valW = note && rows.some((r) => note(r)) ? 120 : 64;
   const plotW = Math.max(w - labelWidth - valW - 8, 10);
   const totals = rows.map((r) => r.values.reduce((s, v) => s + v, 0));
   const maxAbs = Math.max(...totals.map(Math.abs), 1);
@@ -393,8 +400,11 @@ export function HBars({
           title: rows[hover].label,
           rows:
             series.length > 1
-              ? [...series.map((s, k) => ({ color: s.color, label: s.name, value: full(rows[hover].values[k]) })), { label: 'Total', value: full(totals[hover]) }]
-              : [{ color: diverging ? (totals[hover] < 0 ? DIVERGING.down : DIVERGING.up) : series[0].color, label: series[0].name, value: full(totals[hover]) }],
+              ? [...series.map((s, k) => ({ color: s.color, label: s.name, value: tipFmt(rows[hover].values[k]) })), { label: 'Total', value: tipFmt(totals[hover]) }]
+              : [
+                  { color: diverging ? (totals[hover] < 0 ? DIVERGING.down : DIVERGING.up) : series[0].color, label: series[0].name, value: tipFmt(totals[hover]) },
+                  ...(rows[hover].note ? [{ label: rows[hover].note!, value: '' }] : []),
+                ],
         };
   return (
     <div ref={ref} className="relative" style={{ height: rows.length ? height : 80 }}>

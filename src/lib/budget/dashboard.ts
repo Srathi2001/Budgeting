@@ -6,6 +6,7 @@ import { db, schema } from '@/db';
 import { parseDay } from '@/lib/engine/dates';
 import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
+import { locationOf } from './location';
 
 export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let';
 
@@ -27,6 +28,13 @@ export interface DashUnit {
   expiryMonth: number | null;
   expiryRent: number;
   expiryOutcome: ExpiryOutcome | null;
+  /** sq ft; null when unknown */
+  area: number | null;
+  /** current contract rent, annualised (rent ÷ contract days × 365); 0 without a current lease */
+  passing: number;
+  /** unit type as per Oracle (e.g. "2 Bed Room- Apartment"), else the budget's */
+  type: string;
+  location: string;
 }
 
 export interface DashProperty {
@@ -89,6 +97,10 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
       expiryMonth: null,
       expiryRent: 0,
       expiryOutcome: null,
+      area: u.area && u.area > 0 ? u.area : null,
+      passing: 0,
+      type: (u.resiCommercial ?? u.unitType ?? '—').trim(),
+      location: locationOf(pp.p),
     };
   };
 
@@ -100,6 +112,8 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     d.leased = !!l.currentEnd;
     d.vacancyLoss = c?.vacancyLoss ?? 0;
     d.issues = c?.warnings.length ?? 0;
+    const cur = c?.contracts.find((k) => k.kind === 'CURRENT');
+    d.passing = cur && cur.end >= cur.start ? (cur.rent * 365) / (cur.end - cur.start + 1) : 0;
     const end = parseDay(l.currentEnd);
     if (end !== null && end >= yearStart) {
       const m = new Date(end * 86_400_000).getUTCMonth();

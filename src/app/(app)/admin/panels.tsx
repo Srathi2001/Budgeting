@@ -18,6 +18,7 @@ import {
   applyLeaseImport,
 } from './actions';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
+import { locationOf } from '@/lib/budget/location';
 import { saveComparative } from '../analysis/actions';
 
 type Result = { error?: string; ok?: string };
@@ -360,14 +361,15 @@ export function ReraPanel({
 
 // ---- properties -------------------------------------------------------------------------------
 
-type PropRow = { id: number; code: string; name: string; buCode: string; coordinator: string | null; kind: 'BUILDING' | 'CAMP' | 'MALL'; active: boolean };
+type PropRow = { id: number; code: string; name: string; buCode: string; coordinator: string | null; kind: 'BUILDING' | 'CAMP' | 'MALL'; location: string | null; active: boolean };
 
 export function PropertiesPanel({ rows }: { rows: PropRow[] }) {
   const { pending, run, Msg } = useAction();
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-600">
-        The coordinator (PC) decides which property manager can edit a property. Camps are priced per bed per month.
+        The coordinator (PC) decides which property manager can edit a property. Camps are priced per bed per month. Location groups
+        properties for rent per sq ft by area; left blank, it is recognised from the property name (shown in grey).
       </p>
       <Msg />
       <div className="frame">
@@ -378,6 +380,7 @@ export function PropertiesPanel({ rows }: { rows: PropRow[] }) {
               <th>Name</th>
               <th>BU</th>
               <th>Coordinator</th>
+              <th>Location</th>
               <th>Kind</th>
               <th>Active</th>
               <th />
@@ -386,15 +389,16 @@ export function PropertiesPanel({ rows }: { rows: PropRow[] }) {
           <tbody>
             {rows.map((p) => (
               <tr key={p.id}>
-                <td colSpan={7} className="p-0">
+                <td colSpan={8} className="p-0">
                   <form
-                    className="grid grid-cols-[7rem_1fr_4rem_9rem_8rem_5rem_5rem] items-center gap-2 px-2 py-1"
+                    className="grid grid-cols-[7rem_1fr_4rem_9rem_11rem_8rem_5rem_5rem] items-center gap-2 px-2 py-1"
                     action={(f) =>
                       run(() =>
                         updateProperty(p.id, {
                           name: String(f.get('name')),
                           coordinator: (f.get('coordinator') as string) || null,
                           kind: f.get('kind') as PropRow['kind'],
+                          location: (f.get('location') as string) || null,
                           active: f.get('active') === 'on',
                         }),
                       )
@@ -404,6 +408,7 @@ export function PropertiesPanel({ rows }: { rows: PropRow[] }) {
                     <input name="name" defaultValue={p.name} className="input" />
                     <span>{p.buCode}</span>
                     <input name="coordinator" defaultValue={p.coordinator ?? ''} className="input" />
+                    <input name="location" defaultValue={p.location ?? ''} placeholder={locationOf({ name: p.name, location: null })} className="input" />
                     <select name="kind" defaultValue={p.kind} className="input">
                       <option>BUILDING</option>
                       <option>CAMP</option>

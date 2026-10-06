@@ -165,6 +165,7 @@ const PropertySchema = z.object({
   name: z.string().trim().min(1).max(120),
   coordinator: z.string().trim().toUpperCase().max(40).nullable(),
   kind: z.enum(['BUILDING', 'CAMP', 'MALL']),
+  location: z.string().trim().max(60).nullable(),
   active: z.boolean(),
 });
 
