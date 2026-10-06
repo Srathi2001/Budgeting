@@ -13,5 +13,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!login|_next/static|_next/image|favicon.ico).*)'],
+  // api/import: large uploads read as a stream; the route checks the user itself
+  matcher: ['/((?!login|api/import|_next/static|_next/image|favicon.ico).*)'],
 };

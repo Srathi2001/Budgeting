@@ -16,8 +16,10 @@ import {
   importComparatives,
   previewLeaseImport,
   applyLeaseImport,
+  applyGlActuals,
 } from './actions';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
+import type { GlPreview, GlValue } from '@/lib/import/gl-other-income';
 import { locationOf } from '@/lib/budget/location';
 import { saveComparative } from '../analysis/actions';
 
@@ -801,6 +803,136 @@ export function LeaseImportPanel({
           <ListBlock title="New properties" hint="set the property manager in Admin → Properties" items={p.newProperties} cols={['Code', 'Name', 'BU']} row={(x) => [x.code, x.name, x.bu]} />
           <ListBlock title="Not imported" hint="" items={p.skipped} cols={['What', 'Why']} row={(x) => [x.what, x.detail]} />
           <ListBlock title="Overlapping leases" hint="one budget line with more than one running lease" items={p.conflicts} cols={['Detail']} row={(x) => [x]} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- GL actuals: Account Analysis Report → Other Income ----------------------------------------
+
+export function GlImportPanel({
+  versionId,
+  versionName,
+  year,
+  locked,
+  last,
+}: {
+  versionId: number;
+  versionName: string;
+  year: number;
+  locked: boolean;
+  last: { at: string; file: string | null } | null;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [plan, setPlan] = useState<{ values: GlValue[]; preview: GlPreview } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const apply = useAction();
+  const label = { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: `${year - 1} Jan–Sep` };
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] ?? null;
+    setFile(f);
+    setPlan(null);
+    setError(null);
+    if (!f) return;
+    setReading(true);
+    try {
+      // sent as the raw body: the server reads it as a stream
+      const res = await fetch(`/api/import/gl?v=${versionId}`, { method: 'POST', body: f });
+      const json = await res.json();
+      if (json.error) setError(json.error);
+      else setPlan(json);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setReading(false);
+    }
+  };
+
+  const p = plan?.preview;
+  return (
+    <div className="space-y-4">
+      <section className="card p-4">
+        <h3 className="text-sm font-semibold">Account Analysis Report</h3>
+        <p className="mt-1 max-w-4xl text-xs text-slate-500">
+          Other income actuals for <b>{versionName}</b>: {label.A2}, {label.A1} and {label.YTD}, from the Oracle Account Analysis Report (ledger
+          MJN HOLDING, Jan-{String(year - 3).slice(2)} to Sep-{String(year - 1).slice(2)}). Accounts 52101–52908 are read by property; company-level
+          lines and properties not in the budget go to the General row of their business unit. An import replaces the GL actuals; Oct–Dec and
+          budget inputs are kept.
+        </p>
+        <div className="mt-3 text-xs text-slate-600">
+          Last import {last ? new Date(last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : 'never'}
+          {last?.file && <> ({last.file})</>}
+        </div>
+        {locked ? (
+          <div className="mt-3 text-xs text-amber-700">This version is locked.</div>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input type="file" accept=".xls,.xlsx,.htm,.html,.mht" onChange={onFile} className="text-xs" />
+            {reading && <span className="text-sm text-slate-500">Reading the report… a full-ledger file takes a minute</span>}
+            <button
+              className="btn-primary"
+              disabled={!plan || apply.pending}
+              onClick={() =>
+                plan &&
+                apply.run(async () => {
+                  const r = await applyGlActuals(versionId, plan.values, plan.preview, file?.name ?? null);
+                  if (!r.error) setPlan(null);
+                  return r;
+                })
+              }
+            >
+              {apply.pending ? 'Importing…' : 'Import'}
+            </button>
+            <apply.Msg />
+            {error && <span className="text-sm text-red-600">{error}</span>}
+          </div>
+        )}
+      </section>
+
+      {p && (
+        <div className="space-y-3">
+          <div className="text-sm font-semibold">
+            Preview <span className="font-normal text-slate-500">· nothing saved yet</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Tile label="Report" value={p.ledger ?? '—'} sub={`${p.periodFrom} – ${p.periodTo} · ${fmt(p.accounts)} accounts · ${fmt(p.lines)} lines · all reconciled`} />
+            <Tile label={label.A2} value={`AED ${fmt(p.totals.A2)}`} />
+            <Tile label={label.A1} value={`AED ${fmt(p.totals.A1)}`} />
+            <Tile label={label.YTD} value={`AED ${fmt(p.totals.YTD)}`} sub={`${p.properties} properties`} />
+          </div>
+          <div className="frame max-w-3xl">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Business unit</th>
+                  <th className="num">{label.A2}</th>
+                  <th className="num">{label.A1}</th>
+                  <th className="num">{label.YTD}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {p.byBu.map((b) => (
+                  <tr key={b.bu}>
+                    <td>{b.bu}</td>
+                    <td className="num tabular-nums">{fmt(b.A2)}</td>
+                    <td className="num tabular-nums">{fmt(b.A1)}</td>
+                    <td className="num tabular-nums">{fmt(b.YTD)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ListBlock
+            title="On General rows"
+            hint="company-level lines, and property codes not in the budget"
+            items={p.general}
+            cols={['Business unit', 'Company', 'Property code', 'What', label.A2, label.A1, label.YTD]}
+            row={(x) => [x.bu, x.company, x.segment, x.name, fmt(x.A2), fmt(x.A1), fmt(x.YTD)]}
+          />
+          <ListBlock title="Not imported" hint="" items={p.skipped} cols={['What', 'Why']} row={(x) => [x.what, x.detail]} />
         </div>
       )}
     </div>

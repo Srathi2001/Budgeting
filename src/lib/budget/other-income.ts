@@ -30,9 +30,9 @@ export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor
       mfBudget: 0,
     });
   }
-  // company-level items: Finance only
+  // company-level items: Finance only; every business unit (ANPM has no properties of its own)
   if (finance) {
-    for (const bu of [...new Set(props.map((p) => p.buCode))]) {
+    for (const bu of [...bus.keys()]) {
       blocks.set(`G:${bu}`, {
         scope: `G:${bu}`,
         kind: 'G',

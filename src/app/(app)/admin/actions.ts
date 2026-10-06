@@ -10,6 +10,7 @@ import { recalcLines } from '@/lib/budget/calc';
 import { rollForward } from '@/lib/budget/rollforward';
 import { DEFAULT_ASSUMPTIONS, type Assumptions } from '@/lib/engine/assumptions';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
+import type { GlPreview } from '@/lib/import/gl-other-income';
 
 type Result = { error?: string; ok?: string };
 
@@ -233,6 +234,32 @@ export async function importComparatives(versionId: number, form: FormData): Pro
     }
     await audit(user.id, versionId, 'comparative', 'import', { file: file.name, values: saved, unknown });
     return `Imported ${saved} values${unknown.length ? `; unknown property codes: ${unknown.slice(0, 8).join(', ')}` : ''}`;
+  });
+}
+
+// ---- GL actuals: Account Analysis Report → Other Income -----------------------------------------
+
+const GlValues = z
+  .array(
+    z.object({
+      scope: z.string().regex(/^(P:\d+|G:\w+)$/),
+      buCode: z.string().max(10),
+      propertyId: z.number().int().nullable(),
+      account: z.string().regex(/^52\d{3}$/),
+      period: z.enum(['A2', 'A1', 'YTD']),
+      amount: z.number().finite(),
+    }),
+  )
+  .max(50000);
+
+/** Writes the actuals the upload preview returned (the file is read by /api/import/gl). */
+export async function applyGlActuals(versionId: number, values: unknown, preview: GlPreview, file: string | null): Promise<Result> {
+  const user = await requireFinance();
+  return wrap(async () => {
+    const v = GlValues.parse(values);
+    const { applyGlImport } = await import('@/lib/import/gl-other-income');
+    await applyGlImport(versionId, v, user.id, { file, preview });
+    return `Imported ${v.length.toLocaleString('en-US')} GL actuals into Other Income`;
   });
 }
 

@@ -3,7 +3,23 @@ import { asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
-import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel } from './panels';
+import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel } from './panels';
+
+async function GlTab({ version }: { version: schema.BudgetVersion }) {
+  const { rows } = await db.execute(sql`
+    select at, changes->>'file' as file from audit_log
+    where entity = 'gl_import' and version_id = ${version.id} order by at desc limit 1`);
+  const last = rows[0] as { at: string; file: string | null } | undefined;
+  return (
+    <GlImportPanel
+      versionId={version.id}
+      versionName={version.name}
+      year={version.year}
+      locked={version.status === 'LOCKED'}
+      last={last ? { at: String(last.at), file: last.file } : null}
+    />
+  );
+}
 
 async function LeaseDataTab({ version }: { version: schema.BudgetVersion }) {
   const { rows } = await db.execute(sql`
@@ -54,6 +70,7 @@ export const metadata = { title: 'Admin · Budget' };
 
 const TABS = [
   ['fusion', 'Lease data'],
+  ['gl', 'GL actuals'],
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
   ['rera', 'RERA index'],
@@ -106,6 +123,7 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
       )}
       {tab === 'comparatives' && <ComparativesTab version={v} />}
       {tab === 'fusion' && <LeaseDataTab version={v} />}
+      {tab === 'gl' && <GlTab version={v} />}
       {tab === 'properties' && (
         <PropertiesPanel rows={await db.select().from(schema.properties).orderBy(asc(schema.properties.buCode), asc(schema.properties.code))} />
       )}
