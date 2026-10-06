@@ -164,10 +164,13 @@ async function main() {
   await recalcLines(db, open.id, [original.id]);
   await db.delete(schema.auditLog).where(eq(schema.auditLog.entityId, String(original.id)));
   console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
-  process.exit(failures ? 1 : 0);
+  process.exitCode = failures ? 1 : 0;
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// close the pool before exiting: an abrupt disconnect can jam the PGlite dev server
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(() => db.$client.end());

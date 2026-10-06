@@ -6,6 +6,7 @@
 import 'dotenv/config';
 import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
+import { db } from '../src/db';
 import { applyGlImport, planGlImport, scanOtherIncome } from '../src/lib/import/gl-other-income';
 
 async function main() {
@@ -23,10 +24,12 @@ async function main() {
     await applyGlImport(Number(versionId), values, null, { file: basename(file), preview: p });
     console.log(`Imported ${values.length} values`);
   }
-  process.exit(0);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// close the pool before exiting: an abrupt disconnect can jam the PGlite dev server
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(() => db.$client.end());

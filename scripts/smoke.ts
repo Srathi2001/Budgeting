@@ -31,9 +31,11 @@ async function main() {
     }
   }
 }
+// close the pool before exiting: an abrupt disconnect can jam the PGlite dev server
 main()
-  .then(() => process.exit(0))
-  .catch((e) => {
+  .then(() => db.$client.end())
+  .catch(async (e) => {
     console.error(e);
-    process.exit(1);
+    await db.$client.end();
+    process.exitCode = 1;
   });

@@ -7,6 +7,7 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { db } from '../src/db';
 import { parseMfReport, parseUnitDump } from '../src/lib/import/oracle-extras';
 import { applyImport, parseReport, planImport, type ImportPreview } from '../src/lib/import/tenant-lease';
 
@@ -42,10 +43,12 @@ async function main() {
   };
   if (flag === '--apply') show(await applyImport(Number(versionId), rows, null, basename(file), extras));
   else show((await planImport(Number(versionId), rows, extras)).preview);
-  process.exit(0);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// close the pool before exiting: an abrupt disconnect can jam the PGlite dev server
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(() => db.$client.end());
