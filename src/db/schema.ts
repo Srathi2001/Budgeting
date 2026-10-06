@@ -228,6 +228,24 @@ export const comparatives = pgTable(
 );
 
 /**
+ * Rent revenue recognised per property and month, from Oracle's Revenue Recognition Summary.
+ * kind 'A' = accounted (actual), 'F' = Oracle's forecast from signed leases (reference only).
+ * Facts, not budget inputs: shared by all versions; an import replaces its properties' rows.
+ */
+export const revenueActuals = pgTable(
+  'revenue_actuals',
+  {
+    id: serial('id').primaryKey(),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    month: text('month').notNull(), // YYYY-MM
+    kind: text('kind').notNull(),
+    amount: money('amount').notNull(),
+    importedAt: timestamp('imported_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('revenue_actuals_uq').on(t.propertyId, t.month, t.kind)],
+);
+
+/**
  * Other income by property (or a BU's "General" row for company-level items) × GL account × period.
  * Periods are relative to the version year Y: A2 = Y-3 actual, A1 = Y-2 actual, YTD = Y-1 Jan–Sep
  * actual, OD = Y-1 Oct–Dec (input), B = budget Y (input). Maintenance service fee B is calculated

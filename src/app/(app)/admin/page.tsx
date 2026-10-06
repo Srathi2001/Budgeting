@@ -3,7 +3,17 @@ import { asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
-import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel } from './panels';
+import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel, RevenueImportPanel } from './panels';
+import { lastActualMonth } from '@/lib/import/revenue-recognition';
+
+async function RevenueTab({ year }: { year: number }) {
+  const { rows } = await db.execute(sql`
+    select at, changes->>'file' as file from audit_log
+    where entity = 'revenue_import' order by at desc limit 1`);
+  const last = rows[0] as { at: string; file: string | null } | undefined;
+  const to = await lastActualMonth();
+  return <RevenueImportPanel year={year} last={last ? { at: String(last.at), file: last.file, to } : null} />;
+}
 
 async function GlTab({ version }: { version: schema.BudgetVersion }) {
   const { rows } = await db.execute(sql`
@@ -43,12 +53,12 @@ async function LeaseDataTab({ version }: { version: schema.BudgetVersion }) {
     />
   );
 }
-import { comparativeLabels } from '@/lib/budget/comparatives';
+import { comparativeLabels, resolveComparatives } from '@/lib/budget/comparatives';
 
 async function ComparativesTab({ version }: { version: schema.BudgetVersion }) {
   const labels = await comparativeLabels(version);
   const props = await db.select().from(schema.properties).where(eq(schema.properties.active, true)).orderBy(asc(schema.properties.buCode), asc(schema.properties.code));
-  const comps = await db.select().from(schema.comparatives).where(eq(schema.comparatives.versionId, version.id));
+  const { values } = await resolveComparatives(version, labels, props.map((p) => p.id));
   return (
     <ComparativesPanel
       versionId={version.id}
@@ -60,7 +70,8 @@ async function ComparativesTab({ version }: { version: schema.BudgetVersion }) {
         code: p.code,
         name: p.name,
         bu: p.buCode,
-        values: Object.fromEntries(labels.map((l) => [l, comps.find((c) => c.propertyId === p.id && c.label === l)?.amount ?? null])),
+        values: Object.fromEntries(labels.map((l) => [l, values.get(p.id)?.[l]?.amount ?? null])),
+        sources: Object.fromEntries(labels.map((l) => [l, values.get(p.id)?.[l]?.source ?? 'manual'])),
       }))}
     />
   );
@@ -70,6 +81,7 @@ export const metadata = { title: 'Admin · Budget' };
 
 const TABS = [
   ['fusion', 'Lease data'],
+  ['revenue', 'Revenue Recognition Summary'],
   ['gl', 'Account Analysis Report'],
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
@@ -124,6 +136,7 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
       {tab === 'comparatives' && <ComparativesTab version={v} />}
       {tab === 'fusion' && <LeaseDataTab version={v} />}
       {tab === 'gl' && <GlTab version={v} />}
+      {tab === 'revenue' && <RevenueTab year={v.year} />}
       {tab === 'properties' && (
         <PropertiesPanel rows={await db.select().from(schema.properties).orderBy(asc(schema.properties.buCode), asc(schema.properties.code))} />
       )}

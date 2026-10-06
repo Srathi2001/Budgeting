@@ -11,6 +11,7 @@ import { rollForward } from '@/lib/budget/rollforward';
 import { DEFAULT_ASSUMPTIONS, type Assumptions } from '@/lib/engine/assumptions';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
 import type { GlPreview } from '@/lib/import/gl-other-income';
+import type { RrPreview } from '@/lib/import/revenue-recognition';
 
 type Result = { error?: string; ok?: string };
 
@@ -234,6 +235,37 @@ export async function importComparatives(versionId: number, form: FormData): Pro
     }
     await audit(user.id, versionId, 'comparative', 'import', { file: file.name, values: saved, unknown });
     return `Imported ${saved} values${unknown.length ? `; unknown property codes: ${unknown.slice(0, 8).join(', ')}` : ''}`;
+  });
+}
+
+// ---- revenue actuals: Revenue Recognition Summary → Revenue Analysis ------------------------------
+
+async function revenueReport(form: FormData) {
+  const file = form.get('file');
+  if (!(file instanceof File) || !file.size) throw new Error('Choose the Revenue Recognition Summary');
+  const { parseRevenueRecognition } = await import('@/lib/import/revenue-recognition');
+  return { report: parseRevenueRecognition(Buffer.from(await file.arrayBuffer())), name: file.name };
+}
+
+/** What the import would load: nothing is written. */
+export async function previewRevenueImport(form: FormData): Promise<{ error?: string; preview?: RrPreview }> {
+  await requireFinance();
+  try {
+    const { report } = await revenueReport(form);
+    const { planRevenueImport } = await import('@/lib/import/revenue-recognition');
+    return { preview: (await planRevenueImport(report)).preview };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+export async function applyRevenueImportAction(form: FormData): Promise<Result> {
+  const user = await requireFinance();
+  return wrap(async () => {
+    const { report, name } = await revenueReport(form);
+    const { applyRevenueImport } = await import('@/lib/import/revenue-recognition');
+    const p = await applyRevenueImport(report, user.id, name);
+    return `Imported revenue actuals ${p.from} – ${p.to} for ${p.matched} properties`;
   });
 }
 

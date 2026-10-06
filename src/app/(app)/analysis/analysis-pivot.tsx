@@ -89,6 +89,13 @@ export function AnalysisPivot({
     return m;
   };
   const { labels } = data;
+  // the forecast: Oracle revenue actuals to the last month imported, Lease Budget projection after
+  const forecastNote = (() => {
+    if (!data.lastActual) return null;
+    const m = Number(data.lastActual.slice(5));
+    const name = (i: number) => ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][i - 1];
+    return m >= 12 ? `${labels.forecast}: actual Jan–Dec` : `${labels.forecast}: actual Jan–${name(m)} (Oracle) + ${name(m + 1)}–Dec projected from the Lease Budget`;
+  })();
 
   const propById = useMemo(() => new Map(data.properties.map((p) => [p.id, p])), [data.properties]);
   // units per property, to tell whether a group holds whole properties (property-level figures)
@@ -329,7 +336,9 @@ export function AnalysisPivot({
           <th className="stick stick-edge w-[330px]">{dims.map((d) => DIM_LABEL[d]).join(' › ')}</th>
           <th className="num w-14">Units</th>
           <th className="num sep w-28">{labels.budget}</th>
-          <th className="num sep w-28">{labels.forecast}</th>
+          <th className="num sep w-28" title={forecastNote ?? undefined}>
+            {labels.forecast}
+          </th>
           <th className="num w-24">Change</th>
           <th className="num w-16">%</th>
           <th className="num sep w-28">{labels.prior}</th>
@@ -577,6 +586,7 @@ export function AnalysisPivot({
         {data.priorSource ? ` (${data.priorSource.name})` : ''} are held per unit and drill to any level. {labels.forecast} and actuals are held per
         property: they show for properties and for groups of whole properties, and as “–” below property level. Vacancy loss is the gap between a lease
         ending and the next tenant starting, at the new rent.
+        {forecastNote && <> {forecastNote}.</>}
       </p>
     </div>
   );

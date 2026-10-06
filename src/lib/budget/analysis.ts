@@ -4,6 +4,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
+import { resolveComparatives, type CompSource } from './comparatives';
 
 export interface AnalysisUnit {
   key: string; // unit id
@@ -29,6 +30,8 @@ export interface AnalysisProperty {
   kind: 'BUILDING' | 'CAMP' | 'MALL';
   /** property-level comparatives by label (forecast and actuals) */
   comps: Record<string, number | null>;
+  /** where each comparative comes from (Oracle actuals, actuals + Lease Budget projection, typed in) */
+  compSource: Record<string, CompSource>;
   comment: string | null;
   vacancyLossOverride: number | null;
   canComment: boolean;
@@ -39,6 +42,8 @@ export interface AnalysisData {
   labels: { budget: string; forecast: string; prior: string; actuals: string[] };
   /** where the prior-year budget comes from */
   priorSource: { versionId: number; name: string } | null;
+  /** last month of revenue actuals (YYYY-MM): the forecast is actual to here, projected after */
+  lastActual: string | null;
   units: AnalysisUnit[];
   properties: AnalysisProperty[];
 }
@@ -116,10 +121,7 @@ export async function loadAnalysisData(
   }
 
   const wanted = [labels.forecast, ...labels.actuals, ...(priorV ? [] : [labels.prior])];
-  const comps = await db
-    .select()
-    .from(schema.comparatives)
-    .where(and(eq(schema.comparatives.versionId, version.id), inArray(schema.comparatives.label, wanted), inArray(schema.comparatives.propertyId, ids)));
+  const { values: comps, lastActual } = await resolveComparatives(version, wanted, ids);
   const notes = await db.select().from(schema.propertyNotes).where(eq(schema.propertyNotes.versionId, version.id));
 
   // with no prior version in the tool, the prior budget is a property-level comparative
@@ -129,11 +131,17 @@ export async function loadAnalysisData(
     year: y,
     labels,
     priorSource: priorV ? { versionId: priorV.id, name: priorV.name } : null,
+    lastActual,
     units: [...units.values()].sort((a, b) => a.unitCode.localeCompare(b.unitCode)),
     properties: props.map(({ p, buName }) => {
       const n = notes.find((x) => x.propertyId === p.id);
       const c: Record<string, number | null> = {};
-      for (const l of wanted) c[l] = comps.find((x) => x.propertyId === p.id && x.label === l)?.amount ?? null;
+      const src: Record<string, CompSource> = {};
+      for (const l of wanted) {
+        const v = comps.get(p.id)?.[l];
+        c[l] = v?.amount ?? null;
+        src[l] = v?.source ?? 'manual';
+      }
       return {
         id: p.id,
         code: p.code,
@@ -143,6 +151,7 @@ export async function loadAnalysisData(
         pm: p.coordinator ?? '—',
         kind: p.kind,
         comps: c,
+        compSource: src,
         comment: n?.comment ?? null,
         vacancyLossOverride: n?.vacancyLossOverride ?? null,
         canComment: commentable.has(p.id),

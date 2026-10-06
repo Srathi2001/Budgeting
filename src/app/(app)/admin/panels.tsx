@@ -17,7 +17,10 @@ import {
   previewLeaseImport,
   applyLeaseImport,
   applyGlActuals,
+  previewRevenueImport,
+  applyRevenueImportAction,
 } from './actions';
+import type { RrPreview } from '@/lib/import/revenue-recognition';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
 import type { GlPreview, GlValue } from '@/lib/import/gl-other-income';
 import { locationOf } from '@/lib/budget/location';
@@ -499,7 +502,15 @@ export function UsersPanel({ rows, isAdmin }: { rows: UserRow[]; isAdmin: boolea
 
 // ---- comparatives -----------------------------------------------------------------------------
 
-type CompRow = { id: number; code: string; name: string; bu: string; values: Record<string, number | null> };
+type CompRow = {
+  id: number;
+  code: string;
+  name: string;
+  bu: string;
+  values: Record<string, number | null>;
+  /** 'actual' / 'forecast': from the Revenue Recognition Summary (read only); 'manual': typed in */
+  sources: Record<string, 'actual' | 'forecast' | 'manual'>;
+};
 
 export function ComparativesPanel({
   versionId,
@@ -519,8 +530,10 @@ export function ComparativesPanel({
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-slate-600">
-        Property-level comparatives for <b>{versionName}</b>: forecast for the current year and actuals for prior years. Once Fusion is connected,
-        actuals will load from the GL. Type values below, or upload an Excel sheet with a <code>Code</code> column and one column per label.
+        Property-level comparatives for <b>{versionName}</b>: forecast for the current year and actuals for prior years. Properties in the Revenue
+        Recognition Summary (Admin → Revenue Recognition Summary) take their actuals from it, and the forecast is actual to date plus the Lease Budget for the
+        remaining months: those cells are calculated. Type the others below, or upload an Excel sheet with a <code>Code</code> column and one column
+        per label.
       </p>
       {!locked && (
         <form className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]" action={(f) => run(() => importComparatives(versionId, f))}>
@@ -558,8 +571,12 @@ export function ComparativesPanel({
                 <td>{r.name}</td>
                 <td className="muted">{r.bu}</td>
                 {labels.map((l) => (
-                  <td key={l} className="num sep">
-                    {locked ? (
+                  <td
+                    key={l}
+                    className={`num sep ${r.sources[l] !== 'manual' ? 'cell-derived' : ''}`}
+                    title={r.sources[l] === 'actual' ? 'Revenue Recognition Summary' : r.sources[l] === 'forecast' ? 'Actual to date + Lease Budget' : undefined}
+                  >
+                    {locked || r.sources[l] !== 'manual' ? (
                       fmt(r.values[l])
                     ) : (
                       <input
@@ -803,6 +820,93 @@ export function LeaseImportPanel({
           <ListBlock title="New properties" hint="set the property manager in Admin → Properties" items={p.newProperties} cols={['Code', 'Name', 'BU']} row={(x) => [x.code, x.name, x.bu]} />
           <ListBlock title="Not imported" hint="" items={p.skipped} cols={['What', 'Why']} row={(x) => [x.what, x.detail]} />
           <ListBlock title="Overlapping leases" hint="one budget line with more than one running lease" items={p.conflicts} cols={['Detail']} row={(x) => [x]} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- revenue actuals: Revenue Recognition Summary → Revenue Analysis -----------------------------
+
+export function RevenueImportPanel({ year, last }: { year: number; last: { at: string; file: string | null; to: string | null } | null }) {
+  const [form, setForm] = useState<FormData | null>(null);
+  const [preview, setPreview] = useState<RrPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [checking, startCheck] = useTransition();
+  const apply = useAction();
+
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPreview(null);
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return setForm(null);
+    const f = new FormData();
+    f.set('file', file);
+    setForm(f);
+    startCheck(async () => {
+      const r = await previewRevenueImport(f);
+      setError(r.error ?? null);
+      setPreview(r.preview ?? null);
+    });
+  };
+
+  const p = preview;
+  return (
+    <div className="space-y-4">
+      <section className="card p-4">
+        <h3 className="text-sm font-semibold">Revenue Recognition Summary</h3>
+        <p className="mt-1 max-w-4xl text-xs text-slate-500">
+          Rent revenue recognised per property and month, from Oracle (Property Manager → Revenue Recognition Summary, accounting periods Jan-
+          {year - 3} to the last closed month). It gives Revenue Analysis its actuals ({year - 3}A, {year - 2}A) and the actual part of {year - 1}F;
+          the months after the last closed month are projected from the Lease Budget inputs. Oracle&apos;s own forecast in the report is kept for
+          reference only. An import replaces the revenue actuals of the properties in the file.
+        </p>
+        <div className="mt-3 text-xs text-slate-600">
+          Last import {last ? new Date(last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : 'never'}
+          {last?.file && <> ({last.file})</>}
+          {last?.to && <> · actuals to {last.to}</>}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input type="file" accept=".xlsx,.xls,.htm,.html,.mht" onChange={onFile} className="text-xs" />
+          {checking && <span className="text-sm text-slate-500">Reading the report…</span>}
+          <button
+            className="btn-primary"
+            disabled={!form || !p || apply.pending}
+            onClick={() =>
+              form &&
+              apply.run(async () => {
+                const r = await applyRevenueImportAction(form);
+                if (!r.error) setPreview(null);
+                return r;
+              })
+            }
+          >
+            {apply.pending ? 'Importing…' : 'Import'}
+          </button>
+          <apply.Msg />
+          {error && <span className="text-sm text-red-600">{error}</span>}
+        </div>
+      </section>
+
+      {p && (
+        <div className="space-y-3">
+          <div className="text-sm font-semibold">
+            Preview <span className="font-normal text-slate-500">· nothing saved yet</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Tile label="Report" value={`${p.matched} properties`} sub={`Accounting periods ${p.accountingPeriods ?? '—'} · forecast ${p.forecastPeriod ?? '—'}`} />
+            {p.years.map((y) => (
+              <Tile key={y.year} label={`${y.year} actual`} value={`AED ${fmt(y.amount)}`} sub={`${y.months} month${y.months === 1 ? '' : 's'}`} />
+            ))}
+            <Tile label="Oracle forecast (reference)" value={`AED ${fmt(p.oracleForecast)}`} sub={p.forecastPeriod ?? undefined} />
+          </div>
+          <ListBlock
+            title="Not in the budget"
+            hint="property codes in the report with no budget property; not imported"
+            items={p.unmatched}
+            cols={['Code', 'Name', 'Actual (all months)']}
+            row={(x) => [x.code, x.name, fmt(x.amount)]}
+          />
         </div>
       )}
     </div>

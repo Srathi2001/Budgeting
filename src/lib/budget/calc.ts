@@ -80,6 +80,11 @@ export type StoredCalc = Omit<LeaseResult, keyof MonthlySeries> & {
   cash: number[];
   /** total cash inflow: rent + VAT + deposits in - deposits out */
   cashFlow: number[];
+  /**
+   * monthly revenue of the year before the budget year, from the same leases and inputs: the months
+   * after the last actual month project the current-year forecast (Revenue Analysis 20xxF)
+   */
+  priorRevenue?: number[];
 };
 
 /**
@@ -108,15 +113,15 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
   }
 
   const results = new Map<number, LeaseResult>();
+  const prior = new Map<number, number[]>();
   const monthly: (typeof lineMonthly.$inferInsert)[] = [];
   for (const { line, unit, property } of rows) {
-    const res = computeLease(
-      lineToInput(line, unit, property),
-      version.year,
-      assumptions,
-      rera.get(reraKey(property.code, unit.bedroom)) ?? null,
-    );
+    const input = lineToInput(line, unit, property);
+    const range = rera.get(reraKey(property.code, unit.bedroom)) ?? null;
+    const res = computeLease(input, version.year, assumptions, range);
     results.set(line.id, res);
+    // the same leases and inputs run through the year before: projects the rest of the current year
+    prior.set(line.id, computeLease(input, version.year - 1, assumptions, range).revenue.map((v) => Math.round(v * 100) / 100));
     for (let m = 0; m < 12; m++) {
       monthly.push({
         lineId: line.id,
@@ -153,6 +158,7 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
       revenue: res.revenue,
       cash: res.cash,
       cashFlow: res.revenue.map((_, i) => Math.round(cashFlowOf(res, i) * 100) / 100),
+      priorRevenue: prior.get(id),
     };
     await tx.update(leaseLines).set({ calc: stored }).where(eq(leaseLines.id, id));
   }
