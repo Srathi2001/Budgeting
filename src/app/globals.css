@@ -474,6 +474,39 @@ body {
 :root,
 [data-theme] {
   --line-soft: color-mix(in srgb, var(--line) 45%, var(--surface));
+  /* headers: no dark fill; quiet text on the surface, one rule underneath */
+  --th-bg: var(--surface);
+  --th-ink: var(--ink-2);
+  --th-rule: var(--control-border);
+  --group-bg: color-mix(in srgb, var(--header-3) 60%, var(--surface));
+}
+
+.tbl thead th,
+.anh-grid thead tr.h1 th {
+  background: var(--th-bg);
+  color: var(--th-ink);
+  border-bottom: 1px solid var(--th-rule);
+}
+.tbl thead tr.tbl-band th,
+.anh-grid thead tr.h2 th {
+  background: var(--th-bg);
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+}
+.tbl thead tr.tbl-band th:first-child,
+.anh-grid thead tr.h2 th:first-child {
+  border-left: 0;
+}
+.tbl tr.tbl-group td,
+.tbl tr.lvl-0 td,
+.anh-grid tr.section td,
+.anh-grid tr.section td:first-child {
+  background-color: var(--group-bg);
+}
+.ag-header-group-cell {
+  background-color: var(--th-bg);
+  color: var(--ink-muted);
 }
 
 .tbl tbody td,

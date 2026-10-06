@@ -15,13 +15,14 @@ const ICON = {
   admin: 'M2 4h12M2 8h12M2 12h12M5 2.5v3M11 6.5v3M7 10.5v3',
 };
 
+// reports first, then the input sheets
 const BUDGET = [
   { href: '/', label: 'Dashboard', icon: ICON.dashboard },
-  { href: '/master', label: 'Lease Budget', icon: ICON.lease },
+  { href: '/pnl', label: 'Building P&L', icon: ICON.pnl },
   { href: '/summary', label: 'Monthly Summary', icon: ICON.summary },
   { href: '/analysis', label: 'Revenue Analysis', icon: ICON.analysis },
+  { href: '/master', label: 'Lease Budget', icon: ICON.lease },
   { href: '/other-income', label: 'Other Income', icon: ICON.income },
-  { href: '/pnl', label: 'Building P&L', icon: ICON.pnl },
 ];
 const GOVERNANCE = [{ href: '/submissions', label: 'Submissions', icon: ICON.submissions }];
 const ADMIN = { href: '/admin', label: 'Admin', icon: ICON.admin };

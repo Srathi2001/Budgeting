@@ -33,7 +33,7 @@ import { MultiSelect } from '@/components/multi-select';
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 // Design-system tokens (CSS variables), so the grid follows the Paper / Carbon theme.
-// Black column header, gray group band, no zebra, square.
+// Quiet header on the surface, no zebra, square.
 const theme = themeQuartz.withParams({
   browserColorScheme: 'inherit',
   fontFamily: 'inherit',
@@ -43,16 +43,18 @@ const theme = themeQuartz.withParams({
   spacing: 5,
   backgroundColor: 'var(--surface)',
   foregroundColor: 'var(--ink)',
-  chromeBackgroundColor: 'var(--header-2)',
-  headerBackgroundColor: 'var(--header-1)',
-  headerTextColor: 'var(--ink-inverse)',
+  // quiet headers (see --th-* in globals.css): no dark fill, one rule underneath
+  chromeBackgroundColor: 'var(--th-bg)',
+  headerBackgroundColor: 'var(--th-bg)',
+  headerTextColor: 'var(--th-ink)',
+  headerRowBorder: { color: 'var(--th-rule)' },
   headerFontSize: 11,
   headerFontWeight: 700,
   borderColor: 'var(--line)',
   // light rules: a faint line per row, a vertical line only where a column group starts (group-start)
   rowBorder: { color: 'var(--line-soft)' },
   columnBorder: false,
-  headerColumnBorder: { color: 'var(--ink-2)' },
+  headerColumnBorder: { color: 'var(--line-soft)' },
   oddRowBackgroundColor: 'var(--surface)',
   rowHoverColor: 'var(--cell-input-hover)',
   selectedRowBackgroundColor: 'var(--header-3)',
