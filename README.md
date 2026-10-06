@@ -119,9 +119,9 @@ npm run dev                     # http://localhost:3000
 
 **No Docker?** `npm run db:dev` starts an embedded Postgres (PGlite) on port 5433, with data in `.pgdata/`. Point `DATABASE_URL` at `postgres://postgres:postgres@127.0.0.1:5433/postgres` and set `DB_POOL_MAX=1`. This is for development only.
 
-* **Start on this PC:** opening new windows is blocked here, so use two VS Code terminals in the project folder:
-  * Terminal 1: `npm run db:dev`
-  * Terminal 2: `npm run dev`
+* **Start on this PC:** opening new windows is blocked here, and so are `npm` (a `.ps1`/`.cmd` wrapper, stopped by the script execution policy and the disabled command prompt). Use two VS Code terminals in the project folder and call `node` directly:
+  * Terminal 1: `node node_modules\tsx\dist\cli.mjs scripts\dev-db.ts`
+  * Terminal 2: `node node_modules\next\dist\bin\next dev -p 3000`
 
   They run until you stop them. On a PC that allows it, `scripts\start-dev.ps1` opens the two windows instead.
 * **Stop:** press Ctrl+C in each terminal, the app first and the database last.

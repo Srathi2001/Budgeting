@@ -9,8 +9,9 @@ function Test-Port([int]$port) { [bool](Get-NetTCPConnection -State Listen -Loca
 function Show-Manual {
   Write-Host ''
   Write-Host 'This PC does not allow opening new windows. Run the tool in two terminals instead:' -ForegroundColor Yellow
-  Write-Host "  Terminal 1:  cd `"$root`"; npm run db:dev"
-  Write-Host "  Terminal 2:  cd `"$root`"; npm run dev"
+  # node directly: npm is a .ps1 / .cmd wrapper, blocked where scripts or cmd.exe are disabled
+  Write-Host "  Terminal 1:  cd `"$root`"; node node_modules\tsx\dist\cli.mjs scripts\dev-db.ts"
+  Write-Host "  Terminal 2:  cd `"$root`"; node node_modules\next\dist\bin\next dev -p 3000"
   Write-Host 'Then open http://localhost:3000. Stop with Ctrl+C: Terminal 2 first, then Terminal 1.'
   exit 1
 }
