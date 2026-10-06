@@ -147,6 +147,8 @@ export const leaseLines = pgTable(
     r3End: day('r3_end'),
     r3Mf: boolean('r3_mf'),
     r3Schedule: jsonb('r3_schedule').$type<ScheduleItem[]>(),
+    /** How many of the renewals (1st, 2nd, 3rd) are contracted lease years loaded from the lease report (0–3). */
+    contracted: integer('contracted').notNull().default(0),
 
     budgetRate: money('budget_rate'),
     increasePctOverride: decimal('increase_pct_override'),

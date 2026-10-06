@@ -1,5 +1,5 @@
 // Removes all lease details from a budget version, keeping its units (and unit-level inputs such as
-// budget rate and cheques). Lease details are then loaded from Oracle Fusion.
+// budget rate and cheques). Lease details are then loaded from the Tenant and Lease Details Report.
 //   npx tsx scripts/clear-leases.ts <versionId>
 import 'dotenv/config';
 import { eq } from 'drizzle-orm';
@@ -22,7 +22,7 @@ import { recalcLines } from '../src/lib/budget/calc';
         r1Rent: null, r1Start: null, r1End: null, r1Mf: null, r1Schedule: null,
         r2Renew: null, r2Rent: null, r2Start: null, r2End: null, r2Mf: null, r2Schedule: null,
         r3Renew: null, r3Rent: null, r3Start: null, r3End: null, r3Mf: null, r3Schedule: null,
-        increasePctOverride: null, notes: null,
+        contracted: 0, increasePctOverride: null, notes: null,
       })
       .where(eq(schema.leaseLines.versionId, versionId));
     await recalcLines(tx, versionId);

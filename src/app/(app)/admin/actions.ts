@@ -9,6 +9,7 @@ import { requireFinance } from '@/lib/auth/dal';
 import { recalcLines } from '@/lib/budget/calc';
 import { rollForward } from '@/lib/budget/rollforward';
 import { DEFAULT_ASSUMPTIONS, type Assumptions } from '@/lib/engine/assumptions';
+import type { ImportPreview } from '@/lib/import/tenant-lease';
 
 type Result = { error?: string; ok?: string };
 
@@ -231,32 +232,37 @@ export async function importComparatives(versionId: number, form: FormData): Pro
   });
 }
 
-// ---- Oracle Fusion data -------------------------------------------------------------------------
+// ---- lease data: Tenant and Lease Details Report ------------------------------------------------
 
-export async function importFusionLeases(versionId: number, form: FormData): Promise<Result> {
-  const user = await requireFinance();
-  return wrap(async () => {
-    const file = form.get('file');
-    if (!(file instanceof File) || !file.size) throw new Error('Choose the Lease Status Summary Report (.xlsx)');
-    const { parseLeaseReport, applyFusionLeases } = await import('@/lib/import/fusion');
-    const leases = parseLeaseReport(Buffer.from(await file.arrayBuffer()));
-    const r = await applyFusionLeases(versionId, leases, user.id);
-    const skipped = Object.entries(r.skipped).map(([status, n]) => `${n} ${status}`).join(', ');
-    return `Loaded ${r.matched} current leases` +
-      (skipped ? ` (not used: ${skipped})` : '') +
-      (r.createdUnits.length ? `; ${r.createdUnits.length} new units added` : '') +
-      (r.cleared ? `; ${r.cleared} units no longer leased` : '') +
-      (r.unknownProperties.length ? `; ${r.unknownProperties.length} rows skipped (unknown property: ${r.unknownProperties.slice(0, 5).join(', ')})` : '');
-  });
+async function reportRows(form: FormData) {
+  const file = form.get('file');
+  if (!(file instanceof File) || !file.size) throw new Error('Choose the Tenant and Lease Details Report (.xlsx)');
+  const { parseReport } = await import('@/lib/import/tenant-lease');
+  return { rows: parseReport(Buffer.from(await file.arrayBuffer())), name: file.name };
 }
 
-export async function importFusionUnits(versionId: number, form: FormData): Promise<Result> {
+/** What the import would change: nothing is written. */
+export async function previewLeaseImport(versionId: number, form: FormData): Promise<{ error?: string; preview?: ImportPreview }> {
+  await requireFinance();
+  try {
+    const { rows } = await reportRows(form);
+    const { planImport } = await import('@/lib/import/tenant-lease');
+    return { preview: (await planImport(versionId, rows)).preview };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+export async function applyLeaseImport(versionId: number, form: FormData): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
-    const file = form.get('file');
-    if (!(file instanceof File) || !file.size) throw new Error('Choose the Unit Dump (.xlsx)');
-    const { parseUnitDump, applyUnitDump } = await import('@/lib/import/fusion');
-    const r = await applyUnitDump(versionId, parseUnitDump(Buffer.from(await file.arrayBuffer())), user.id);
-    return `Updated ${r.updated} units (${r.available} available)` + (r.unknown ? `; ${r.unknown} codes not in the budget unit list` : '');
+    const { rows, name } = await reportRows(form);
+    const { applyImport } = await import('@/lib/import/tenant-lease');
+    const p = await applyImport(versionId, rows, user.id, name);
+    return (
+      `Imported: ${p.result.leasedLines} leased and ${p.result.vacantLines} vacant lines, current rent AED ${p.result.currentRent.toLocaleString('en-US')}` +
+      (p.newLines.length ? `; ${p.newLines.length} new lines` : '') +
+      '. Every unit has been recalculated.'
+    );
   });
 }

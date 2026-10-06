@@ -14,9 +14,10 @@ import {
   upsertUser,
   updateProperty,
   importComparatives,
-  importFusionLeases,
-  importFusionUnits,
+  previewLeaseImport,
+  applyLeaseImport,
 } from './actions';
+import type { ImportPreview } from '@/lib/import/tenant-lease';
 import { saveComparative } from '../analysis/actions';
 
 type Result = { error?: string; ok?: string };
@@ -587,9 +588,52 @@ export function ComparativesPanel({
   );
 }
 
-// ---- Oracle Fusion data -------------------------------------------------------------------------
+// ---- lease data: Tenant and Lease Details Report ------------------------------------------------
 
-export function FusionPanel({
+function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="card px-4 py-3">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+      {sub && <div className="text-xs text-slate-500">{sub}</div>}
+    </div>
+  );
+}
+
+function ListBlock<T>({ title, hint, items, cols, row }: { title: string; hint: string; items: T[]; cols: string[]; row: (x: T) => React.ReactNode[] }) {
+  if (!items.length) return null;
+  return (
+    <details className="card p-3">
+      <summary className="cursor-pointer text-sm font-semibold">
+        {title} <span className="font-normal text-slate-500">({fmt(items.length)})</span>
+        <span className="ml-2 text-xs font-normal text-slate-500">{hint}</span>
+      </summary>
+      <div className="frame mt-2 max-h-80 overflow-auto">
+        <table className="tbl">
+          <thead>
+            <tr>
+              {cols.map((c) => (
+                <th key={c}>{c}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.slice(0, 500).map((x, i) => (
+              <tr key={i}>
+                {row(x).map((v, j) => (
+                  <td key={j}>{v}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {items.length > 500 && <div className="mt-1 text-xs text-slate-500">First 500 of {fmt(items.length)} shown.</div>}
+    </details>
+  );
+}
+
+export function LeaseImportPanel({
   versionId,
   versionName,
   locked,
@@ -598,60 +642,128 @@ export function FusionPanel({
   versionId: number;
   versionName: string;
   locked: boolean;
-  stats: { units: number; leased: number; lastLeaseSync: string | null; lastUnitSync: string | null; unitsWithStatus: number };
+  stats: { lines: number; leased: number; lastImport: string | null; lastFile: string | null };
 }) {
-  const leases = useAction();
-  const units = useAction();
+  const [form, setForm] = useState<FormData | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [checking, startCheck] = useTransition();
+  const apply = useAction();
+
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPreview(null);
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return setForm(null);
+    const f = new FormData();
+    f.set('file', file);
+    setForm(f);
+    startCheck(async () => {
+      const r = await previewLeaseImport(versionId, f);
+      setError(r.error ?? null);
+      setPreview(r.preview ?? null);
+    });
+  };
+
+  const p = preview;
   return (
     <div className="space-y-4">
-      <p className="max-w-4xl text-[13px] text-slate-600">
-        Current leases and unit attributes can be typed in the Lease Budget or loaded from Oracle Fusion. Until the Fusion connection
-        is set up, upload the two standard Fusion exports here. Each upload overwrites the lease and unit fields it contains for{' '}
-        <b>{versionName}</b> (including anything typed in) and recalculates every unit.
-      </p>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card p-4">
-          <h3 className="text-sm font-semibold">2 · Lease Status Summary Report</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Lease number, version, tenant, customer class, lease / rent start, lease end, actual lease amount, VAT, security deposit,
-            status and remarks — one row per leased unit. Units of the reported BUs that are not in the report lose their lease.
-          </p>
-          <div className="mt-3 text-xs text-slate-600">
-            {stats.leased} of {stats.units} units have a lease · last loaded {stats.lastLeaseSync ?? 'never'}
+      <section className="card p-4">
+        <h3 className="text-sm font-semibold">Tenant and Lease Details Report</h3>
+        <p className="mt-1 max-w-4xl text-xs text-slate-500">
+          Export it from Oracle (Custom Applications → Lease Reports → Reports → <b>Tenant and Lease Details Report</b>) for all business units, then
+          choose the file here. It is the only source for units and current leases: unit status and area, lease number, tenant, contract dates,
+          rent, security deposit, and lease years already contracted. Choosing the file shows what would change; nothing is saved until you
+          click <b>Import</b>. The import overwrites lease details in <b>{versionName}</b>, including anything typed in, and keeps the budget inputs
+          (renewal Y/N, budget rate, cheques, notes). Personal data in the report (phone, email, passport, Emirates ID) is not read.
+        </p>
+        <div className="mt-3 text-xs text-slate-600">
+          {stats.leased.toLocaleString('en-US')} of {stats.lines.toLocaleString('en-US')} lines have a current lease · last import {stats.lastImport ?? 'never'}
+          {stats.lastFile && <> ({stats.lastFile})</>}
+        </div>
+        {locked ? (
+          <div className="mt-3 text-xs text-amber-700">This version is locked.</div>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input type="file" accept=".xlsx,.xls" onChange={onFile} className="text-xs" />
+            {checking && <span className="text-sm text-slate-500">Reading the report…</span>}
+            <button
+              className="btn-primary"
+              disabled={!form || !p || apply.pending}
+              onClick={() => form && apply.run(async () => {
+                const r = await applyLeaseImport(versionId, form);
+                if (!r.error) setPreview(null);
+                return r;
+              })}
+            >
+              {apply.pending ? 'Importing…' : 'Import'}
+            </button>
+            <apply.Msg />
+            {error && <span className="text-sm text-red-600">{error}</span>}
           </div>
-          {!locked && (
-            <form className="mt-3 flex flex-wrap items-center gap-2" action={(f) => leases.run(() => importFusionLeases(versionId, f))}>
-              <input type="file" name="file" accept=".xlsx,.xls" required className="text-xs" />
-              <button className="btn-primary" disabled={leases.pending}>
-                {leases.pending ? 'Loading…' : 'Load leases'}
-              </button>
-              <leases.Msg />
-            </form>
-          )}
-        </section>
-        <section className="card order-first p-4">
-          <h3 className="text-sm font-semibold">1 · Unit Dump (load first)</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Unit status, merged unit number, unit usage (Resi / Commercial as per Fusion) and landlord. Load it first: leases on merged units are matched to their member units through the merged unit number.
-          </p>
-          <div className="mt-3 text-xs text-slate-600">
-            {stats.unitsWithStatus} units have a Fusion status · last loaded {stats.lastUnitSync ?? 'never'}
+        )}
+      </section>
+
+      {p && (
+        <div className="space-y-3">
+          <div className="text-sm font-semibold">
+            Preview <span className="font-normal text-slate-500">· contracts as of {p.asOf} · nothing saved yet</span>
           </div>
-          {!locked && (
-            <form className="mt-3 flex flex-wrap items-center gap-2" action={(f) => units.run(() => importFusionUnits(versionId, f))}>
-              <input type="file" name="file" accept=".xlsx,.xls" required className="text-xs" />
-              <button className="btn-primary" disabled={units.pending}>
-                {units.pending ? 'Loading…' : 'Load units'}
-              </button>
-              <units.Msg />
-            </form>
-          )}
-        </section>
-      </div>
-      <p className="text-xs text-slate-500">
-        Once Fusion access is available, these uploads are replaced by a scheduled sync from Fusion (BI Publisher report service), using
-        the same mapping. Lease cheque schedules will come from the lease Schedules in Fusion.
-      </p>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Tile label="Report" value={`${fmt(p.report.units)} units`} sub={`${fmt(p.report.leases)} leases · ${fmt(p.report.available)} available · ${fmt(p.report.rows)} rows`} />
+            <Tile label="Budget lines after import" value={`${fmt(p.result.leasedLines)} leased`} sub={`${fmt(p.result.vacantLines)} without a lease`} />
+            <Tile label="Current annual rent" value={`AED ${fmt(p.result.currentRent)}`} sub="current contract year, all lines" />
+            <Tile label="Contracted later years" value={`${fmt(p.result.contractedLines)} lines`} sub="set as fixed renewals" />
+          </div>
+          <div className="frame max-w-2xl">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Business unit</th>
+                  <th className="num">Leased lines</th>
+                  <th className="num">Current rent (AED)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {p.result.byBu.map((b) => (
+                  <tr key={b.bu}>
+                    <td>{b.bu}</td>
+                    <td className="num tabular-nums">{fmt(b.leases)}</td>
+                    <td className="num tabular-nums">{fmt(b.rent)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-xs text-slate-500">
+            {fmt(p.matchedByCode)} leases matched to budget lines by unit code.
+          </div>
+          <ListBlock
+            title="Matched by tenant"
+            hint="budget lines held under a merged code or group name, matched within the property by last known tenant: check these"
+            items={p.matchedByTenant}
+            cols={['Property', 'Budget line', 'Lease', 'Tenant']}
+            row={(x) => [x.property, x.line, x.lease, x.tenant]}
+          />
+          <ListBlock
+            title="New lines"
+            hint="units and leases not in the budget yet"
+            items={p.newLines}
+            cols={['Property', 'Unit', 'Tenant', 'Units in lease', 'Current rent']}
+            row={(x) => [x.property, x.code, x.tenant ?? '(available)', x.units, x.rent === null ? '' : fmt(x.rent)]}
+          />
+          <ListBlock title="New properties" hint="set the property manager in Admin → Properties" items={p.newProperties} cols={['Code', 'Name', 'BU']} row={(x) => [x.code, x.name, x.bu]} />
+          <ListBlock
+            title="Budget lines not in the report"
+            hint="kept with their budget inputs, but with no current lease (e.g. vacant-room groups set up by PMs)"
+            items={p.notInReport}
+            cols={['Property', 'Budget line']}
+            row={(x) => [x.property, x.code]}
+          />
+          <ListBlock title="Not imported" hint="" items={p.skipped} cols={['What', 'Why']} row={(x) => [x.what, x.detail]} />
+          <ListBlock title="Overlapping leases" hint="one budget line with more than one running lease" items={p.conflicts} cols={['Detail']} row={(x) => [x]} />
+        </div>
+      )}
     </div>
   );
 }

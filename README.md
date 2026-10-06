@@ -3,7 +3,7 @@
 Replaces the Excel round trip in the budget process. Before: PM templates (`Budget <PM> <BU> X.xlsx`) went out to property managers, came back filled in, and were pasted into the `Revenue Master` of `H.E. MJN_Budget 2026.xlsm`.
 
 Now:
-* **Units and current leases are loaded from Oracle Fusion and can be edited in the tool.** The next Fusion upload overwrites edited lease fields.
+* **Units and current leases are imported from one Oracle report, the Tenant and Lease Details Report, and can be edited in the tool.** The next import overwrites edited lease fields.
 * **Property managers enter the budget assumptions** for each unit.
 * **Revenue and cash are recalculated on every save.**
 
@@ -17,24 +17,34 @@ Every field has one owner. In the Lease Budget grid, each column group's header 
 
 | Owner | Fields | Editable by |
 | --- | --- | --- |
-| **Unit master** (grey) | BU, property, unit code, PC, bedroom, area, R/C, MF, merged unit no., unit status, unit type, Resi/Commercial (Fusion), landlord, category | Fusion Unit Dump; a few fields can be corrected by Finance or PMs |
-| **Oracle Fusion** (teal) | lease number, version, tenant code and name, customer class, lease start, rent start, lease end, actual lease amount, VAT, security deposit, lease status, remarks, vacant, current-lease cheque schedule | Property managers (own properties), Finance. A Fusion upload overwrites these fields. |
+| **Unit master** (grey) | BU, property, unit code, PC, bedroom, area, R/C, MF, merged unit no., unit status, unit type, Resi/Commercial (Oracle), landlord, category | Lease report import (area, status, Oracle unit type); a few fields can be corrected by Finance or PMs |
+| **Oracle lease data** (teal) | lease number, tenant code and name, customer class, lease commencement, current contract year (start, end, rent), security deposit, lease status, remarks, vacant, current-lease cheque schedule | Property managers (own properties), Finance. The next import overwrites these fields. |
 | **Budget inputs** (amber) | staff/owner, renew Y/N, not re-let, budget rate, increase %, cheques per year, renewal overrides (1st, 2nd and 3rd), notes | Property managers (own properties), Finance |
 | **Calculated** (violet) | RERA index row, low/high/average, old and new rent psf, % difference, increase allowed, staff discount, vacancy loss | — |
 
 The grid follows the column order of `Consolidated Revenue Budget 2026_Template.xlsx`, plus the RERA working from the PM templates. Columns auto-fit to their content.
 
-## Loading Fusion data (Admin → Fusion data)
+## Importing lease data (Admin → Lease data)
 
-Until the Fusion connection exists, Finance uploads the two standard Fusion exports. Load them in this order:
+**One report is the only source for units and current leases: the Tenant and Lease Details Report.** In Oracle it's under Custom Applications → Lease Reports → Reports. Export it for all business units, then choose the file in **Admin → Lease data**:
 
-1. **Unit Dump** (`MJN+REHL+PMC … Unit Dump.xlsx`). Updates unit status, merged unit number, unit usage and landlord. Columns are found by header; values are also recognised by pattern, because some sheets in the export have shifted columns.
-2. **Lease Status Summary Report.** Gives the current lease of every leased unit:
-   * Fusion records a lease on merged units under the **merged unit code**. Such a lease is spread over its member units by area, or equally when area is missing.
-   * A lease row whose unit isn't known yet is added as a new unit under its property.
-   * For the business units in the report, units without a row lose their lease and become vacant.
+1. **Preview.** Choosing the file shows what would change, with nothing saved: leased and vacant lines, current annual rent by business unit, matches to check, new lines and properties, and budget lines that are no longer in the report.
+2. **Import.** Writes the leases and recalculates every unit. Budget inputs (renew Y/N, budget rate, cheques, notes) are kept.
 
-Both steps recalculate the whole version. Later, a scheduled Fusion sync (BI Publisher report service) will replace the uploads and use the same mapping in [`src/lib/import/fusion.ts`](src/lib/import/fusion.ts). Cheque schedules for current leases will come from the Fusion lease Schedules.
+The report has one row per unit per contract year, for every unit (leased or available). The import, in [`src/lib/import/tenant-lease.ts`](src/lib/import/tenant-lease.ts):
+
+* **Current contract:** the contract year running today. If none is running, the year that ended last (renewal pending) or, for a lease that hasn't started, its first year.
+* **Contracted later years** become fixed 1st, 2nd and 3rd renewals, replacing the RERA-based calculation. A re-import replaces only these; renewals typed in by a PM stay.
+* **Leases on several units** repeat the lease total on each unit. The total is spread over the budget lines it covers, by area. A unit shared by several running leases (e.g. a mezzanine) carries no rent of its own.
+* **Matching** is by unit code. `P`-coded PMC units (`50B113P-…`) match their `N` units, since PMC properties were re-coded in Oracle and the old lease left *Suspended*.
+* **Lines held under a merged code or group name** (camp lease groups such as `10B110N-Unit-00720`, whole-building leases such as Al Rafa) never appear in the report. They're matched within the property by last known tenant; the preview lists them to check.
+* **New units and leases** become new lines; a property not in the budget is added (set its PM in Admin → Properties). Available camp rooms aren't added room by room: PMs budget them as groups.
+* **Budget lines not in the report** are kept with their budget inputs but no current lease.
+* **Personal data** in the report (phone, email, passport, Emirates ID, address) is never read.
+
+The same import runs from the command line: `npx tsx scripts/lease-import.ts <versionId> <report.xlsx>` previews, and adding `--apply` imports.
+
+Cheque schedules aren't in the report: current leases default to equal cheques until schedules are entered in the row panel.
 
 ## Screens
 
@@ -117,7 +127,8 @@ Every change is written to `audit_log`.
 | --- | --- |
 | `npm test` | engine unit tests |
 | `npm run validate:2026 -- <xlsm>` | engine vs the 2026 workbook, unit by unit |
-| `npx tsx scripts/fusion-import.ts <versionId> <lease report.xlsx> [unit dump.xlsx]` | Fusion upload from the command line |
+| `npx tsx scripts/lease-import.ts <versionId> <report.xlsx> [--apply]` | Tenant and Lease Details import from the command line (preview without `--apply`) |
+| `npx tsx scripts/fusion-rest.ts [resource]` / `fusion-catalog.ts [folder]` | read-only probes of the Oracle Fusion REST and report catalog services |
 | `npx tsx scripts/clear-leases.ts <versionId>` | remove all lease details from a version, keeping its units |
 | `npx tsx scripts/test-workflow.ts` | save path: edits, permissions, Fusion fields read-only, locking, audit |
 | `npx tsx scripts/compare-versions.ts 1 2` | revenue by property, version 1 vs 2, plus open warnings |
@@ -126,6 +137,7 @@ Every change is written to `audit_log`.
 
 ## Next steps
 
-* Fusion API connection: scheduled sync of units, leases and lease cheque schedules, plus GL actuals for comparatives.
+* Automatic lease feed: the lease data lives in the custom ReportsApp (paasprod.alnaboodah.com), which has no API yet. Its vendor would need to provide read-only views or REST.
+* Fusion actuals (GL, Receivables) for comparatives: works with the existing login once it has read access to the REHL and PMC business units and ledgers.
 * The cost side of the Building P&L.
 * Multi-cell paste in the grid (an AG Grid Enterprise feature).
