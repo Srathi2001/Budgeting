@@ -119,6 +119,18 @@ npm run dev                     # http://localhost:3000
 
 **No Docker?** `npm run db:dev` starts an embedded Postgres (PGlite) on port 5433, with data in `.pgdata/`. Point `DATABASE_URL` at `postgres://postgres:postgres@127.0.0.1:5433/postgres` and set `DB_POOL_MAX=1`. This is for development only.
 
+* **Start on this PC:** `powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1` from a VS Code terminal. It opens a "Budget database" and a "Budget app" window, which run until you stop them.
+* **Stop:** press Ctrl+C in each window, the app first and the database last.
+* **Native PostgreSQL can't run on this PC:** its setup and start tools need the command prompt, which group policy disables.
+
+**PGlite has no crash recovery**, so `scripts/dev-db.ts` protects the data itself:
+* **It takes a CHECKPOINT every minute.**
+* **It snapshots the whole database consistently** into `.pgdata-snapshots/`: at start, every 10 minutes when something changed, and on a clean stop. It keeps the newest 36.
+* **If `.pgdata` won't open after a hard stop**, it's moved to `.pgdata-damaged-<time>` and the newest snapshot is restored automatically. At most the last 10 minutes of edits are lost.
+* **Settings:** `DEV_DB_SNAPSHOT_MINUTES` and `DEV_DB_SNAPSHOTS_KEPT`.
+
+For use by several people, move to a hosted PostgreSQL (e.g. Azure Database for PostgreSQL, UAE North); the app only needs a new `DATABASE_URL`.
+
 Logins: `admin@budget.local`, `finance@budget.local`, and one per coordinator (`ruchi@…`, `azin@…`, `meghal@…`, `packi@…`). All use the password `SEED_PASSWORD` (default `ChangeMe!2027`). **Change these in Admin → Users.**
 
 ## Lease Budget: grid and row form
