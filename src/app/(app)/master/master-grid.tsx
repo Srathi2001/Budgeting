@@ -24,7 +24,7 @@ import {
 } from 'ag-grid-community';
 import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
-import { saveLines, addUnit, removeLine } from './actions';
+import { saveLines, addUnit, removeLine, saveRera } from './actions';
 import { RowForm } from './row-form';
 import { OUTCOMES, annualRent, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
@@ -371,7 +371,7 @@ export function MasterGrid({
           unitCol('buCode', 'BU'),
           unitCol('coordinator', 'PC'),
           oracleCol('resiCommercial', 'Unit Type', isAdmin, 'text', { headerClass: 'hdr-unit' }),
-          unitCol('bedroom', 'Bedroom / RERA', { edit: 'text', headerTooltip: 'Bedroom code: the key into the RERA index' }),
+          oracleCol('bedroom', 'Bedroom / RERA', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'From the Oracle unit type: the key into the RERA index' }),
           oracleCol('area', 'Area (sq ft)', isAdmin, 'money', { headerClass: 'hdr-unit' }),
           oracleCol('unitStatus', 'Unit Status', isAdmin, 'text', { headerClass: 'hdr-unit' }),
         ],
@@ -592,6 +592,15 @@ export function MasterGrid({
           }}
           onPrev={() => step(-1)}
           onNext={() => step(1)}
+          onSaveRera={async (min, max) => {
+            const res = await saveRera(versionId, { propertyId: selected.propertyId, bedroom: selected.bedroom ?? '', min, max });
+            if (res.error) return res.error;
+            // every unit of the property with this RERA code was recalculated
+            apiRef.current?.applyTransaction({ update: res.rows });
+            setSelected((s) => (s ? (res.rows!.find((r) => r.lineId === s.lineId) ?? s) : s));
+            refreshTotals();
+            return null;
+          }}
           onSave={(patch) => {
             queue.current.set(selected.lineId, { ...(queue.current.get(selected.lineId) ?? {}), ...patch });
             if (timer.current) clearTimeout(timer.current);

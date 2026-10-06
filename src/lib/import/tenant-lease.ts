@@ -265,22 +265,37 @@ export function selectContracts<P extends Period>(periods: P[], asOf: string): {
   return i < 0 ? { current: null, following: [] } : { current: sorted[i], following: sorted.slice(i + 1) };
 }
 
-// ---- plan ----------------------------------------------------------------------------------------
+// ---- plan: the version's lines, rebuilt from the report ------------------------------------------
+//
+// One line per letting unit: a lease on several units (camps, whole buildings, merged units) is one
+// line, held on one of its unit codes; an available unit is a line of its own. Nothing is taken from
+// a previous budget: unit details are derived from the report and left blank when it has no value.
+// Budget inputs a PM entered on a line (outcome, rates, overrides, notes …) carry over when the
+// line's unit is still in the report.
 
-const STOP = new Set(['LLC', 'L.L.C', 'L.L.C.', 'THE', 'AND', 'CO', 'CO.', 'COMPANY', 'BR', 'OF', '&', 'FZE', 'FZCO', 'LTD', 'L', 'C', '(L.L.C)', '(LLC)']);
-const tokens = (s: string | null) =>
-  new Set(norm(s).replace(/[().,]/g, ' ').split(/\s+/).filter((t) => t.length > 1 && !STOP.has(t)));
-/** Overlap of two tenant names, 0–1 */
-export function nameSimilarity(a: string | null, b: string | null) {
-  const x = tokens(a), y = tokens(b);
-  if (!x.size || !y.size) return 0;
-  let common = 0;
-  for (const t of x) if (y.has(t)) common++;
-  return common / Math.min(x.size, y.size);
+export type Family = 'Residential' | 'Commercial' | 'Retail' | 'Warehouse' | 'Camps';
+
+/** Reporting family of an Oracle unit type. */
+export function familyOf(type: string | null): Family {
+  const t = norm(type);
+  if (/LABOUR/.test(t)) return 'Camps';
+  if (/SHOP|SHOWROOM|RESTAURANT|STORE|RETAIL|KIOSK|CAFE/.test(t)) return 'Retail';
+  if (/WAREHOUSE|SHED|PLOT|LAND|YARD/.test(t)) return 'Warehouse';
+  if (/APARTMENT|VILLA|STUDIO|BED ROOM|RESIDENTIAL|PENTHOUSE|ROOM$/.test(t)) return 'Residential';
+  return 'Commercial';
+}
+/** R residential (no VAT) · C commercial · L labour accommodation */
+export const rcOf = (type: string | null) => ({ Residential: 'R', Camps: 'L' } as Record<Family, string>)[familyOf(type)] ?? 'C';
+/** RERA index key from the Oracle unit type: STUDIO, 1BR, 3BR VILLA, OFFICE, SHOP … */
+export function bedroomCode(type: string | null): string | null {
+  const t = norm(type);
+  if (!t) return null;
+  if (/STUDIO/.test(t)) return 'STUDIO';
+  const m = /(\d+)\s*BED\s*ROOM/.exec(t);
+  if (m) return `${m[1]}BR${/VILLA/.test(t) ? ' VILLA' : ''}`;
+  return t;
 }
 
-const COMMERCIAL = /OFFICE|SHOP|COMMERCIAL|WAREHOUSE|STORE|RESTAURANT|SHOWROOM|PLOT|OPEN SPACE|HOTEL|RETAIL|SCHOOL|GYM|CLINIC/i;
-const rcOf = (type: string | null) => (/LABOUR/i.test(type ?? '') ? 'L' : COMMERCIAL.test(type ?? '') ? 'C' : 'R');
 const buCodeOf = (name: string | null) => {
   const s = norm(name);
   if (/PMC/.test(s)) return '522';
@@ -301,47 +316,83 @@ interface Facts {
   securityDeposit: number | null;
   leaseRemarks: string | null;
   renewals: Period[]; // contracted later years, up to 3
-  /** other income on the current contract year (this line's share) */
+  /** other income on the current contract year */
   fees: Fees;
 }
-
-type Assignment = { lease: ReportLease; share: number };
 
 export interface ImportPreview {
   asOf: string;
   report: { rows: number; units: number; available: number; leases: number };
   result: {
+    lines: number;
     leasedLines: number;
     vacantLines: number;
+    multiUnitLines: number;
     currentRent: number;
     contractedLines: number;
     byBu: { bu: string; leases: number; rent: number }[];
   };
-  matchedByCode: number;
-  matchedByTenant: { lease: string; tenant: string | null; line: string; property: string }[];
-  newProperties: { code: string; name: string; bu: string }[];
+  /** lines whose unit already had a line: budget inputs kept */
+  kept: number;
   newLines: { code: string; property: string; tenant: string | null; rent: number | null; units: number }[];
-  notInReport: { code: string; property: string }[];
+  removedLines: { code: string; property: string; tenant: string | null; inputs: boolean }[];
+  newProperties: { code: string; name: string; bu: string }[];
   skipped: { what: string; detail: string }[];
   conflicts: string[];
 }
 
-type Plan = ReturnType<typeof emptyPlan>;
-function emptyPlan() {
-  return {
-    lineFacts: new Map<number, Facts | null>(), // null = no current lease
-    unitAttrs: new Map<number, { area?: number | null; unitStatus: string | null; resiCommercial: string | null }>(),
-    newProperties: [] as { code: string; name: string; buCode: string; kind: 'BUILDING' | 'CAMP' }[],
-    newUnits: [] as {
-      propertyCode: string;
-      existingUnitId: number | null;
-      unit: { unitCode: string; area: number | null; unitType: string | null; bedroom: string | null; rc: string; unitStatus: string | null; resiCommercial: string | null };
-      facts: Facts | null;
-    }[],
-  };
+interface PlannedLine {
+  unit: ReportUnit; // the unit code the line is held on
+  members: ReportUnit[];
+  propertyKey: string;
+  attrs: { area: number | null; unitType: string | null; resiCommercial: string | null; rc: string; pivotCategory: Family; bedroom: string | null; rooms: number | null; unitStatus: string | null };
+  facts: Facts | null;
+  carryFrom: schema.LeaseLine | null;
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
+
+/** Current contract and contracted later years of a line from its leases. */
+function factsFor(leaseList: ReportLease[], asOf: string, label: string, conflicts: string[]): Facts | null {
+  const periods = leaseList.flatMap((lease) => lease.periods.map((p) => ({ ...p, lease })));
+  const { current, following } = selectContracts(periods, asOf);
+  if (!current) return null;
+  const running = periods.filter((p) => p.start <= asOf && p.end >= asOf && p.lease !== current.lease);
+  if (running.length) conflicts.push(`${label}: ${running.length + 1} leases running at once (${[current, ...running].map((p) => p.lease.number).join(', ')}); using ${current.lease.number}`);
+  const lease = current.lease;
+  // later years of the same lease (or of a lease signed to follow it); overlapping years are dropped
+  const renewals: Period[] = [];
+  let end = current.end;
+  for (const p of following) {
+    if (p.start <= end) continue;
+    renewals.push({ start: p.start, end: p.end, amount: p.amount });
+    end = p.end;
+    if (renewals.length === 3) break;
+  }
+  return {
+    leaseNumber: lease.number,
+    tenantCode: lease.tenantCode,
+    tenant: lease.tenant,
+    customerClass: lease.customerClass,
+    rentStart: lease.commencement,
+    currentStart: current.start,
+    currentEnd: current.end,
+    currentRent: r2(current.amount),
+    securityDeposit: lease.securityDeposit,
+    fees: { maintenance: r2(current.fees?.maintenance ?? 0), utility: r2(current.fees?.utility ?? 0), carPark: r2(current.fees?.carPark ?? 0) },
+    leaseRemarks: null,
+    renewals,
+  };
+}
+
+/** Which of a unit's leases holds it: the one running today, else the next to start, else the last to end. */
+function leaseRank(lease: ReportLease, asOf: string): [number, number] {
+  const { current } = selectContracts(lease.periods, asOf);
+  if (!current) return [3, 0];
+  if (current.start <= asOf && current.end >= asOf) return [0, -current.amount];
+  if (current.start > asOf) return [1, Date.parse(current.start)];
+  return [2, -Date.parse(current.end)];
+}
 
 export async function planImport(versionId: number, rows: ReportRow[], asOf = new Date().toLocaleDateString('en-CA')) {
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
@@ -354,240 +405,129 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
   const propById = new Map(props.map((p) => [p.id, p]));
   const allUnits = await db.select().from(schema.units);
   const unitById = new Map(allUnits.map((u) => [u.id, u]));
-  const unitByKey = new Map(allUnits.map((u) => [unitKey(u.unitCode), u]));
   const lines = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
   const lineByKey = new Map(lines.map((l) => [unitKey(unitById.get(l.unitId)!.unitCode), l]));
-  // tenant on each unit last time (this version, else the imported baseline): to recognise merged-code lines
-  const [baseline] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.isBaseline, true));
-  const priorTenant = new Map<number, string>();
-  if (baseline) for (const l of await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, baseline.id))) if (l.tenant) priorTenant.set(l.unitId, l.tenant);
-  for (const l of lines) if (l.tenant) priorTenant.set(l.unitId, l.tenant);
 
-  const plan = emptyPlan();
+  const conflicts: string[] = [];
+  const skipped: ImportPreview['skipped'] = [];
+
+  // 1. each unit belongs to one lease (or none): group units by that lease
+  const groups = new Map<string, { units: ReportUnit[]; leases: ReportLease[] }>();
+  const groupOfLease = new Map<string, string>();
+  for (const u of rUnits.values()) {
+    const ls = u.leaseNumbers.map((n) => leases.get(n)!).filter((l) => l.periods.length);
+    let key = `U:${u.key}`;
+    if (ls.length) {
+      const best = ls.map((l) => [l, leaseRank(l, asOf)] as const).sort((a, b) => a[1][0] - b[1][0] || a[1][1] - b[1][1])[0][0];
+      key = `L:${best.number}`;
+      groupOfLease.set(best.number, key);
+    }
+    const g = groups.get(key) ?? { units: [], leases: [] };
+    g.units.push(u);
+    groups.set(key, g);
+  }
+  for (const [n, key] of groupOfLease) groups.get(key)!.leases.push(leases.get(n)!);
+  // a lease no unit is held on (e.g. a renewal signed in advance) follows its units' line
+  for (const lease of leases.values()) {
+    if (groupOfLease.has(lease.number)) continue;
+    const u = rUnits.get(lease.units[0]);
+    const key = u && [...groups].find(([, g]) => g.units.includes(u))?.[0];
+    if (key) groups.get(key)!.leases.push(lease);
+  }
+
+  // 2. one planned line per group
+  const planned: PlannedLine[] = [];
+  for (const g of groups.values()) {
+    const members = [...g.units].sort((a, b) => a.code.localeCompare(b.code));
+    // hold the line on a unit code that already has a line (keeps its budget inputs), else the first code
+    const held = members.find((m) => lineByKey.has(m.key)) ?? members[0];
+    const carryFrom = lineByKey.get(held.key) ?? members.map((m) => lineByKey.get(m.key)).find(Boolean) ?? null;
+    // the line's unit type: the type with the most area in the group
+    const typeArea = new Map<string, number>();
+    for (const m of members) typeArea.set(m.unitType ?? '', (typeArea.get(m.unitType ?? '') ?? 0) + (m.area ?? 0) + 1e-6);
+    const type = [...typeArea].sort((a, b) => b[1] - a[1])[0][0] || null;
+    const areas = members.map((m) => m.area).filter((a): a is number => a !== null && a > 0);
+    const facts = g.leases.length ? factsFor(g.leases, asOf, held.code, conflicts) : null;
+    if (facts && members.length > 1) {
+      facts.leaseRemarks = `Lease ${facts.leaseNumber} covers ${members.length} units: ${members.slice(0, 12).map((m) => m.code).join(', ')}${members.length > 12 ? ', …' : ''}`;
+    }
+    planned.push({
+      unit: held,
+      members,
+      propertyKey: held.propertyKey,
+      attrs: {
+        area: areas.length ? r2(areas.reduce((a, b) => a + b, 0)) : null,
+        unitType: type,
+        resiCommercial: type,
+        rc: rcOf(type),
+        pivotCategory: familyOf(type),
+        bedroom: bedroomCode(type),
+        rooms: familyOf(type) === 'Camps' ? members.length : null,
+        unitStatus: facts ? 'Leased' : (held.status ?? 'Available'),
+      },
+      facts,
+      carryFrom,
+    });
+  }
+
+  // 3. properties: new ones from the report (BU from the report's business unit)
+  const newProps = new Map<string, { code: string; name: string; buCode: string; kind: 'BUILDING' | 'CAMP' }>();
+  const keep: PlannedLine[] = [];
+  for (const p of planned) {
+    if (propByKey.has(p.propertyKey)) {
+      keep.push(p);
+      continue;
+    }
+    if (!newProps.has(p.propertyKey)) {
+      const bu = buCodeOf(p.unit.businessUnit);
+      if (!bu) {
+        skipped.push({ what: p.unit.code, detail: `business unit "${p.unit.businessUnit ?? ''}" is not in the budget` });
+        continue;
+      }
+      newProps.set(p.propertyKey, { code: p.unit.propertyPrefix, name: p.unit.propertyName ?? p.unit.propertyPrefix, buCode: bu, kind: p.attrs.pivotCategory === 'Camps' ? 'CAMP' : 'BUILDING' });
+    }
+    keep.push(p);
+  }
+
+  // 4. preview
+  const carried = new Set(keep.map((p) => p.carryFrom?.id).filter(Boolean));
+  const hasInputs = (l: schema.LeaseLine) => l.budgetRate !== null || l.notes !== null || l.staffOwner !== null || l.increasePctOverride !== null || l.noRenewal || !l.renew1;
+  const buNames = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
+  const buOf = (p: PlannedLine) => propByKey.get(p.propertyKey)?.buCode ?? newProps.get(p.propertyKey)?.buCode ?? '?';
+  const byBu = new Map<string, { leases: number; rent: number }>();
+  for (const p of keep) {
+    const e = byBu.get(buOf(p)) ?? { leases: 0, rent: 0 };
+    if (p.facts) {
+      e.leases++;
+      e.rent += p.facts.currentRent;
+    }
+    byBu.set(buOf(p), e);
+  }
+  const leased = keep.filter((p) => p.facts);
   const preview: ImportPreview = {
     asOf,
     report: { rows: rows.length, units: rUnits.size, available: [...rUnits.values()].filter((u) => !u.leaseNumbers.length).length, leases: leases.size },
-    result: { leasedLines: 0, vacantLines: 0, currentRent: 0, contractedLines: 0, byBu: [] },
-    matchedByCode: 0,
-    matchedByTenant: [],
-    newProperties: [],
-    newLines: [],
-    notInReport: [],
-    skipped: [],
-    conflicts: [],
+    result: {
+      lines: keep.length,
+      leasedLines: leased.length,
+      vacantLines: keep.length - leased.length,
+      multiUnitLines: keep.filter((p) => p.members.length > 1).length,
+      currentRent: Math.round(leased.reduce((s, p) => s + p.facts!.currentRent, 0)),
+      contractedLines: leased.filter((p) => p.facts!.renewals.length).length,
+      byBu: [...byBu].map(([bu, e]) => ({ bu: `${bu} ${buNames.get(bu) ?? ''}`.trim(), leases: e.leases, rent: Math.round(e.rent) })).sort((a, b) => a.bu.localeCompare(b.bu)),
+    },
+    kept: keep.filter((p) => p.carryFrom && lineByKey.get(p.unit.key) === p.carryFrom).length,
+    newLines: keep
+      .filter((p) => !p.carryFrom)
+      .map((p) => ({ code: p.unit.code, property: p.unit.propertyName ?? '', tenant: p.facts?.tenant ?? null, rent: p.facts?.currentRent ?? null, units: p.members.length })),
+    removedLines: lines
+      .filter((l) => !carried.has(l.id))
+      .map((l) => ({ code: unitById.get(l.unitId)!.unitCode, property: propById.get(l.propertyId)?.name ?? '', tenant: l.tenant, inputs: hasInputs(l) })),
+    newProperties: [...newProps.values()].map((p) => ({ code: p.code, name: p.name, bu: p.buCode })),
+    skipped,
+    conflicts,
   };
-
-  // 1. report units → budget lines by unit code
-  const lineOfUnit = new Map<string, schema.LeaseLine>();
-  for (const u of rUnits.values()) {
-    const l = lineByKey.get(u.key);
-    if (l) lineOfUnit.set(u.key, l);
-  }
-  const touched = new Set([...lineOfUnit.values()].map((l) => l.id));
-
-  // 2. leases → lines: through their units; a line can hold several leases (contract years of a new lease)
-  const assigned = new Map<number, Assignment[]>();
-  const assign = (lineId: number, a: Assignment) => assigned.set(lineId, [...(assigned.get(lineId) ?? []), a]);
-  const unplaced: ReportLease[] = [];
-  const matchedByLease = new Map<ReportLease, Map<number, number>>(); // lease → line id → area of its report units
-  for (const lease of leases.values()) {
-    const matched = new Map<number, number>();
-    for (const k of lease.units) {
-      const l = lineOfUnit.get(k);
-      if (l) matched.set(l.id, (matched.get(l.id) ?? 0) + (rUnits.get(k)!.area ?? 0));
-    }
-    if (matched.size) matchedByLease.set(lease, matched);
-    else unplaced.push(lease);
-  }
-  // a unit in several running leases at once (e.g. a mezzanine shared by neighbouring offices) carries
-  // no rent of its own: each lease keeps its rent on its other units
-  const lineCode = new Map(lines.map((l) => [l.id, unitById.get(l.unitId)!.unitCode]));
-  const runningOnLine = new Map<number, ReportLease[]>();
-  for (const [lease, m] of matchedByLease)
-    if (lease.periods.some((p) => p.start <= asOf && p.end >= asOf)) for (const id of m.keys()) runningOnLine.set(id, [...(runningOnLine.get(id) ?? []), lease]);
-  for (const [id, ls] of runningOnLine) {
-    if (ls.length < 2) continue;
-    const moved = ls.filter((lease) => matchedByLease.get(lease)!.size > 1);
-    for (const lease of moved) matchedByLease.get(lease)!.delete(id);
-    if (moved.length) preview.skipped.push({ what: lineCode.get(id)!, detail: `shared by ${ls.length} running leases (${ls.map((l) => l.number).join(', ')}); their rent stays on their other units` });
-  }
-  for (const [lease, matched] of matchedByLease) {
-    preview.matchedByCode++;
-    // a lease on several budget lines is spread over them by area (equally when areas are missing)
-    const totalArea = [...matched.values()].reduce((a, b) => a + b, 0);
-    for (const [lineId, area] of matched) assign(lineId, { lease, share: matched.size === 1 ? 1 : totalArea > 0 ? area / totalArea : 1 / matched.size });
-  }
-
-  // 3. leases on none of the budget's unit codes: budget lines held under a merged code (…-Unit-00448)
-  // or a group name never appear in the report. Match them within the property by last known tenant.
-  const orphansByProp = new Map<number, schema.LeaseLine[]>();
-  for (const l of lines) if (!touched.has(l.id)) orphansByProp.set(l.propertyId, [...(orphansByProp.get(l.propertyId) ?? []), l]);
-  const unplacedByProp = new Map<string, ReportLease[]>();
-  for (const lease of unplaced) {
-    const pk = rUnits.get(lease.units[0])!.propertyKey;
-    unplacedByProp.set(pk, [...(unplacedByProp.get(pk) ?? []), lease]);
-  }
-  const stillUnplaced: ReportLease[] = [];
-  for (const [pk, ls] of unplacedByProp) {
-    const prop = propByKey.get(pk);
-    const orphans = prop ? [...(orphansByProp.get(prop.id) ?? [])] : [];
-    const total = (l: ReportLease) => selectContracts(l.periods, asOf).current?.amount ?? 0;
-    for (const lease of [...ls].sort((a, b) => total(b) - total(a))) {
-      let best: schema.LeaseLine | null = null;
-      let bestScore = 0;
-      for (const o of orphans) {
-        const s = nameSimilarity(priorTenant.get(o.unitId) ?? null, lease.tenant);
-        if (s > bestScore) [best, bestScore] = [o, s];
-      }
-      if (!best || bestScore < 0.5) {
-        // a single merged-code line and a single lease left in the property belong together
-        const merged = orphans.filter((o) => /-UNIT-\d+$/i.test(unitById.get(o.unitId)!.unitCode));
-        if (ls.length === 1 && merged.length === 1) best = merged[0];
-        else best = null;
-      }
-      if (!best) {
-        stillUnplaced.push(lease);
-        continue;
-      }
-      orphans.splice(orphans.indexOf(best), 1);
-      touched.add(best.id);
-      assign(best.id, { lease, share: 1 });
-      preview.matchedByTenant.push({ lease: lease.number, tenant: lease.tenant, line: unitById.get(best.unitId)!.unitCode, property: prop!.name });
-    }
-    if (prop) orphansByProp.set(prop.id, orphans);
-  }
-
-  // 4. facts per line from its leases' contract years
-  const factsFor = (as: Assignment[], label: string): Facts | null => {
-    const periods = as.flatMap(({ lease, share }) => lease.periods.map((p) => ({ ...p, amount: r2(p.amount * share), lease, share })));
-    const { current, following } = selectContracts(periods, asOf);
-    if (!current) return null;
-    const running = periods.filter((p) => p.start <= asOf && p.end >= asOf && p.lease !== current.lease);
-    if (running.length) preview.conflicts.push(`${label}: ${running.length + 1} leases running at once (${[current, ...running].map((p) => p.lease.number).join(', ')}); using ${current.lease.number}`);
-    const lease = current.lease;
-    // later years of the same lease (or of a lease signed to follow it); overlapping years are dropped
-    const renewals: Period[] = [];
-    let end = current.end;
-    for (const p of following) {
-      if (p.start <= end) continue;
-      renewals.push({ start: p.start, end: p.end, amount: p.amount });
-      end = p.end;
-      if (renewals.length === 3) break;
-    }
-    const others = lease.units.length;
-    return {
-      leaseNumber: lease.number,
-      tenantCode: lease.tenantCode,
-      tenant: lease.tenant,
-      customerClass: lease.customerClass,
-      rentStart: lease.commencement,
-      currentStart: current.start,
-      currentEnd: current.end,
-      currentRent: current.amount,
-      securityDeposit: lease.securityDeposit === null ? null : r2(lease.securityDeposit * current.share),
-      fees: {
-        maintenance: r2((current.fees?.maintenance ?? 0) * current.share),
-        utility: r2((current.fees?.utility ?? 0) * current.share),
-        carPark: r2((current.fees?.carPark ?? 0) * current.share),
-      },
-      leaseRemarks: others > 1 ? `Lease ${lease.number} covers ${others} units${current.share < 1 ? ` (this line: ${Math.round(current.share * 100)}% by area)` : ''}` : null,
-      renewals,
-    };
-  };
-
-  for (const l of lines) {
-    const unit = unitById.get(l.unitId)!;
-    const as = assigned.get(l.id);
-    const facts = as ? factsFor(as, unit.unitCode) : null;
-    plan.lineFacts.set(l.id, facts);
-    if (!touched.has(l.id)) preview.notInReport.push({ code: unit.unitCode, property: propById.get(l.propertyId)?.name ?? '' });
-    // unit attributes from the report (fields the budget keys on — bedroom, unit type, R/C — are left alone)
-    const ru = rUnits.get(unitKey(unit.unitCode));
-    const leaseArea = (lease: ReportLease) => lease.units.reduce((s, k) => s + (rUnits.get(k)?.area ?? 0), 0);
-    if (ru) {
-      // a line standing for a whole lease group (a camp held on one of its rooms) takes the group's area
-      const whole = as?.length === 1 && as[0].share === 1 && as[0].lease.units.length > 1 ? as[0].lease : null;
-      const area = whole ? leaseArea(whole) : ru.area;
-      plan.unitAttrs.set(unit.id, { area: area && area > 0 ? area : undefined, unitStatus: ru.status, resiCommercial: ru.unitType });
-    } else if (facts) {
-      // merged-code line: its area is the lease's units together
-      const lease = as![0].lease;
-      const area = leaseArea(lease);
-      plan.unitAttrs.set(unit.id, { area: unit.area ? undefined : area || undefined, unitStatus: 'Leased', resiCommercial: rUnits.get(lease.units[0])?.unitType ?? null });
-    }
-  }
-
-  // 5. leases and units not in the budget yet: new lines
-  const newPropByKey = new Map<string, { code: string; name: string; buCode: string; kind: 'BUILDING' | 'CAMP' }>();
-  const propertyFor = (u: ReportUnit) => {
-    const p = propByKey.get(u.propertyKey);
-    if (p) return { code: p.code, kind: p.kind };
-    let np = newPropByKey.get(u.propertyKey);
-    if (!np) {
-      const bu = buCodeOf(u.businessUnit);
-      if (!bu) return null;
-      np = { code: u.propertyPrefix, name: u.propertyName ?? u.propertyPrefix, buCode: bu, kind: /LABOUR/i.test(u.unitType ?? '') ? 'CAMP' : 'BUILDING' };
-      newPropByKey.set(u.propertyKey, np);
-    }
-    return { code: np.code, kind: np.kind };
-  };
-  const addNew = (u: ReportUnit, facts: Facts | null, units: number, area: number | null) => {
-    const p = propertyFor(u);
-    if (!p) {
-      preview.skipped.push({ what: u.code, detail: `business unit "${u.businessUnit ?? ''}" is not in the budget` });
-      return;
-    }
-    const existing = unitByKey.get(u.key);
-    plan.newUnits.push({
-      propertyCode: p.code,
-      existingUnitId: existing?.id ?? null,
-      unit: { unitCode: u.code, area, unitType: u.unitType, bedroom: u.bedrooms, rc: rcOf(u.unitType), unitStatus: u.status, resiCommercial: u.unitType },
-      facts,
-    });
-    preview.newLines.push({ code: u.code, property: u.propertyName ?? p.code, tenant: facts?.tenant ?? null, rent: facts?.currentRent ?? null, units });
-  };
-  for (const lease of stillUnplaced) {
-    const first = rUnits.get([...lease.units].sort()[0])!;
-    const facts = factsFor([{ lease, share: 1 }], first.code);
-    const area = lease.units.reduce((s, k) => s + (rUnits.get(k)?.area ?? 0), 0);
-    if (facts && lease.units.length > 1) facts.leaseRemarks = `Lease ${lease.number} covers ${lease.units.length} units (${Math.round(area).toLocaleString('en-US')} sq ft)`;
-    addNew(first, facts, lease.units.length, area || null);
-  }
-  let campRooms = 0;
-  for (const u of rUnits.values()) {
-    if (u.leaseNumbers.length || lineOfUnit.has(u.key)) continue;
-    // available camp rooms are budgeted as groups the PMs set up (e.g. "CAMP 3 GROUP 1 - 4 rooms"), not room by room
-    const p = propByKey.get(u.propertyKey);
-    if (p?.kind === 'CAMP' || /LABOUR/i.test(u.unitType ?? '')) {
-      campRooms++;
-      continue;
-    }
-    addNew(u, null, 1, u.area);
-  }
-  if (campRooms) preview.skipped.push({ what: `${campRooms} available camp rooms`, detail: 'not added room by room: budget vacant camp rooms as groups in the Lease Budget' });
-  plan.newProperties = [...newPropByKey.values()];
-  preview.newProperties = plan.newProperties.map((p) => ({ code: p.code, name: p.name, bu: p.buCode }));
-
-  // 6. totals
-  const buOfProp = new Map(props.map((p) => [p.id, p.buCode]));
-  const byBu = new Map<string, { leases: number; rent: number }>();
-  const count = (bu: string, f: Facts | null) => {
-    const e = byBu.get(bu) ?? { leases: 0, rent: 0 };
-    if (f) {
-      e.leases++;
-      e.rent += f.currentRent;
-      preview.result.leasedLines++;
-      preview.result.currentRent += f.currentRent;
-      if (f.renewals.length) preview.result.contractedLines++;
-    } else preview.result.vacantLines++;
-    byBu.set(bu, e);
-  };
-  for (const l of lines) count(buOfProp.get(l.propertyId) ?? '?', plan.lineFacts.get(l.id) ?? null);
-  for (const n of plan.newUnits) count(propByKey.get(propertyKey(n.propertyCode))?.buCode ?? newPropByKey.get(propertyKey(n.propertyCode))?.buCode ?? '?', n.facts);
-  const buNames = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
-  preview.result.byBu = [...byBu].map(([bu, e]) => ({ bu: `${bu} ${buNames.get(bu) ?? ''}`.trim(), leases: e.leases, rent: Math.round(e.rent) })).sort((a, b) => a.bu.localeCompare(b.bu));
-  preview.result.currentRent = Math.round(preview.result.currentRent);
-  return { plan, preview };
+  return { plan: { lines: keep, newProperties: [...newProps.values()] }, preview };
 }
 
 // ---- apply ---------------------------------------------------------------------------------------
@@ -599,12 +539,26 @@ const NO_LEASE = {
   currentSchedule: null, vacant: true,
 } as const;
 
-function renewalFields(prev: number, facts: Facts | null) {
+/** Budget inputs a PM may have entered on a line; they follow the unit into the rebuilt line. */
+const INPUT_FIELDS = [
+  'staffOwner', 'mfCurrent', 'renew1', 'noRenewal', 'budgetRate', 'increasePctOverride', 'cheques', 'notes',
+  'r1Rent', 'r1Start', 'r1End', 'r1Mf', 'r1Schedule', 'r2Renew', 'r2Rent', 'r2Start', 'r2End', 'r2Mf', 'r2Schedule',
+  'r3Renew', 'r3Rent', 'r3Start', 'r3End', 'r3Mf', 'r3Schedule',
+] as const;
+
+function carriedInputs(l: schema.LeaseLine | null) {
+  if (!l) return {};
   const out: Record<string, unknown> = {};
-  // drop the contracted years loaded last time; keep anything a PM entered on other renewals
-  for (let i = 1; i <= prev; i++) Object.assign(out, { [`r${i}Rent`]: null, [`r${i}Start`]: null, [`r${i}End`]: null, [`r${i}Schedule`]: null });
-  if (prev >= 2) out.r2Renew = null;
-  if (prev >= 3) out.r3Renew = null;
+  for (const k of INPUT_FIELDS) out[k] = l[k];
+  // contracted years loaded by the last import are not inputs: drop them (renewalFields refills)
+  for (let i = 1; i <= l.contracted; i++) Object.assign(out, { [`r${i}Rent`]: null, [`r${i}Start`]: null, [`r${i}End`]: null, [`r${i}Schedule`]: null });
+  if (l.contracted >= 2) out.r2Renew = null;
+  if (l.contracted >= 3) out.r3Renew = null;
+  return out;
+}
+
+function renewalFields(facts: Facts | null) {
+  const out: Record<string, unknown> = {};
   const rs = facts?.renewals ?? [];
   rs.forEach((p, j) => {
     const i = j + 1;
@@ -645,29 +599,33 @@ function factFields(line: Pick<schema.LeaseLine, 'leaseNumber' | 'currentStart' 
 export async function applyImport(versionId: number, rows: ReportRow[], userId: number | null, fileName?: string) {
   const { plan, preview } = await planImport(versionId, rows);
   const now = new Date();
-  const lines = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
-  const lineById = new Map(lines.map((l) => [l.id, l]));
 
   await db.transaction(async (tx) => {
     for (const p of plan.newProperties) await tx.insert(schema.properties).values(p).onConflictDoNothing();
     const props = await tx.select().from(schema.properties);
     const propByKey = new Map(props.map((p) => [propertyKey(p.code), p]));
+    const unitByKey = new Map((await tx.select().from(schema.units)).map((u) => [unitKey(u.unitCode), u]));
 
-    for (const [lineId, facts] of plan.lineFacts) {
-      const line = lineById.get(lineId)!;
-      const set = facts ? { ...factFields(line, facts, now), ...renewalFields(line.contracted, facts) } : { ...NO_LEASE, leaseSyncedAt: now, ...renewalFields(line.contracted, null) };
-      await tx.update(schema.leaseLines).set(set).where(eq(schema.leaseLines.id, lineId));
-    }
-    for (const [unitId, a] of plan.unitAttrs) {
-      await tx.update(schema.units).set({ unitStatus: a.unitStatus, resiCommercial: a.resiCommercial, ...(a.area !== undefined ? { area: a.area } : {}) }).where(eq(schema.units.id, unitId));
-    }
-    for (const n of plan.newUnits) {
-      const prop = propByKey.get(propertyKey(n.propertyCode))!;
-      let unitId = n.existingUnitId;
-      if (!unitId) [{ id: unitId }] = await tx.insert(schema.units).values({ propertyId: prop.id, ...n.unit }).returning({ id: schema.units.id });
-      const base = { versionId, unitId, propertyId: prop.id, renew1: true };
-      const values = n.facts ? { ...base, ...factFields(null, n.facts, now), ...renewalFields(0, n.facts) } : { ...base, ...NO_LEASE, leaseSyncedAt: now };
-      await tx.insert(schema.leaseLines).values(values).onConflictDoNothing();
+    // the version's lines are rebuilt from the report
+    await tx.delete(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
+    for (const p of plan.lines) {
+      const prop = propByKey.get(p.propertyKey)!;
+      // unit details come from the report only; beds (capacity) have no source there and stay as entered
+      const attrs = { ...p.attrs, propertyId: prop.id, mergedUnitNumber: null, landlord: null };
+      let unit = unitByKey.get(p.unit.key);
+      if (unit) await tx.update(schema.units).set(attrs).where(eq(schema.units.id, unit.id));
+      else [unit] = await tx.insert(schema.units).values({ unitCode: p.unit.code, ...attrs }).returning();
+      const old = p.carryFrom;
+      await tx.insert(schema.leaseLines).values({
+        versionId,
+        unitId: unit.id,
+        propertyId: prop.id,
+        renew1: true,
+        ...carriedInputs(old),
+        ...(p.facts ? factFields(old, p.facts, now) : { ...NO_LEASE, leaseSyncedAt: now }),
+        ...renewalFields(p.facts),
+        updatedBy: userId,
+      });
     }
 
     await tx.insert(schema.auditLog).values({
@@ -680,16 +638,16 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
         asOf: preview.asOf,
         report: preview.report,
         result: { ...preview.result, byBu: undefined },
-        matchedByTenant: preview.matchedByTenant.length,
+        kept: preview.kept,
         newLines: preview.newLines.length,
+        removedLines: preview.removedLines.map((r) => r.code),
         newProperties: preview.newProperties.map((p) => p.code),
-        notInReport: preview.notInReport.length,
       },
     });
     await recalcLines(tx, versionId);
   });
 
-  // new lines need a submission row in this version
+  // every property with lines needs a submission row in this version
   await db.execute(sql`
     insert into submissions (version_id, property_id, status)
     select distinct ${versionId}::int, property_id, 'DRAFT'::submission_status from lease_lines where version_id = ${versionId}

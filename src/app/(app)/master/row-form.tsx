@@ -47,7 +47,51 @@ function Field({ label, hint, locked, wide, children }: { label: string; hint?: 
 }
 
 // read-only values: dashed outline, no fill, so they never look like inputs
-const ro = 'w-full min-h-[30px] cursor-default truncate rounded-md border border-dashed border-slate-200 bg-transparent px-2 py-1 text-slate-600';
+/** RERA low / high rent for the row's property and bedroom code: entered by the PM, saved on its own. */
+function ReraEditor({ row, canEdit, onSave }: { row: Row; canEdit: boolean; onSave?: (min: number | null, max: number | null) => Promise<string | null> }) {
+  const [min, setMin] = useState(row.reraMin === null ? '' : String(row.reraMin));
+  const [max, setMax] = useState(row.reraMax === null ? '' : String(row.reraMax));
+  const [msg, setMsg] = useState<{ error?: string; ok?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parse = (s: string) => (s.replace(/,/g, '').trim() === '' ? null : Number(s.replace(/,/g, '')));
+  const dirty = parse(min) !== row.reraMin || parse(max) !== row.reraMax;
+  if (!canEdit)
+    return (
+      <div className="text-xs text-slate-600">
+        {row.reraMin === null ? 'Not entered yet.' : `Low ${fmt(row.reraMin)} · High ${fmt(row.reraMax)}`}
+        {!row.bedroom && ' The unit has no bedroom / RERA code.'}
+      </div>
+    );
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="flex flex-col gap-0.5">
+        <span className="text-[11px] font-medium text-slate-500">Low (annual rent)</span>
+        <input className="input w-36 text-right tabular-nums" inputMode="decimal" value={min} onChange={(e) => setMin(e.target.value)} placeholder="blank" />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-[11px] font-medium text-slate-500">High (annual rent)</span>
+        <input className="input w-36 text-right tabular-nums" inputMode="decimal" value={max} onChange={(e) => setMax(e.target.value)} placeholder="blank" />
+      </label>
+      <button
+        className="btn-primary btn-xs"
+        disabled={!dirty || busy}
+        onClick={async () => {
+          const lo = parse(min), hi = parse(max);
+          if ((lo !== null && !Number.isFinite(lo)) || (hi !== null && !Number.isFinite(hi))) return setMsg({ error: 'Enter numbers' });
+          setBusy(true);
+          const err = await onSave!(lo, hi);
+          setBusy(false);
+          setMsg(err ? { error: err } : { ok: 'Saved · units with this code recalculated' });
+        }}
+      >
+        {busy ? 'Saving…' : 'Save RERA'}
+      </button>
+      <span className={`text-xs ${msg?.error ? 'text-red-600' : 'text-emerald-700'}`}>{msg?.error ?? msg?.ok ?? (row.reraMin === null ? 'Blank: renewals get no increase until entered' : '')}</span>
+    </div>
+  );
+}
+
+const ro ='w-full min-h-[30px] cursor-default truncate rounded-md border border-dashed border-slate-200 bg-transparent px-2 py-1 text-slate-600';
 const box = (changed: boolean, override?: boolean) => `input w-full ${changed ? 'ring-1 ring-sky-500' : ''} ${override ? 'cell-override' : ''}`;
 
 export function RowForm({
@@ -60,11 +104,14 @@ export function RowForm({
   onPrev,
   onNext,
   onRemove,
+  onSaveRera,
 }: {
   row: Row;
   year: number;
   staffDiscount: number;
   isAdmin: boolean;
+  /** saves the RERA range of this row's property and bedroom code; resolves to an error message or null */
+  onSaveRera?: (min: number | null, max: number | null) => Promise<string | null>;
   /** saves a patch; resolves to an error message or null */
   onSave: (patch: RowPatch) => Promise<string | null>;
   onClose: () => void;
@@ -215,11 +262,11 @@ export function RowForm({
             <Field label="Unit status" locked={oracleLock}>
               {text('unitStatus', canOracle)}
             </Field>
-            <Field label="Bedroom / RERA code" hint="Key into the RERA index">
-              {text('bedroom', canEdit)}
+            <Field label="Bedroom / RERA code" hint="From the unit type · key into the RERA index" locked={oracleLock}>
+              {text('bedroom', canOracle)}
             </Field>
-            <Field label="R / C / L" hint="R residential (no VAT) · C commercial · L labour">
-              {canEdit ? (
+            <Field label="R / C / L" hint="R residential (no VAT) · C commercial · L labour" locked={oracleLock}>
+              {canOracle ? (
                 <select className={box(changed('rc'))} value={val('rc')} onChange={(e) => set('rc', e.target.value)}>
                   <option>R</option>
                   <option>C</option>
@@ -229,15 +276,17 @@ export function RowForm({
                 show(val('rc'))
               )}
             </Field>
-            <Field label="Category / budget type" hint="Groups the unit in reports">
-              {text('pivotCategory', canEdit)}
+            <Field label="Category" hint="From the unit type · groups the unit in reports" locked={oracleLock}>
+              {text('pivotCategory', canOracle)}
             </Field>
             {camp && (
               <>
-                <Field label="Beds" hint="Camps are priced per bed">
+                <Field label="Rooms" hint="Rooms in the lease (Oracle)" locked={oracleLock}>
+                  {num('rooms', canOracle, { int: true })}
+                </Field>
+                <Field label="Beds" hint="Not in the Oracle report: enter it · camps are priced per bed">
                   {num('capacity', canEdit, { int: true })}
                 </Field>
-                <Field label="Rooms">{num('rooms', canEdit, { int: true })}</Field>
               </>
             )}
           </Grid>
@@ -453,10 +502,10 @@ export function RowForm({
           </Section>
         )}
 
-        <Section title="RERA check" tone="calc" note="Read only">
+        <Section title="RERA index" tone="input" note={`${row.propertyCode} · ${row.bedroom ?? 'no RERA code'} · applies to every unit of this property with this code`}>
+          <ReraEditor row={row} canEdit={canEdit && !!row.bedroom && !!onSaveRera} onSave={onSaveRera} />
+          <div className="mt-3" />
           <Grid>
-            <Field label="Index row">{show(`${row.propertyCode}-${row.bedroom ?? ''}`)}</Field>
-            <Field label="Low / High">{show(row.reraMin === null ? null : `${fmt(row.reraMin)} – ${fmt(row.reraMax)}`, true)}</Field>
             <Field label="Average">{show(row.reraAverage === null ? null : fmt(row.reraAverage), true)}</Field>
             <Field label="Below RERA average">{show(row.reraGap === null ? null : pct(row.reraGap), true)}</Field>
             <Field label="Increase allowed">{show(row.increasePct === null ? null : pct(row.increasePct), true)}</Field>

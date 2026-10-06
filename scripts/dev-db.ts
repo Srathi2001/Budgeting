@@ -18,6 +18,13 @@ async function main() {
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  // Optional clean shutdown after N minutes, for runners that hard-kill long processes
+  // (a hard kill can leave the data folder corrupt): DEV_DB_MAX_MINUTES=115
+  const max = Number(process.env.DEV_DB_MAX_MINUTES ?? 0);
+  if (max > 0) {
+    console.log(`Will stop cleanly after ${max} minutes`);
+    setTimeout(stop, max * 60_000);
+  }
 }
 
 main().catch((e) => {

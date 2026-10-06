@@ -31,15 +31,22 @@ The grid follows the column order of `Consolidated Revenue Budget 2026_Template.
 1. **Preview.** Choosing the file shows what would change, with nothing saved: leased and vacant lines, current annual rent by business unit, matches to check, new lines and properties, and budget lines that are no longer in the report.
 2. **Import.** Writes the leases and recalculates every unit. Budget inputs (renew Y/N, budget rate, cheques, notes) are kept.
 
+**The import rebuilds the version's lines from the report. Nothing is taken from the previous year's budget:**
+* **One line per lease:** a lease covering several units (camps, whole buildings, merged units) is one line, held on one of its unit codes.
+* **One line per available unit.**
+* **Lines not in the report are removed.**
+* **Unit details are derived from the Oracle unit type:** R/C/L, category, the bedroom/RERA code (STUDIO, 2BR, 3BR VILLA, OFFICE, SHOP, …), and the number of rooms for camps.
+* **Fields the report doesn't have stay blank:** camp beds, budget rates, and the **RERA index**, which property managers enter in the row form for each property and RERA code.
+* **Budget inputs on a line carry over** when its unit is still in the report.
+
 The report has one row per unit per contract year, for every unit (leased or available). The import, in [`src/lib/import/tenant-lease.ts`](src/lib/import/tenant-lease.ts):
 
 * **Current contract:** the contract year running today. If none is running, the year that ended last (renewal pending) or, for a lease that hasn't started, its first year.
 * **Contracted later years** become fixed 1st, 2nd and 3rd renewals, replacing the RERA-based calculation. A re-import replaces only these; renewals typed in by a PM stay.
 * **Leases on several units** repeat the lease total on each unit. The total is spread over the budget lines it covers, by area. A unit shared by several running leases (e.g. a mezzanine) carries no rent of its own.
 * **Matching** is by unit code. `P`-coded PMC units (`50B113P-…`) match their `N` units, since PMC properties were re-coded in Oracle and the old lease left *Suspended*.
-* **Lines held under a merged code or group name** (camp lease groups such as `10B110N-Unit-00720`, whole-building leases such as Al Rafa) never appear in the report. They're matched within the property by last known tenant; the preview lists them to check.
-* **New units and leases** become new lines; a property not in the budget is added (set its PM in Admin → Properties). Available camp rooms aren't added room by room: PMs budget them as groups.
-* **Budget lines not in the report** are kept with their budget inputs but no current lease.
+* **New units and leases** become new lines. A property not in the budget is added: set its PM in Admin → Properties.
+* **Other charges:** maintenance fee, utility fee and additional car park are imported per lease, separately from rent. They appear in the **Other Income** tab, by property, and aren't part of rent revenue.
 * **Personal data** in the report (phone, email, passport, Emirates ID, address) is never read.
 
 The same import runs from the command line: `npx tsx scripts/lease-import.ts <versionId> <report.xlsx>` previews, and adding `--apply` imports.

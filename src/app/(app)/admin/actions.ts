@@ -50,6 +50,9 @@ export async function createNextVersion(sourceVersionId: number, name: string): 
 export async function recalcVersion(versionId: number): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
+    const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+    // a locked version keeps its stored results (unit details are shared with later years)
+    if (v?.status === 'LOCKED') throw new Error(`${v.name} is locked: its figures are kept as they were`);
     await db.transaction((tx) => recalcLines(tx, versionId));
     await audit(user.id, versionId, 'version', 'recalculate', null);
     return 'Recalculated';

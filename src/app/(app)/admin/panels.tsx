@@ -677,10 +677,11 @@ export function LeaseImportPanel({
         <h3 className="text-sm font-semibold">Tenant and Lease Details Report</h3>
         <p className="mt-1 max-w-4xl text-xs text-slate-500">
           Export it from Oracle (Custom Applications → Lease Reports → Reports → <b>Tenant and Lease Details Report</b>) for all business units, then
-          choose the file here. It is the only source for units and current leases: unit status and area, lease number, tenant, contract dates,
-          rent, security deposit, and lease years already contracted. Choosing the file shows what would change; nothing is saved until you
-          click <b>Import</b>. The import overwrites lease details in <b>{versionName}</b>, including anything typed in, and keeps the budget inputs
-          (renewal Y/N, budget rate, cheques, notes). Personal data in the report (phone, email, passport, Emirates ID) is not read.
+          choose the file here. It is the only source for the unit list and current leases: one line per lease (a lease on several units is one
+          line) and one per available unit, with unit type, area, status, tenant, contract dates, rent, deposit, other charges and contracted later
+          years. Fields the report doesn&apos;t have stay blank. Choosing the file shows what would change; nothing is saved until you click{' '}
+          <b>Import</b>. The lines of <b>{versionName}</b> are rebuilt; budget inputs (outcome, budget rate, overrides, cheques, notes) stay with
+          their unit. Personal data in the report (phone, email, passport, Emirates ID) is not read.
         </p>
         <div className="mt-3 text-xs text-slate-600">
           {stats.leased.toLocaleString('en-US')} of {stats.lines.toLocaleString('en-US')} lines have a current lease · last import {stats.lastImport ?? 'never'}
@@ -716,7 +717,11 @@ export function LeaseImportPanel({
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Tile label="Report" value={`${fmt(p.report.units)} units`} sub={`${fmt(p.report.leases)} leases · ${fmt(p.report.available)} available · ${fmt(p.report.rows)} rows`} />
-            <Tile label="Budget lines after import" value={`${fmt(p.result.leasedLines)} leased`} sub={`${fmt(p.result.vacantLines)} without a lease`} />
+            <Tile
+              label="Budget lines after import"
+              value={`${fmt(p.result.lines)} lines`}
+              sub={`${fmt(p.result.leasedLines)} leased (${fmt(p.result.multiUnitLines)} on several units) · ${fmt(p.result.vacantLines)} available`}
+            />
             <Tile label="Current annual rent" value={`AED ${fmt(p.result.currentRent)}`} sub="current contract year, all lines" />
             <Tile label="Contracted later years" value={`${fmt(p.result.contractedLines)} lines`} sub="set as fixed renewals" />
           </div>
@@ -740,15 +745,13 @@ export function LeaseImportPanel({
               </tbody>
             </table>
           </div>
-          <div className="text-xs text-slate-500">
-            {fmt(p.matchedByCode)} leases matched to budget lines by unit code.
-          </div>
+          <div className="text-xs text-slate-500">{fmt(p.kept)} lines keep their unit code and budget inputs.</div>
           <ListBlock
-            title="Matched by tenant"
-            hint="budget lines held under a merged code or group name, matched within the property by last known tenant: check these"
-            items={p.matchedByTenant}
-            cols={['Property', 'Budget line', 'Lease', 'Tenant']}
-            row={(x) => [x.property, x.line, x.lease, x.tenant]}
+            title="Lines removed"
+            hint="not in the report, or now part of a lease covering several units; budget inputs on them are dropped"
+            items={p.removedLines}
+            cols={['Property', 'Line', 'Tenant (before)', 'Had budget inputs']}
+            row={(x) => [x.property, x.code, x.tenant ?? '', x.inputs ? 'Yes' : '']}
           />
           <ListBlock
             title="New lines"
@@ -758,13 +761,6 @@ export function LeaseImportPanel({
             row={(x) => [x.property, x.code, x.tenant ?? '(available)', x.units, x.rent === null ? '' : fmt(x.rent)]}
           />
           <ListBlock title="New properties" hint="set the property manager in Admin → Properties" items={p.newProperties} cols={['Code', 'Name', 'BU']} row={(x) => [x.code, x.name, x.bu]} />
-          <ListBlock
-            title="Budget lines not in the report"
-            hint="kept with their budget inputs, but with no current lease (e.g. vacant-room groups set up by PMs)"
-            items={p.notInReport}
-            cols={['Property', 'Budget line']}
-            row={(x) => [x.property, x.code]}
-          />
           <ListBlock title="Not imported" hint="" items={p.skipped} cols={['What', 'Why']} row={(x) => [x.what, x.detail]} />
           <ListBlock title="Overlapping leases" hint="one budget line with more than one running lease" items={p.conflicts} cols={['Detail']} row={(x) => [x]} />
         </div>

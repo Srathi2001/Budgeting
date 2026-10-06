@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildModel, nameSimilarity, selectContracts, unitKey, type ReportRow } from './tenant-lease';
+import { bedroomCode, buildModel, familyOf, rcOf, selectContracts, unitKey, type ReportRow } from './tenant-lease';
 
 const row = (unitCode: string, leaseNumber: string | null, start: string, end: string, amount: number, extra: Partial<ReportRow> = {}): ReportRow => ({
   businessUnit: 'THE REAL ESTATE HOLDING COMPANY LLC', propertyName: 'P', unitCode, bedrooms: null, area: 100, unitType: 'Office',
@@ -63,9 +63,14 @@ describe('buildModel', () => {
   });
 });
 
-describe('nameSimilarity', () => {
-  it('ignores legal suffixes and punctuation', () => {
-    expect(nameSimilarity('CETULA FACADE CONTRACTING L.L.C', 'Cetula Facade Contracting LLC')).toBe(1);
-    expect(nameSimilarity('J A R S TECHNICAL WORKS L.L.C', 'DULSCO (L.L.C)')).toBe(0);
+describe('unit details derived from the Oracle unit type', () => {
+  it('family, R/C/L and RERA code', () => {
+    expect([familyOf('2 Bed Room- Apartment'), rcOf('2 Bed Room- Apartment'), bedroomCode('2 Bed Room- Apartment')]).toEqual(['Residential', 'R', '2BR']);
+    expect([familyOf('5 Bed Room- Villa'), bedroomCode('5 Bed Room- Villa')]).toEqual(['Residential', '5BR VILLA']);
+    expect([familyOf('Studio'), bedroomCode('Studio')]).toEqual(['Residential', 'STUDIO']);
+    expect([familyOf('Labour Camp'), rcOf('Labour Camp')]).toEqual(['Camps', 'L']);
+    expect([familyOf('Shop'), rcOf('Shop'), bedroomCode('Shop')]).toEqual(['Retail', 'C', 'SHOP']);
+    expect([familyOf('Warehouse'), familyOf('Office'), familyOf('Hotel')]).toEqual(['Warehouse', 'Commercial', 'Commercial']);
+    expect(bedroomCode(null)).toBeNull();
   });
 });

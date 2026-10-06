@@ -75,6 +75,56 @@ export async function addUnit(
   return { row };
 }
 
+const ReraSchema = z.object({
+  propertyId: z.number().int(),
+  bedroom: z.string().trim().min(1, 'The unit has no bedroom / RERA code').max(40),
+  min: z.number().min(0).max(1e9).nullable(),
+  max: z.number().min(0).max(1e9).nullable(),
+});
+
+/**
+ * RERA rent range for one property and bedroom code, entered by the property's PM (or Finance).
+ * Both blank removes the row. Every line of the property with that code is recalculated.
+ */
+export async function saveRera(versionId: number, input: z.infer<typeof ReraSchema>): Promise<{ rows?: MasterRow[]; error?: string }> {
+  const user = await requireUser();
+  const parsed = ReraSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
+  const { propertyId, bedroom, min, max } = parsed.data;
+  if ((min === null) !== (max === null)) return { error: 'Enter both the low and the high rent, or clear both' };
+  if (min !== null && max !== null && min > max) return { error: 'The low rent is above the high rent' };
+  const check = await canEditProperty(user, versionId, propertyId);
+  if (!check.ok) return { error: check.reason };
+  const [property] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
+  if (!property) return { error: 'Property not found' };
+  const code = bedroom.toUpperCase();
+
+  const lineIds = await db.transaction(async (tx) => {
+    const where = and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
+    await tx.delete(schema.reraIndex).where(where);
+    if (min !== null && max !== null) await tx.insert(schema.reraIndex).values({ versionId, propertyCode: property.code, bedroom: code, min, max });
+    await tx.insert(schema.auditLog).values({
+      userId: user.id,
+      versionId,
+      propertyId,
+      entity: 'rera_index',
+      entityId: `${property.code}|${code}`,
+      action: min === null ? 'delete' : 'upsert',
+      changes: { min, max },
+    });
+    const lines = await tx
+      .select({ id: schema.leaseLines.id, bedroom: schema.units.bedroom })
+      .from(schema.leaseLines)
+      .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
+      .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId)));
+    const ids = lines.filter((l) => (l.bedroom ?? '').trim().toUpperCase() === code).map((l) => l.id);
+    if (ids.length) await recalcLines(tx, versionId, ids);
+    return ids;
+  });
+  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  return { rows: await loadMasterRows(versionId, { lineIds, editableProperties: await editablePropertyIds(user, version) }) };
+}
+
 export async function removeLine(versionId: number, lineId: number): Promise<{ error?: string }> {
   const user = await requireUser();
   const [line] = await db

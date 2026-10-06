@@ -1,4 +1,5 @@
 // Tenant and Lease Details Report import from the command line (same as Admin → Lease data).
+// The version's lines are rebuilt from the report; budget inputs follow their units.
 //
 //   npx tsx scripts/lease-import.ts <versionId> <Tenant and Lease Details Report.xlsx>           preview only
 //   npx tsx scripts/lease-import.ts <versionId> <Tenant and Lease Details Report.xlsx> --apply   import
@@ -8,16 +9,13 @@ import { basename } from 'node:path';
 import { applyImport, parseReport, planImport, type ImportPreview } from '../src/lib/import/tenant-lease';
 
 function show(p: ImportPreview) {
+  const r = p.result;
   console.log(`As of ${p.asOf}. Report: ${p.report.rows} rows, ${p.report.units} units, ${p.report.leases} leases, ${p.report.available} available`);
-  console.log(`Lines: ${p.result.leasedLines} leased, ${p.result.vacantLines} without a lease; current rent AED ${p.result.currentRent.toLocaleString('en-US')}; ${p.result.contractedLines} with contracted later years`);
-  console.table(p.result.byBu);
-  console.log(`Leases matched by unit code: ${p.matchedByCode}; by tenant: ${p.matchedByTenant.length}`);
-  for (const m of p.matchedByTenant) console.log(`   ${m.property} · ${m.line} ← ${m.lease} ${m.tenant}`);
-  console.log(`New lines: ${p.newLines.length}`);
-  for (const n of p.newLines.slice(0, 40)) console.log(`   ${n.property} · ${n.code} · ${n.tenant ?? '(available)'} · ${n.units} unit(s) · ${n.rent ?? ''}`);
+  console.log(`Lines: ${r.lines} (${r.leasedLines} leased, ${r.vacantLines} without a lease, ${r.multiUnitLines} covering several units); current rent AED ${r.currentRent.toLocaleString('en-US')}; ${r.contractedLines} with contracted later years`);
+  console.table(r.byBu);
+  console.log(`Kept (budget inputs carried): ${p.kept} · new lines: ${p.newLines.length} · removed lines: ${p.removedLines.length}`);
+  for (const n of p.removedLines.slice(0, 60)) console.log(`   removed ${n.property} · ${n.code}${n.inputs ? ' (had budget inputs)' : ''}`);
   console.log(`New properties: ${p.newProperties.map((x) => `${x.code} ${x.name} [${x.bu}]`).join('; ') || 'none'}`);
-  console.log(`Budget lines not in the report: ${p.notInReport.length}`);
-  for (const n of p.notInReport.slice(0, 60)) console.log(`   ${n.property} · ${n.code}`);
   for (const s of p.skipped) console.log(`Not imported: ${s.what}: ${s.detail}`);
   for (const c of p.conflicts) console.log(`Overlap: ${c}`);
 }

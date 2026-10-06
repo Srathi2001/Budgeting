@@ -181,6 +181,12 @@ export const ORACLE_FIELDS = [
   'area',
   'unitStatus',
   'resiCommercial',
+  // derived from the Oracle unit type on import
+  'unitType',
+  'bedroom',
+  'rc',
+  'pivotCategory',
+  'rooms',
   'mergedUnitNumber',
   'landlord',
   'leaseNumber',
