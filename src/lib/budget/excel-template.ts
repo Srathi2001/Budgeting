@@ -36,6 +36,7 @@ export function templateColumns(year: number): Col[] {
     { key: 'unitType', header: 'Unit type', width: 20, kind: 'text', get: (r) => r.resiCommercial ?? r.unitType },
     { key: 'bedroom', header: 'RERA code', width: 12, kind: 'text', get: (r) => r.bedroom },
     { key: 'area', header: 'Area (sq ft)', width: 11, kind: 'money', get: (r) => r.area },
+    { key: 'tenantCode', header: 'Tenant code', width: 12, kind: 'text', get: (r) => r.tenantCode },
     { key: 'tenant', header: 'Tenant', width: 32, kind: 'text', get: (r) => r.tenant },
     { key: 'leaseNumber', header: 'Lease no.', width: 15, kind: 'text', get: (r) => r.leaseNumber },
     { key: 'currentStart', header: 'Contract start', width: 12, kind: 'date', get: (r) => date(r.currentStart) },

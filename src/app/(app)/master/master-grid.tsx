@@ -395,6 +395,7 @@ export function MasterGrid({
         headerName: 'Current lease · Oracle',
         headerClass: 'hdr-fusion',
         children: [
+          oracleCol('tenantCode', 'Tenant Code', isAdmin),
           oracleCol('tenant', 'Tenant', isAdmin, 'text', { maxWidth: 260 }),
           oracleCol('leaseNumber', 'Lease No.', isAdmin),
           oracleCol('currentStart', 'Contract Start', isAdmin, 'date'),
