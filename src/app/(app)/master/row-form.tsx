@@ -274,6 +274,15 @@ export function RowForm({
             <Field label="Security deposit" locked={oracleLock}>
               {num('securityDeposit', canOracle)}
             </Field>
+            <Field label="Maintenance fee" hint="Other income · not in rent revenue">
+              {show(row.maintenanceFee ? fmt(row.maintenanceFee) : null, true)}
+            </Field>
+            <Field label="Utility fee" hint="Other income">
+              {show(row.utilityFee ? fmt(row.utilityFee) : null, true)}
+            </Field>
+            <Field label="Additional car park" hint="Other income">
+              {show(row.carParkFee ? fmt(row.carParkFee) : null, true)}
+            </Field>
             {row.leaseRemarks && (
               <Field label="Note" wide>
                 {show(row.leaseRemarks)}

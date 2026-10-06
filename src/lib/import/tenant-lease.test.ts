@@ -4,7 +4,7 @@ import { buildModel, nameSimilarity, selectContracts, unitKey, type ReportRow } 
 const row = (unitCode: string, leaseNumber: string | null, start: string, end: string, amount: number, extra: Partial<ReportRow> = {}): ReportRow => ({
   businessUnit: 'THE REAL ESTATE HOLDING COMPANY LLC', propertyName: 'P', unitCode, bedrooms: null, area: 100, unitType: 'Office',
   unitStatus: leaseNumber ? 'Leased' : 'Available', leaseNumber, tenantCode: 'T-1', tenantName: 'ACME LLC', customerClass: 'EXTERNAL PARTY',
-  commencement: start, start, end, amount, rentPerYear: amount, securityDeposit: null, maintenanceFee: null, ...extra,
+  commencement: start, start, end, amount, rentPerYear: amount, securityDeposit: null, maintenanceFee: null, utilityFee: null, carParkFee: null, ...extra,
 });
 
 describe('unitKey', () => {
@@ -36,7 +36,7 @@ describe('selectContracts', () => {
 describe('buildModel', () => {
   it('a lease total repeated on each of its units is counted once', () => {
     const { leases } = buildModel([row('A-GF-1', 'L1', '2026-01-01', '2026-12-31', 900), row('A-GF-2', 'L1', '2026-01-01', '2026-12-31', 900)]);
-    expect(leases.get('L1')!.periods).toEqual([{ start: '2026-01-01', end: '2026-12-31', amount: 900 }]);
+    expect(leases.get('L1')!.periods).toMatchObject([{ start: '2026-01-01', end: '2026-12-31', amount: 900 }]);
     expect(leases.get('L1')!.units).toHaveLength(2);
   });
   it('different amounts per unit are added up', () => {
@@ -48,6 +48,14 @@ describe('buildModel', () => {
     const { leases } = buildModel([row('A-GF-1', 'L1', '2025-05-01', '2026-04-30', 1250, { commencement: '2025-02-01', rentPerYear: 1000 })]);
     expect(leases.get('L1')!.periods[0].start).toBe('2025-02-01');
   });
+  it('fees are counted once per lease, per contract year', () => {
+    const { leases } = buildModel([
+      row('A-GF-1', 'L1', '2026-01-01', '2026-12-31', 900, { maintenanceFee: 45, utilityFee: 10, carParkFee: 5 }),
+      row('A-GF-2', 'L1', '2026-01-01', '2026-12-31', 900, { maintenanceFee: 45, utilityFee: 10, carParkFee: 5 }),
+    ]);
+    expect(leases.get('L1')!.periods[0].fees).toEqual({ maintenance: 45, utility: 10, carPark: 5 });
+  });
+
   it('available units have no lease', () => {
     const { units, leases } = buildModel([row('A-GF-3', null, '', '', 0, { start: null, end: null, amount: null })]);
     expect(units.get(unitKey('A-GF-3'))!.leaseNumbers).toEqual([]);

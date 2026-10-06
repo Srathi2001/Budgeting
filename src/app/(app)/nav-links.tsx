@@ -8,6 +8,7 @@ const LINKS = [
   { href: '/master', label: 'Lease Budget' },
   { href: '/summary', label: 'Monthly Summary' },
   { href: '/analysis', label: 'Revenue Analysis' },
+  { href: '/other-income', label: 'Other Income' },
   { href: '/pnl', label: 'Building P&L' },
   { href: '/submissions', label: 'Submissions' },
 ];

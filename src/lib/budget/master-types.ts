@@ -53,6 +53,10 @@ export interface MasterRow {
   currentRent: number | null;
   vatAmount: number | null;
   securityDeposit: number | null;
+  /** other income on the current contract (Oracle); not part of rent revenue */
+  maintenanceFee: number | null;
+  utilityFee: number | null;
+  carParkFee: number | null;
   leaseStatus: string | null;
   leaseRemarks: string | null;
   currentSchedule: ScheduleItem[] | null;

@@ -35,6 +35,8 @@ export interface ReportRow {
   rentPerYear: number | null;
   securityDeposit: number | null;
   maintenanceFee: number | null;
+  utilityFee: number | null;
+  carParkFee: number | null;
 }
 
 const MONTH: Record<string, number> = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
@@ -81,6 +83,7 @@ export function parseReport(data: ArrayBuffer | Buffer): ReportRow[] {
     type: at('UNIT TYPE'), status: at('UNIT STATUS'), lease: at('LEASE NUMBER'), tcode: at('TENANT CODE'), tname: at('TENANT FULL NAME'),
     cls: at('CUSTOMER CLASS'), comm: at('LEASE COMMENCEMENT DATE'), start: at('CONTRACT START DATE'), end: at('CONTRACT END DATE'),
     amount: at('ACTUAL LEASE AMOUNT'), rpy: at('RENT PER YEAR'), dep: at('SECURITY DEPOSIT'), mf: at('MAINTENANCE FEE'),
+    util: at('UTILITY FEE'), park: at('ADDITIONAL CAR PARK'),
   };
   const get = (r: unknown[], i: number) => (i >= 0 ? r[i] : null);
   return rows
@@ -105,6 +108,8 @@ export function parseReport(data: ArrayBuffer | Buffer): ReportRow[] {
       rentPerYear: num(get(r, c.rpy)),
       securityDeposit: num(get(r, c.dep)),
       maintenanceFee: num(get(r, c.mf)),
+      utilityFee: num(get(r, c.util)),
+      carParkFee: num(get(r, c.park)),
     }));
 }
 
@@ -124,10 +129,19 @@ export const unitKey = (code: string) => {
 /** Property part of a unit code, without the N / P suffix: 50B113P-GF-S4 → 50B113 */
 export const propertyKey = (codeOrUnit: string) => norm(codeOrUnit).split('-')[0].replace(/[NP]$/, '');
 
+/** Charges billed with the lease besides rent: other income, kept out of rent revenue. */
+export interface Fees {
+  maintenance: number;
+  utility: number;
+  carPark: number;
+}
+
 export interface Period {
   start: string;
   end: string;
   amount: number;
+  /** other income for the same contract year */
+  fees?: Fees;
 }
 
 export interface ReportUnit {
@@ -155,7 +169,6 @@ export interface ReportLease {
   /** whole-lease amount per contract year (a lease on several units repeats its total on each) */
   periods: Period[];
   securityDeposit: number | null;
-  maintenanceFee: number | null;
 }
 
 /** Same value on every unit → it is the lease total; different values → per-unit amounts to add up. */
@@ -188,17 +201,26 @@ export function buildModel(rows: ReportRow[]) {
   const leases = new Map<string, ReportLease>();
   for (const [number, rs] of byLease) {
     const keys = [...new Set(rs.map((r) => unitKey(r.unitCode)))];
-    // contract years: one amount per unit per year
-    const years = new Map<string, Map<string, number | null>>();
+    // contract years: one row per unit per year
+    const years = new Map<string, Map<string, ReportRow>>();
     for (const r of rs) {
       if (!r.start || !r.end) continue;
       const k = `${r.start}|${r.end}`;
-      const m = years.get(k) ?? new Map<string, number | null>();
-      m.set(unitKey(r.unitCode), r.amount);
+      const m = years.get(k) ?? new Map<string, ReportRow>();
+      m.set(unitKey(r.unitCode), r);
       years.set(k, m);
     }
     const periods: Period[] = [...years]
-      .map(([k, m]) => ({ start: k.split('|')[0], end: k.split('|')[1], amount: leaseTotal([...m.values()]) ?? 0 }))
+      .map(([k, m]) => {
+        const yr = [...m.values()];
+        const total = (f: (r: ReportRow) => number | null) => leaseTotal(yr.map(f)) ?? 0;
+        return {
+          start: k.split('|')[0],
+          end: k.split('|')[1],
+          amount: total((r) => r.amount),
+          fees: { maintenance: total((r) => r.maintenanceFee), utility: total((r) => r.utilityFee), carPark: total((r) => r.carParkFee) },
+        };
+      })
       .sort((a, b) => a.start.localeCompare(b.start));
     const first = rs[0];
     // the first contract year can include months before its contract start (fit-out / early access):
@@ -223,7 +245,6 @@ export function buildModel(rows: ReportRow[]) {
       units: keys,
       periods,
       securityDeposit: perUnit((r) => r.securityDeposit),
-      maintenanceFee: perUnit((r) => r.maintenanceFee),
     });
   }
   return { units, leases };
@@ -280,6 +301,8 @@ interface Facts {
   securityDeposit: number | null;
   leaseRemarks: string | null;
   renewals: Period[]; // contracted later years, up to 3
+  /** other income on the current contract year (this line's share) */
+  fees: Fees;
 }
 
 type Assignment = { lease: ReportLease; share: number };
@@ -462,6 +485,11 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
       currentEnd: current.end,
       currentRent: current.amount,
       securityDeposit: lease.securityDeposit === null ? null : r2(lease.securityDeposit * current.share),
+      fees: {
+        maintenance: r2((current.fees?.maintenance ?? 0) * current.share),
+        utility: r2((current.fees?.utility ?? 0) * current.share),
+        carPark: r2((current.fees?.carPark ?? 0) * current.share),
+      },
       leaseRemarks: others > 1 ? `Lease ${lease.number} covers ${others} units${current.share < 1 ? ` (this line: ${Math.round(current.share * 100)}% by area)` : ''}` : null,
       renewals,
     };
@@ -567,6 +595,7 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
 const NO_LEASE = {
   leaseNumber: null, leaseVersion: null, tenantCode: null, tenant: null, customerClass: null, rentStart: null, currentStart: null,
   currentEnd: null, currentRent: null, vatAmount: null, securityDeposit: null, leaseStatus: null, leaseRemarks: null,
+  maintenanceFee: null, utilityFee: null, carParkFee: null,
   currentSchedule: null, vacant: true,
 } as const;
 
@@ -600,6 +629,9 @@ function factFields(line: Pick<schema.LeaseLine, 'leaseNumber' | 'currentStart' 
     currentRent: f.currentRent,
     vatAmount: null,
     securityDeposit: f.securityDeposit,
+    maintenanceFee: f.fees.maintenance || null,
+    utilityFee: f.fees.utility || null,
+    carParkFee: f.fees.carPark || null,
     leaseStatus: 'Leased',
     leaseRemarks: f.leaseRemarks,
     // a cheque schedule entered for this same contract stays

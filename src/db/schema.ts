@@ -126,6 +126,10 @@ export const leaseLines = pgTable(
     /** Actual cheques of the current lease: from Fusion lease schedules (or entered until the sync exists). */
     currentSchedule: jsonb('current_schedule').$type<ScheduleItem[]>(),
     securityDeposit: money('security_deposit'),
+    /** Other income billed with the current contract year (Oracle). Not part of rent revenue. */
+    maintenanceFee: money('maintenance_fee'),
+    utilityFee: money('utility_fee'),
+    carParkFee: money('car_park_fee'),
 
     renew1: boolean('renew1').notNull().default(true),
     noRenewal: boolean('no_renewal').notNull().default(false),
