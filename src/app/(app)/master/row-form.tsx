@@ -1,7 +1,7 @@
 'use client';
 
 // Side form for one Lease Budget row: every field, grouped by where it comes from. Oracle fields are
-// locked (admin only); budget inputs open up depending on the lease (see leaseTiming).
+// fixed (Oracle import); budget inputs open up depending on the lease (see leaseTiming).
 
 import { useState, type ReactNode } from 'react';
 import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
@@ -12,11 +12,12 @@ import { OUTCOMES, annualRent, dmy, leaseTiming, outcomeOf, outcomePatch, rentPs
 type Row = MasterRow;
 type Draft = Record<string, unknown>;
 
-const TONE = { unit: '#64748b', oracle: '#14b8a6', input: '#f59e0b', calc: '#a78bfa' } as const;
+// left rule by cell state, never colour: ink where you enter values, gray for Oracle, hairline for calculated
+const TONE = { unit: 'var(--control-border)', oracle: 'var(--control-border)', input: 'var(--ink)', calc: 'var(--line)' } as const;
 
 function Section({ title, tone, note, children }: { title: string; tone: keyof typeof TONE; note?: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white" style={{ borderLeft: `3px solid ${TONE[tone]}` }}>
+    <section className="border border-slate-200 bg-white" style={{ borderLeft: `3px solid ${TONE[tone]}` }}>
       <header className="flex items-baseline gap-2 border-b border-slate-200 px-3 py-1.5">
         <h3 className="text-[13px] font-semibold text-slate-900">{title}</h3>
         {note && <span className="text-[11px] text-slate-500">{note}</span>}
@@ -135,12 +136,14 @@ export function RowForm({
   const changed = (k: string) => k in draft;
 
   const canEdit = row.editable;
-  const canOracle = canEdit && isAdmin;
-  const oracleLock = canOracle ? false : 'From Oracle: only an admin can change it; the next import overwrites it';
+  // anything from the Oracle import is fixed, for every role (isAdmin no longer unlocks it)
+  void isAdmin;
+  const canOracle = false;
+  const oracleLock = 'Fixed: from the Oracle import';
   const owner = val('staffOwner') === 'OWNER';
   const timing = leaseTiming(row, year);
   const outcome = outcomeOf({ renew1: val('renew1'), noRenewal: val('noRenewal'), currentEnd: val('currentEnd') });
-  const contractedLock = row.contracted > 0 && !isAdmin;
+  const contractedLock = row.contracted > 0;
   const decisionOpen = canEdit && !owner && !contractedLock;
   const camp = row.propertyKind === 'CAMP';
   const rateUnit = camp ? 'AED per bed per month' : row.rc === 'R' ? 'annual rent' : 'AED per sq ft per year';
@@ -369,7 +372,7 @@ export function RowForm({
 
         <Section title="Budget decision" tone="input" note={timingNote}>
           <Grid>
-            <Field label="Outcome" locked={contractedLock ? 'Settled by the contracted lease years (admin only)' : false} hint={owner ? 'Owner-occupied: no renewal' : undefined}>
+            <Field label="Outcome" locked={contractedLock ? 'Fixed: settled by the contracted lease years (Oracle)' : false} hint={owner ? 'Owner-occupied: no renewal' : undefined}>
               {decisionOpen ? (
                 <select
                   className={box(changed('renew1') || changed('noRenewal'))}
@@ -412,9 +415,18 @@ export function RowForm({
                 <Field label="Budget rate" hint={`New-tenant rate: ${rateUnit}`}>
                   {num('budgetRate', decisionOpen)}
                 </Field>
-                <Field label="New tenant from" hint={timing.kind === 'vacant' ? 'Required for a new letting' : 'Blank = lease end + vacancy gap'}>
-                  {date('r1Start', decisionOpen, { placeholder: row.r1?.start ?? null, override: true })}
-                </Field>
+                {timing.kind === 'vacant' ? (
+                  <Field label="New tenant from" hint="Required">
+                    {date('r1Start', decisionOpen, { placeholder: row.r1?.start ?? null, override: true })}
+                  </Field>
+                ) : (
+                  <>
+                    <Field label="Vacancy days" hint="Required · empty days after the lease ends">
+                      {num('vacancyDays', decisionOpen, { int: true })}
+                    </Field>
+                    <Field label="New tenant from">{show(row.r1?.start ? dmy(row.r1.start) : null)}</Field>
+                  </>
+                )}
               </>
             )}
             <Field label="Staff / Owner">
@@ -435,10 +447,10 @@ export function RowForm({
         </Section>
 
         {renewals.length > 0 && (
-          <Section title="Renewals" tone="input" note="Grey = calculated · amber = overridden (× reverts)">
+          <Section title="Renewals" tone="input" note="Grey = calculated · bold = overridden (× reverts)">
             <div className="space-y-3">
               {renewals.map((i) => {
-                const locked = i <= row.contracted && !isAdmin;
+                const locked = i <= row.contracted;
                 const d = row[`r${i}`];
                 const open = canEdit && !owner && !locked;
                 const renewKey = `r${i}Renew` as 'r2Renew' | 'r3Renew';
@@ -467,13 +479,13 @@ export function RowForm({
                           )}
                         </Field>
                       )}
-                      <Field label="Start" locked={locked ? 'Contracted lease year (admin only)' : false}>
+                      <Field label="Start" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false}>
                         {date(`r${i}Start`, open, { placeholder: d?.start ?? null, override: true })}
                       </Field>
-                      <Field label="End" locked={locked ? 'Contracted lease year (admin only)' : false}>
+                      <Field label="End" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false}>
                         {date(`r${i}End`, open, { placeholder: d?.end ?? null, override: true })}
                       </Field>
-                      <Field label="Rent" locked={locked ? 'Contracted lease year (admin only)' : false} hint={d && row.area ? `${fmt(d.rent / row.area, 2)} per sq ft` : undefined}>
+                      <Field label="Rent" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false} hint={d && row.area ? `${fmt(d.rent / row.area, 2)} per sq ft` : undefined}>
                         {num(`r${i}Rent`, open, { placeholder: d ? fmt(d.rent) : '', override: true })}
                       </Field>
                     </Grid>

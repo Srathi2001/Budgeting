@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>Line chart</title>
+<style>body{margin:0;padding:16px;background:var(--ground)}</style></head>
+<body>
+<div class="anh">
+<section class="anh-card">
+  <header class="anh-card__head">
+    <div><h2 class="anh-card__title">Cumulative spend</h2><p class="anh-card__sub">AED M · FY 2026</p></div>
+  </header>
+  <div class="anh-card__body">
+    <ul class="anh-legend" style="margin-bottom:8px"><li><i class="ln-actual"></i>Actual</li><li><i class="ln-budget"></i>Budget</li><li><i class="ln-forecast"></i>Forecast</li></ul>
+    <svg class="anh-chart" id="line" viewBox="0 0 640 280" role="img" aria-label="Cumulative spend, AED millions">
+    <line class="grid" x1="44" x2="624" y1="248.0" y2="248.0"/><text x="36" y="252.0" text-anchor="end">0</text>
+    <line class="grid" x1="44" x2="624" y1="190.0" y2="190.0"/><text x="36" y="194.0" text-anchor="end">30</text>
+    <line class="grid" x1="44" x2="624" y1="132.0" y2="132.0"/><text x="36" y="136.0" text-anchor="end">60</text>
+    <line class="grid" x1="44" x2="624" y1="74.0" y2="74.0"/><text x="36" y="78.0" text-anchor="end">90</text>
+    <line class="grid" x1="44" x2="624" y1="16.0" y2="16.0"/><text x="36" y="20.0" text-anchor="end">120</text>
+    <text x="44.0" y="270" text-anchor="middle">Jan</text>
+    <text x="96.7" y="270" text-anchor="middle">Feb</text>
+    <text x="149.5" y="270" text-anchor="middle">Mar</text>
+    <text x="202.2" y="270" text-anchor="middle">Apr</text>
+    <text x="254.9" y="270" text-anchor="middle">May</text>
+    <text x="307.6" y="270" text-anchor="middle">Jun</text>
+    <text x="360.4" y="270" text-anchor="middle">Jul</text>
+    <text x="413.1" y="270" text-anchor="middle">Aug</text>
+    <text x="465.8" y="270" text-anchor="middle">Sep</text>
+    <text x="518.5" y="270" text-anchor="middle">Oct</text>
+    <text x="571.3" y="270" text-anchor="middle">Nov</text>
+    <text x="624.0" y="270" text-anchor="middle">Dec</text>
+    <rect class="band" x="492.2" y="16" width="139.8" height="232"/><text x="518.5" y="28" >FORECAST</text>
+    <polyline class="ln-budget" points="44.0,231.4 96.7,214.4 149.5,196.8 202.2,179.6 254.9,161.8 307.6,143.8 360.4,126.2 413.1,108.0 465.8,89.7 518.5,71.1 571.3,52.7 624.0,33.8"/>
+    <polyline class="ln-forecast" points="465.8,82.9 518.5,63.2 571.3,44.0 624.0,23.9"/>
+    <polyline class="ln-actual" points="44.0,232.3 96.7,215.3 149.5,196.0 202.2,176.9 254.9,159.1 307.6,139.3 360.4,121.8 413.1,101.8 465.8,82.9"/>
+    <circle class="dot-actual" cx="465.8" cy="82.9" r="4"/>
+    <text class="lbl" x="457.8" y="72.9" text-anchor="end">85.4</text>
+    <text class="lbl" x="624.0" y="13.9" text-anchor="end">115.9</text>
+    <text x="624.0" y="51.8" text-anchor="end">110.8</text>
+    <line class="base" x1="44" x2="624" y1="248.0" y2="248.0"/>
+    <line class="xhair" id="xh" x1="0" x2="0" y1="16" y2="248.0" visibility="hidden"/>
+    <rect class="hit" id="hit" x="44" y="16" width="580" height="232"/></svg>
+    <div class="anh-tip" id="tip" hidden></div>
+  </div>
+</section>
+</div>
+<script>
+(function(){var M=["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],B=[8.6, 17.4, 26.5, 35.4, 44.6, 53.9, 63.0, 72.4, 81.9, 91.5, 101.0, 110.8],A=[8.1, 16.9, 26.9, 36.8, 46.0, 56.2, 65.3, 75.6, 85.4, null, null, null],F=[85.4, 95.6, 105.5, 115.9];var svg=document.getElementById('line'),hit=document.getElementById('hit'),xh=document.getElementById('xh'),tip=document.getElementById('tip');
+var L=44,pw=580;
+function f(v){return v==null?'—':v.toFixed(1)}
+hit.addEventListener('mousemove',function(e){var r=svg.getBoundingClientRect(),k=r.width/640;var px=(e.clientX-r.left)/k;var i=Math.max(0,Math.min(11,Math.round((px-L)/(pw/11))));var X=L+i*pw/11;xh.setAttribute('x1',X);xh.setAttribute('x2',X);xh.setAttribute('visibility','visible');
+var a=A[i],fc=i>=8?F[i-8]:null;tip.innerHTML='<b>'+M[i]+' 2026</b><div class="row"><span>Actual</span><span>'+f(a)+'</span></div><div class="row"><span>Budget</span><span>'+f(B[i])+'</span></div>'+(fc!=null&&a==null?'<div class="row"><span>Forecast</span><span>'+f(fc)+'</span></div>':'')+'<div class="row"><span>Δ vs budget</span><span>'+(function(v){return v==null?'—':(v>0?'+':'')+v.toFixed(1)})((a!=null?a:fc)!=null?(a!=null?a:fc)-B[i]:null)+'</span></div>';
+tip.hidden=false;var body=svg.parentNode.getBoundingClientRect();var tx=X*k+(r.left-body.left);tip.style.left=(tx>body.width-190?tx-170:tx+12)+'px';tip.style.top='48px';});
+hit.addEventListener('mouseleave',function(){tip.hidden=true;xh.setAttribute('visibility','hidden')});})();
+</script>
+</body>
+</html>

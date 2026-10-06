@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>Budget table</title>
+<style>body{margin:0;padding:16px;background:var(--ground)} .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:16px}</style></head>
+<body>
+<div class="anh">
+  <div class="bar">
+    <div class="anh-legend-cells" aria-label="Cell legend">
+      <span><i class="input"></i>Editable</span>
+      <span><i class="locked"></i>Locked</span>
+      <span><i class="calc"></i>Calculated</span>
+      <span><i class="dirty"></i>Unsaved</span>
+    </div>
+    <span class="anh-muted" style="font-size:12px">AED '000</span>
+  </div>
+  <div class="anh-grid-wrap">
+  <table class="anh-grid">
+    <thead>
+      <tr class="h2"><th colspan="2"></th><th class="anh-num">FY 2026</th><th colspan="5" style="text-align:center">FY 2027 plan</th><th colspan="2" style="text-align:center">Variance vs FY 2026</th></tr>
+      <tr class="h1"><th>Account</th><th>GL</th><th class="anh-num">Actual</th><th class="anh-num">Q1</th><th class="anh-num">Q2</th><th class="anh-num">Q3</th><th class="anh-num">Q4</th><th class="anh-num">Total</th><th class="anh-num">AED</th><th class="anh-num">%</th></tr>
+    </thead>
+    <tbody>
+      <tr class="section"><td colspan="10">Revenue</td></tr>
+      <tr class="child"><td>Contracting revenue</td><td><span class="anh-code">GL 400100</span></td><td class="anh-num locked">162,900</td><td class="anh-num input" tabindex="0">41,200</td><td class="anh-num input" tabindex="0">42,800</td><td class="anh-num input" tabindex="0">44,100</td><td class="anh-num input" tabindex="0">46,300</td><td class="anh-num calc">174,400</td><td class="anh-num calc">11,500</td><td class="anh-num calc"><span class="anh-var anh-var--up">+7.1%</span></td></tr>
+      <tr class="child"><td>Equipment rental</td><td><span class="anh-code">GL 400300</span></td><td class="anh-num locked">27,500</td><td class="anh-num input" tabindex="0">6,200</td><td class="anh-num input" tabindex="0">6,400</td><td class="anh-num input" tabindex="0">6,100</td><td class="anh-num input is-dirty" tabindex="0">6,800</td><td class="anh-num calc">25,500</td><td class="anh-num calc"><span class="anh-neg">2,000</span></td><td class="anh-num calc"><span class="anh-var anh-var--down is-adverse">-7.3%</span></td></tr>
+      <tr class="child"><td>Facility services</td><td><span class="anh-code">GL 400500</span></td><td class="anh-num locked">15,100</td><td class="anh-num input" tabindex="0">3,900</td><td class="anh-num input" tabindex="0">4,000</td><td class="anh-num input" tabindex="0">4,100</td><td class="anh-num input" tabindex="0">4,300</td><td class="anh-num calc">16,300</td><td class="anh-num calc">1,200</td><td class="anh-num calc"><span class="anh-var anh-var--up">+7.9%</span></td></tr>
+      <tr class="subtotal"><td>Total revenue</td><td></td><td class="anh-num">205,500</td><td class="anh-num">51,300</td><td class="anh-num">53,200</td><td class="anh-num">54,300</td><td class="anh-num">57,400</td><td class="anh-num">216,200</td><td class="anh-num">10,700</td><td class="anh-num">+5.2%</td></tr>
+      <tr class="section"><td colspan="10">Operating Expenses</td></tr>
+      <tr class="child"><td>Site labour</td><td><span class="anh-code">GL 610200</span></td><td class="anh-num locked">74,800</td><td class="anh-num input" tabindex="0">18,400</td><td class="anh-num input" tabindex="0">19,100</td><td class="anh-num input" tabindex="0">19,800</td><td class="anh-num input" tabindex="0">20,600</td><td class="anh-num calc">77,900</td><td class="anh-num calc">3,100</td><td class="anh-num calc"><span class="anh-var anh-var--up is-adverse">+4.1%</span></td></tr>
+      <tr class="child"><td>Materials & consumables</td><td><span class="anh-code">GL 620100</span></td><td class="anh-num locked">49,200</td><td class="anh-num input" tabindex="0">12,100</td><td class="anh-num input" tabindex="0">12,600</td><td class="anh-num input is-selected is-dirty" tabindex="0">13,200</td><td class="anh-num input" tabindex="0">13,900</td><td class="anh-num calc">51,800</td><td class="anh-num calc">2,600</td><td class="anh-num calc"><span class="anh-var anh-var--up is-adverse">+5.3%</span></td></tr>
+      <tr class="child"><td>Plant & fleet maintenance</td><td><span class="anh-code">GL 630400</span></td><td class="anh-num locked">12,900</td><td class="anh-num input" tabindex="0">2,900</td><td class="anh-num input" tabindex="0">3,100</td><td class="anh-num input" tabindex="0">2,800</td><td class="anh-num input" tabindex="0">3,300</td><td class="anh-num calc">12,100</td><td class="anh-num calc"><span class="anh-neg">800</span></td><td class="anh-num calc"><span class="anh-var anh-var--down">-6.2%</span></td></tr>
+      <tr class="child"><td>Overheads & admin</td><td><span class="anh-code">GL 650000</span></td><td class="anh-num locked">15,300</td><td class="anh-num input" tabindex="0">4,100</td><td class="anh-num input" tabindex="0">4,100</td><td class="anh-num input" tabindex="0">4,200</td><td class="anh-num input" tabindex="0">4,300</td><td class="anh-num calc">16,700</td><td class="anh-num calc">1,400</td><td class="anh-num calc"><span class="anh-var anh-var--up is-adverse">+9.2%</span></td></tr>
+      <tr class="subtotal"><td>Total operating expenses</td><td></td><td class="anh-num">152,200</td><td class="anh-num">37,500</td><td class="anh-num">38,900</td><td class="anh-num">40,000</td><td class="anh-num">42,100</td><td class="anh-num">158,500</td><td class="anh-num">6,300</td><td class="anh-num">+4.1%</td></tr>
+      <tr class="total"><td>Operating margin</td><td></td><td class="anh-num">53,300</td><td class="anh-num">13,800</td><td class="anh-num">14,300</td><td class="anh-num">14,300</td><td class="anh-num">15,300</td><td class="anh-num">57,700</td><td class="anh-num">4,400</td><td class="anh-num">+8.3%</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+</body>
+</html>

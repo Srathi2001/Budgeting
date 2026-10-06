@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>KPI tile</title>
+<style>body{margin:0;padding:16px;background:var(--ground)}</style></head>
+<body>
+<div class="anh">
+<div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:16px">
+  <article class="anh-kpi">
+    <div class="anh-kpi__top"><span class="anh-eyebrow">Spend YTD</span></div>
+    <div class="anh-kpi__value"><small>AED</small>85.4M</div>
+    <div class="anh-kpi__bar" aria-label="77% of budget"><span style="width:77%"></span><i style="left:74%"></i></div>
+    <div class="anh-kpi__foot"><span>77.1% of budget</span><span class="anh-var anh-var--up is-adverse">+3.5M</span></div>
+  </article>
+  <article class="anh-kpi anh-kpi--compact">
+    <div class="anh-kpi__top"><span class="anh-eyebrow">Operating margin</span></div>
+    <div class="anh-kpi__value">14.1%</div>
+    <div class="anh-kpi__foot"><span>Plan 13.6%</span><span class="anh-var anh-var--up">+0.5 pt</span></div>
+  </article>
+  <article class="anh-kpi anh-kpi--compact anh-kpi--inverse">
+    <div class="anh-kpi__top"><span class="anh-eyebrow">Lines over budget</span></div>
+    <div class="anh-kpi__value">7<small style="vertical-align:0;margin-left:6px">of 212</small></div>
+    <div class="anh-kpi__foot"><span>Over 10%</span></div>
+  </article>
+</div>
+</div>
+</body>
+</html>

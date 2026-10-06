@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>Period switch and tabs</title>
+<style>body{margin:0;padding:16px;background:var(--ground)}</style></head>
+<body>
+<div class="anh">
+<div style="display:grid;gap:20px;max-width:720px">
+  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+    <div class="anh-seg" role="group" aria-label="Period"><button aria-pressed="false">Month</button><button aria-pressed="false">QTD</button><button aria-pressed="true">YTD</button><button aria-pressed="false">FY</button></div>
+    <div class="anh-seg" role="group" aria-label="Compare"><button aria-pressed="true">vs Budget</button><button aria-pressed="false">vs Forecast</button><button aria-pressed="false">vs FY 2025</button></div>
+  </div>
+  <nav class="anh-tabs" role="tablist"><button class="anh-tab" role="tab" aria-selected="true">Summary</button><button class="anh-tab" role="tab" aria-selected="false">Cost centres<span class="anh-count">48</span></button><button class="anh-tab" role="tab" aria-selected="false">Capex</button><button class="anh-tab" role="tab" aria-selected="false">Approvals<span class="anh-count">3</span></button></nav>
+</div>
+<script>document.querySelectorAll('.anh-seg').forEach(function(g){g.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;g.querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',x===b)})})});document.querySelectorAll('.anh-tab').forEach(function(t){t.addEventListener('click',function(){document.querySelectorAll('.anh-tab').forEach(function(x){x.setAttribute('aria-selected',x===t)})})});</script>
+</div>
+</body>
+</html>

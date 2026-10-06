@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>App shell</title>
+<style>html,body{margin:0;height:100%} body{background:var(--ground)} .anh{height:100%}
+.row3{display:grid;grid-template-columns:repeat(4,1fr);gap:16px} .row2{display:grid;grid-template-columns:1.25fr 1fr;gap:16px}</style></head>
+<body>
+<div class="anh">
+<div class="anh-shell">
+  <aside class="anh-side">
+    <div class="anh-brand"><div class="mark">AN</div><div><b>Al Naboodah</b></div></div>
+    <nav class="anh-nav">
+      <a href="#" aria-current="page"><svg viewBox="0 0 16 16"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z"/></svg>Overview</a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h12M5 1v14"/></svg>Budget entry</a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M2 14V8M6 14V4M10 14V9M14 14V2"/></svg>Actuals vs plan</a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M2 12l4-4 3 3 5-6"/></svg>Forecast</a>
+      <span class="anh-eyebrow">Governance</span>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7"/></svg>Approvals</a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M4 7V5a4 4 0 018 0v2M3 7h10v7H3z"/></svg>Period locks</a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg>Imports</a>
+    </nav>
+  </aside>
+  <header class="anh-top">
+    <div class="anh-crumbs"><span>Holdings</span><span>/</span><span>Contracting</span><span>/</span><b>FY 2027 Budget</b></div>
+    <span style="flex:1"></span>
+    
+    <button class="anh-btn anh-btn--secondary anh-btn--sm" type="button">Export</button>
+  </header>
+  <main class="anh-main">
+    <div class="anh-pagehead">
+      <h1>Contracting · FY 2027</h1>
+      <div class="anh-filterbar">
+        <select class="anh-select" aria-label="Cost centre"><option>All cost centres</option></select>
+        <div class="anh-seg" role="group" aria-label="Period"><button aria-pressed="false">Month</button><button aria-pressed="false">QTD</button><button aria-pressed="true">YTD</button></div>
+        <button class="anh-btn" type="button">Submit</button>
+      </div>
+    </div>
+    <div class="row3">
+      <article class="anh-kpi anh-kpi--compact"><span class="anh-eyebrow">Spend YTD</span><div class="anh-kpi__value"><small>AED</small>85.4M</div><div class="anh-kpi__bar"><span style="width:77%"></span><i style="left:74%"></i></div><div class="anh-kpi__foot"><span>77.1% of budget</span><span class="anh-var anh-var--up is-adverse">+3.5M</span></div></article>
+      <article class="anh-kpi anh-kpi--compact"><span class="anh-eyebrow">Revenue YTD</span><div class="anh-kpi__value"><small>AED</small>148.0M</div><div class="anh-kpi__bar"><span style="width:72%"></span><i style="left:74%"></i></div><div class="anh-kpi__foot"><span>72.4% of plan</span><span class="anh-var anh-var--down is-adverse">-1.6M</span></div></article>
+      <article class="anh-kpi anh-kpi--compact"><span class="anh-eyebrow">Operating margin</span><div class="anh-kpi__value">14.1%</div><div class="anh-kpi__foot"><span>Plan 13.6%</span><span class="anh-var anh-var--up">+0.5 pt</span></div></article>
+      <article class="anh-kpi anh-kpi--compact anh-kpi--inverse"><span class="anh-eyebrow">Over 10%</span><div class="anh-kpi__value">7</div><div class="anh-kpi__foot"><span>of 212 lines</span></div></article>
+    </div>
+    <div class="row2">
+      <section class="anh-card">
+        <header class="anh-card__head"><div><h2 class="anh-card__title">Monthly spend</h2><p class="anh-card__sub">AED M</p></div><ul class="anh-legend"><li><i class="m-actual"></i>Actual</li><li><i class="m-budget"></i>Budget</li></ul></header>
+        <div class="anh-card__body"><svg class="anh-chart" viewBox="0 0 520 200" role="img" aria-label="Monthly actual vs budget">
+<line class="grid" x1="32" x2="512" y1="176.0" y2="176.0"/><text x="26" y="180.0" text-anchor="end">0</text>
+<line class="grid" x1="32" x2="512" y1="120.7" y2="120.7"/><text x="26" y="124.7" text-anchor="end">4</text>
+<line class="grid" x1="32" x2="512" y1="65.3" y2="65.3"/><text x="26" y="69.3" text-anchor="end">8</text>
+<line class="grid" x1="32" x2="512" y1="10.0" y2="10.0"/><text x="26" y="14.0" text-anchor="end">12</text>
+<rect class="m-actual" x="39.7" y="64.0" width="18" height="112.0"/>
+<rect class="m-budget" x="59.7" y="57.0" width="18" height="119.0"/>
+<text x="58.7" y="194" text-anchor="middle">J</text>
+<rect class="m-actual" x="93.0" y="54.3" width="18" height="121.7"/>
+<rect class="m-budget" x="113.0" y="54.3" width="18" height="121.7"/>
+<text x="112.0" y="194" text-anchor="middle">F</text>
+<rect class="m-actual" x="146.3" y="37.7" width="18" height="138.3"/>
+<rect class="m-budget" x="166.3" y="50.1" width="18" height="125.9"/>
+<text x="165.3" y="194" text-anchor="middle">M</text>
+<rect class="m-actual" x="199.7" y="39.0" width="18" height="137.0"/>
+<rect class="m-budget" x="219.7" y="52.9" width="18" height="123.1"/>
+<text x="218.7" y="194" text-anchor="middle">A</text>
+<rect class="m-actual" x="253.0" y="48.7" width="18" height="127.3"/>
+<rect class="m-budget" x="273.0" y="48.7" width="18" height="127.3"/>
+<text x="272.0" y="194" text-anchor="middle">M</text>
+<rect class="m-actual" x="306.3" y="34.9" width="18" height="141.1"/>
+<rect class="m-budget" x="326.3" y="47.3" width="18" height="128.7"/>
+<text x="325.3" y="194" text-anchor="middle">J</text>
+<rect class="m-actual" x="359.7" y="50.1" width="18" height="125.9"/>
+<rect class="m-budget" x="379.7" y="50.1" width="18" height="125.9"/>
+<text x="378.7" y="194" text-anchor="middle">J</text>
+<rect class="m-actual" x="413.0" y="33.5" width="18" height="142.5"/>
+<rect class="m-budget" x="433.0" y="46.0" width="18" height="130.0"/>
+<text x="432.0" y="194" text-anchor="middle">A</text>
+<rect class="m-actual" x="466.3" y="40.4" width="18" height="135.6"/>
+<rect class="m-budget" x="486.3" y="44.6" width="18" height="131.4"/>
+<text x="485.3" y="194" text-anchor="middle">S</text>
+<line class="base" x1="32" x2="512" y1="176.0" y2="176.0"/></svg></div>
+      </section>
+      <section class="anh-card">
+        <header class="anh-card__head"><div><h2 class="anh-card__title">Largest variances</h2><p class="anh-card__sub">AED '000</p></div></header>
+        <div class="anh-card__body" style="padding-top:12px">
+          <div class="anh-grid-wrap"><table class="anh-grid">
+            <thead><tr class="h1"><th>Line</th><th class="anh-num">Budget</th><th class="anh-num">Actual</th><th class="anh-num">Var</th></tr></thead>
+            <tbody>
+              <tr><td>Materials — rebar</td><td class="anh-num locked">6,120</td><td class="anh-num locked">6,985</td><td class="anh-num calc"><span class="anh-var anh-var--up is-adverse is-breach">+14.1%</span></td></tr>
+              <tr><td>Subcontract — MEP</td><td class="anh-num locked">9,400</td><td class="anh-num locked">10,210</td><td class="anh-num calc"><span class="anh-var anh-var--up is-adverse">+8.6%</span></td></tr>
+              <tr><td>Fleet fuel</td><td class="anh-num locked">2,050</td><td class="anh-num locked">2,180</td><td class="anh-num calc"><span class="anh-var anh-var--up is-adverse">+6.3%</span></td></tr>
+              <tr><td>Site labour</td><td class="anh-num locked">18,400</td><td class="anh-num locked">17,620</td><td class="anh-num calc"><span class="anh-var anh-var--down">-4.2%</span></td></tr>
+              <tr><td>Overheads</td><td class="anh-num locked">4,100</td><td class="anh-num locked">3,880</td><td class="anh-num calc"><span class="anh-var anh-var--down">-5.4%</span></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+</div>
+</body>
+</html>

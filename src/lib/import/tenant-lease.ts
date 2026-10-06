@@ -541,7 +541,7 @@ const NO_LEASE = {
 
 /** Budget inputs a PM may have entered on a line; they follow the unit into the rebuilt line. */
 const INPUT_FIELDS = [
-  'staffOwner', 'mfCurrent', 'renew1', 'noRenewal', 'budgetRate', 'increasePctOverride', 'cheques', 'notes',
+  'staffOwner', 'mfCurrent', 'renew1', 'noRenewal', 'vacancyDays', 'budgetRate', 'increasePctOverride', 'cheques', 'notes',
   'r1Rent', 'r1Start', 'r1End', 'r1Mf', 'r1Schedule', 'r2Renew', 'r2Rent', 'r2Start', 'r2End', 'r2Mf', 'r2Schedule',
   'r3Renew', 'r3Rent', 'r3Start', 'r3End', 'r3Mf', 'r3Schedule',
 ] as const;

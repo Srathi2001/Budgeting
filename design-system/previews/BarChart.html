@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>Bar chart</title>
+<style>body{margin:0;padding:16px;background:var(--ground)}</style></head>
+<body>
+<div class="anh">
+<section class="anh-card">
+  <header class="anh-card__head">
+    <div><h2 class="anh-card__title">Actual vs budget</h2><p class="anh-card__sub">AED M · YTD</p></div>
+  </header>
+  <div class="anh-card__body">
+    <ul class="anh-legend" style="margin-bottom:8px"><li><i class="dv-contracting"></i>Contracting</li><li><i class="dv-facilities"></i>Facilities</li><li><i class="dv-plant"></i>Plant hire</li><li><i class="dv-realestate"></i>Real estate</li><li><i class="dv-corporate"></i>Corporate</li><li style="margin-left:8px"><i class="target"></i>Budget YTD</li></ul>
+    <svg class="anh-chart" viewBox="0 0 640 260" role="img" aria-label="Actual vs budget, AED millions">
+    <line class="grid" x1="44" x2="632" y1="228.0" y2="228.0"/><text x="36" y="232.0" text-anchor="end">0</text>
+    <line class="grid" x1="44" x2="632" y1="157.3" y2="157.3"/><text x="36" y="161.3" text-anchor="end">20</text>
+    <line class="grid" x1="44" x2="632" y1="86.7" y2="86.7"/><text x="36" y="90.7" text-anchor="end">40</text>
+    <line class="grid" x1="44" x2="632" y1="16.0" y2="16.0"/><text x="36" y="20.0" text-anchor="end">60</text>
+    <rect class="dv-contracting" x="78.8" y="57.7" width="48" height="170.3"><title>Contracting: actual AED 48.2M, budget AED 52.0M</title></rect>
+    <line class="target" x1="72.8" x2="132.8" y1="44.3" y2="44.3"/>
+    <text class="lbl" x="102.8" y="36.3" text-anchor="middle">48.2</text>
+    <text x="102.8" y="250" text-anchor="middle">Contracting</text>
+    <rect class="dv-facilities" x="196.4" y="151.7" width="48" height="76.3"><title>Facilities: actual AED 21.6M, budget AED 19.8M</title></rect>
+    <line class="target" x1="190.4" x2="250.4" y1="158.0" y2="158.0"/>
+    <text class="lbl" x="220.4" y="143.7" text-anchor="middle">21.6</text>
+    <text x="220.4" y="250" text-anchor="middle">Facilities</text>
+    <rect class="dv-plant" x="314.0" y="175.4" width="48" height="52.6"><title>Plant hire: actual AED 14.9M, budget AED 15.5M</title></rect>
+    <line class="target" x1="308.0" x2="368.0" y1="173.2" y2="173.2"/>
+    <text class="lbl" x="338.0" y="165.2" text-anchor="middle">14.9</text>
+    <text x="338.0" y="250" text-anchor="middle">Plant hire</text>
+    <rect class="dv-realestate" x="431.6" y="188.1" width="48" height="39.9"><title>Real estate: actual AED 11.3M, budget AED 10.4M</title></rect>
+    <line class="target" x1="425.6" x2="485.6" y1="191.3" y2="191.3"/>
+    <text class="lbl" x="455.6" y="180.1" text-anchor="middle">11.3</text>
+    <text x="455.6" y="250" text-anchor="middle">Real estate</text>
+    <rect class="dv-corporate" x="549.2" y="204.0" width="48" height="24.0"><title>Corporate: actual AED 6.8M, budget AED 7.5M</title></rect>
+    <line class="target" x1="543.2" x2="603.2" y1="201.5" y2="201.5"/>
+    <text class="lbl" x="573.2" y="193.5" text-anchor="middle">6.8</text>
+    <text x="573.2" y="250" text-anchor="middle">Corporate</text>
+    <line class="base" x1="44" x2="632" y1="228.0" y2="228.0"/></svg>
+  </div>
+</section>
+</div>
+
+</body>
+</html>

@@ -20,6 +20,7 @@
     "ag-grid-react": "^36.2.0",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.45.3",
+    "exceljs": "^4.4.0",
     "jose": "^6.2.12",
     "next": "16.3.8",
     "pg": "^8.23.1",

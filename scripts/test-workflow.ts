@@ -45,11 +45,11 @@ async function main() {
   const before = (seeded.calc as { totals: { revenue: number } }).totals.revenue;
 
   // 1. PM switches the unit to a new tenant at a higher budget rate
-  let res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: false, budgetRate: 99999 } }]);
+  let res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: false, budgetRate: 99999, vacancyDays: 59 } }]);
   const row = res.rows[0];
   check('PM can edit own property', res.errors.length === 0, res.errors[0]?.message);
   check('1st renewal goes to new tenant at budget rate', row.r1?.rent === 99999, `r1 rent ${row.r1?.rent}`);
-  check('renewal starts after the 60-day gap', !!row.r1?.start && !!row.currentEnd && Date.parse(row.r1.start) - Date.parse(row.currentEnd) === 60 * 86400000, `${row.currentEnd} -> ${row.r1?.start}`);
+  check('new tenant starts after the 59 vacancy days entered', !!row.r1?.start && !!row.currentEnd && Date.parse(row.r1.start) - Date.parse(row.currentEnd) === 60 * 86400000, `${row.currentEnd} -> ${row.r1?.start}`);
   check('revenue recalculated', row.revenueTotal !== before, `${before} -> ${row.revenueTotal}`);
   const [monthly] = await db.execute<{ total: number }>(
     // line_monthly must agree with the cached total
@@ -71,13 +71,19 @@ async function main() {
   res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { r1Start: '31/12/2026' } }]);
   check('bad date format rejected', res.errors.length === 1);
   res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentRent: 72000, tenant: 'EDITED TENANT' } }]);
-  check('PM cannot change Oracle lease fields', /only an admin/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+  check('PM cannot change Oracle lease fields', /Fixed/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
   res = await applyLineChanges(fin, open.id, [{ lineId: original.id, patch: { area: 999 } }]);
-  check('Finance cannot change Oracle unit fields', /only an admin/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+  check('Finance cannot change Oracle unit fields', /Fixed/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
   res = await applyLineChanges(admin, open.id, [{ lineId: original.id, patch: { currentRent: 72000, tenant: 'EDITED TENANT' } }]);
-  check('admin can change Oracle lease fields', res.errors.length === 0 && res.rows[0].tenant === 'EDITED TENANT' && res.rows[0].current?.rent === 72000);
-  res = await applyLineChanges(admin, open.id, [{ lineId: original.id, patch: { currentRent: -1 } }]);
-  check('negative lease amount rejected', res.errors.length === 1);
+  check('admin cannot change Oracle lease fields either', /Fixed/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+  // new tenant: vacancy days are required; the start follows from them
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: false, budgetRate: 70000, vacancyDays: null } }]);
+  check('new tenant without vacancy days is flagged, not budgeted', !res.rows[0].r1 && res.rows[0].warnings.some((w) => /vacancy days/.test(w)));
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { vacancyDays: 30 } }]);
+  check('vacancy days set the new tenant start', Date.parse(res.rows[0].r1?.start ?? '') - Date.parse(res.rows[0].currentEnd ?? '') === 31 * 86400000, `${res.rows[0].currentEnd} -> ${res.rows[0].r1?.start}`);
+  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { vacancyDays: -1 } }]);
+  check('negative vacancy days rejected', res.errors.length === 1);
+  await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { renew1: true, budgetRate: null, vacancyDays: null } }]);
   // contracted lease years are fixed for everyone but an admin
   const [withYears] = await db
     .select({ l: schema.leaseLines })
@@ -86,7 +92,7 @@ async function main() {
     .limit(1);
   if (withYears) {
     res = await applyLineChanges(fin, open.id, [{ lineId: withYears.l.id, patch: { r1Rent: 1 } }]);
-    check('contracted renewal is admin only', /only an admin/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+    check('contracted renewal is fixed', /Fixed/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
   }
 
   // 4. Permissions
@@ -120,6 +126,7 @@ async function main() {
       notes: original.notes,
       renew1: original.renew1,
       budgetRate: original.budgetRate,
+      vacancyDays: original.vacancyDays,
       r1Rent: original.r1Rent,
     })
     .where(eq(schema.leaseLines.id, original.id));

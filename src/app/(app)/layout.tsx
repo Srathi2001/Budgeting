@@ -1,38 +1,60 @@
+import { cookies } from 'next/headers';
 import { requireUser, getActiveVersion, isFinance } from '@/lib/auth/dal';
+import { THEME_COOKIE } from '@/lib/theme';
 import { logout } from '@/app/login/actions';
-import { NavLinks } from './nav-links';
+import { NavLinks, PageCrumb } from './nav-links';
+import { ThemeSwitch } from './theme-switch';
 import { VersionSwitcher } from './version-switcher';
 
 export default async function AppLayout({ children }: LayoutProps<'/'>) {
   const user = await requireUser();
   const { version, all } = await getActiveVersion();
   const finance = isFinance(user);
+  const theme = (await cookies()).get(THEME_COOKIE)?.value === 'dark' ? 'dark' : 'light';
   return (
-    <div className="flex min-h-screen">
-      <aside className="sticky top-0 flex h-screen w-56 shrink-0 flex-col border-r border-slate-200 bg-white">
-        <div className="border-b border-slate-200 px-4 py-4">
-          <div className="text-sm font-semibold text-slate-900">Revenue Budget</div>
-          <div className="text-xs text-slate-500">MJN · REHL · PMC</div>
+    <div className="anh-shell min-h-screen">
+      <aside className="anh-side sticky top-0 h-screen overflow-y-auto">
+        <div className="anh-brand">
+          <div className="mark">AN</div>
+          <div>
+            <b>Al Naboodah</b>
+            <span>Revenue budget</span>
+          </div>
         </div>
-        <div className="px-3 py-3">
+        <div className="px-4 pt-4">
           <VersionSwitcher
             current={version?.id ?? null}
             versions={all.map((v) => ({ id: v.id, name: v.name, status: v.status }))}
           />
         </div>
         <NavLinks finance={finance} />
-        <div className="mt-auto border-t border-slate-200 px-4 py-3 text-xs">
-          <div className="font-medium text-slate-800">{user.name}</div>
-          <div className="text-slate-500">
+        <div className="mt-auto border-t border-slate-200 px-4 py-3 text-[13px]">
+          <div className="font-semibold">{user.name}</div>
+          <div className="anh-muted text-xs">
             {user.role}
             {user.coordinator ? ` · ${user.coordinator}` : ''}
           </div>
           <form action={logout} className="mt-2">
-            <button className="text-sky-700 hover:underline">Sign out</button>
+            <button className="anh-btn anh-btn--secondary anh-btn--sm">Sign out</button>
           </form>
         </div>
       </aside>
-      <main className="min-w-0 flex-1">
+      <header className="anh-top">
+        <div className="anh-crumbs">
+          <span>MJN · REHL · PMC</span>
+          {version && (
+            <>
+              <span>/</span>
+              <span>{version.name}</span>
+            </>
+          )}
+          <span>/</span>
+          <PageCrumb />
+        </div>
+        <span className="flex-1" />
+        <ThemeSwitch initial={theme} />
+      </header>
+      <main className="min-w-0">
         {version ? children : <div className="p-8 text-slate-600">No budget versions yet. Run the import script first.</div>}
       </main>
     </div>

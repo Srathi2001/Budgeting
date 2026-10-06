@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>Pie chart</title>
+<style>body{margin:0;padding:16px;background:var(--ground)}</style></head>
+<body>
+<div class="anh">
+<section class="anh-card">
+  <header class="anh-card__head">
+    <div><h2 class="anh-card__title">Spend by division</h2><p class="anh-card__sub">% of spend · YTD</p></div>
+  </header>
+  <div class="anh-card__body">
+    <ul class="anh-legend" style="position:absolute;right:20px;top:60px;display:grid;gap:10px"><li><i class="dv-contracting"></i>Contracting <b>47%</b></li><li><i class="dv-facilities"></i>Facilities <b>21%</b></li><li><i class="dv-plant"></i>Plant hire <b>14%</b></li><li><i class="dv-realestate"></i>Real estate <b>11%</b></li><li><i class="dv-corporate"></i>Corporate <b>7%</b></li></ul>
+    <svg class="anh-chart" viewBox="0 0 640 280" role="img" aria-label="Spend by division">
+    <path class="dv-contracting gap" d="M200,140 L200.00,28.00 A112,112 0 0 1 221.77,249.86Z"><title>Contracting: 47%</title></path>
+    <path class="dv-facilities gap" d="M200,140 L221.77,249.86 A112,112 0 0 1 98.96,188.33Z"><title>Facilities: 21%</title></path>
+    <path class="dv-plant gap" d="M200,140 L98.96,188.33 A112,112 0 0 1 99.87,89.83Z"><title>Plant hire: 14%</title></path>
+    <path class="dv-realestate gap" d="M200,140 L99.87,89.83 A112,112 0 0 1 154.78,37.53Z"><title>Real estate: 11%</title></path>
+    <path class="dv-corporate gap" d="M200,140 L154.78,37.53 A112,112 0 0 1 200.00,28.00Z"><title>Corporate: 7%</title></path>
+    <polyline fill="none" style="stroke:var(--ink-muted)" stroke-width="1" points="315.4,128.7 333.4,126.9 349.4,126.9"/>
+    <text class="lbl" x="353.4" y="130.9" text-anchor="start">47%</text>
+    <polyline fill="none" style="stroke:var(--ink-muted)" stroke-width="1" points="148.0,243.7 140.0,259.8 124.0,259.8"/>
+    <text class="lbl" x="120.0" y="263.8" text-anchor="end">21%</text>
+    <polyline fill="none" style="stroke:var(--ink-muted)" stroke-width="1" points="84.0,138.9 66.0,138.8 50.0,138.8"/>
+    <text class="lbl" x="46.0" y="142.8" text-anchor="end">14%</text>
+    <polyline fill="none" style="stroke:var(--ink-muted)" stroke-width="1" points="120.0,56.0 107.6,43.0 91.6,43.0"/>
+    <text class="lbl" x="87.6" y="47.0" text-anchor="end">11%</text>
+    <polyline fill="none" style="stroke:var(--ink-muted)" stroke-width="1" points="176.1,26.5 172.4,8.9 156.4,8.9"/>
+    <text class="lbl" x="152.4" y="12.9" text-anchor="end">7%</text>
+    </svg>
+  </div>
+</section>
+</div>
+
+</body>
+</html>

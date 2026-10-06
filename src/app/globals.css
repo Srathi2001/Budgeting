@@ -1,152 +1,292 @@
-@import "tailwindcss";
+/* Fonts first: a url() import must precede every other rule. */
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+/* Al Naboodah design system (design-system/README.md). Tokens and components sit in layers so a
+   Tailwind utility on an element can still adjust spacing and layout. */
+@import '../../design-system/tokens.css' layer(base);
+@import '../../design-system/components.css' layer(components);
 
 /* ---------------------------------------------------------------------------------------------
-   Dark theme. The UI is written with Tailwind's slate / sky / emerald / amber / red scales;
-   here those scales are redefined for a dark canvas (neutrals: light <-> dark; accents: tints
-   become dark tints, strong shades become bright text), so every page converts consistently.
+   Tailwind's palette, re-pointed at the design-system tokens. The interface is black, white and
+   gray, so the accent scales (sky, emerald, amber, red) resolve to ink and grays too. Values are
+   CSS variables, so Paper (light) and Carbon (dark, data-theme="dark" on <html>) both follow.
    ------------------------------------------------------------------------------------------- */
-@theme {
-  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+@theme inline {
+  --color-white: var(--surface);
+  --color-slate-50: var(--ground);
+  --color-slate-100: var(--surface-sunken);
+  --color-slate-200: var(--line);
+  --color-slate-300: var(--control-border);
+  --color-slate-400: var(--ink-muted);
+  --color-slate-500: var(--ink-muted);
+  --color-slate-600: var(--ink-2);
+  --color-slate-700: var(--ink-2);
+  --color-slate-800: var(--ink);
+  --color-slate-900: var(--ink);
+  --color-slate-950: var(--ink);
 
-  --color-white: #121821; /* surfaces: cards, tables, inputs */
-  --color-slate-50: #0b1016; /* page background */
-  --color-slate-100: #18212c; /* subtle fills, hover */
-  --color-slate-200: #263241; /* borders */
-  --color-slate-300: #34445a; /* strong borders, input borders */
-  --color-slate-400: #64748b; /* faint text */
-  --color-slate-500: #8b98a9; /* muted text */
-  --color-slate-600: #a5b1c0; /* secondary text */
-  --color-slate-700: #c3ccd7; /* body text */
-  --color-slate-800: #d9e0e8;
-  --color-slate-900: #ebeff4; /* headings */
-  --color-slate-950: #f6f8fa;
+  --color-sky-50: var(--header-3);
+  --color-sky-100: var(--header-2);
+  --color-sky-200: var(--line);
+  --color-sky-300: var(--control-border);
+  --color-sky-400: var(--ink);
+  --color-sky-500: var(--ink);
+  --color-sky-600: var(--ink);
+  --color-sky-700: var(--ink);
+  --color-sky-800: var(--ink);
+  --color-sky-900: var(--ink);
 
-  --color-sky-50: oklch(29.3% 0.066 243.157);
-  --color-sky-100: oklch(33% 0.08 241);
-  --color-sky-200: oklch(90.1% 0.058 230.902);
-  --color-sky-300: oklch(82.8% 0.111 230.318);
-  --color-sky-400: oklch(74.6% 0.16 232.661);
-  --color-sky-600: oklch(74.6% 0.16 232.661);
-  --color-sky-700: oklch(78% 0.13 231);
-  --color-sky-800: oklch(85% 0.09 231);
-  --color-sky-900: oklch(90.1% 0.058 230.902);
+  --color-emerald-50: var(--surface-sunken);
+  --color-emerald-100: var(--header-3);
+  --color-emerald-200: var(--line);
+  --color-emerald-600: var(--ink);
+  --color-emerald-700: var(--ink);
+  --color-emerald-800: var(--ink);
 
-  --color-emerald-50: oklch(26.2% 0.051 172.552);
-  --color-emerald-100: oklch(30% 0.06 168);
-  --color-emerald-600: oklch(76.5% 0.177 163.223);
-  --color-emerald-700: oklch(80% 0.15 164);
-  --color-emerald-800: oklch(87% 0.11 164);
+  --color-amber-50: var(--surface-sunken);
+  --color-amber-100: var(--header-3);
+  --color-amber-200: var(--control-border);
+  --color-amber-600: var(--ink);
+  --color-amber-700: var(--ink);
+  --color-amber-800: var(--ink);
 
-  --color-amber-50: oklch(27.9% 0.077 45.635);
-  --color-amber-100: oklch(31% 0.08 50);
-  --color-amber-200: oklch(40% 0.1 55);
-  --color-amber-600: oklch(82.8% 0.189 84.429);
-  --color-amber-700: oklch(85% 0.16 86);
-  --color-amber-800: oklch(90% 0.12 92);
+  --color-red-50: var(--surface-sunken);
+  --color-red-200: var(--control-border);
+  --color-red-600: var(--ink);
+  --color-red-700: var(--ink);
 
-  --color-red-50: oklch(25.8% 0.092 26.042);
-  --color-red-200: oklch(39.6% 0.141 25.723);
-  --color-red-600: oklch(70.4% 0.191 22.216);
-  --color-red-700: oklch(75% 0.16 22);
+  --color-teal-600: var(--ink-2);
+
+  /* square and ruled: controls get radius-sm, panels none; no card shadows */
+  --radius-md: 2px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-sm: none;
+  --shadow-md: var(--shadow-pop);
+  --shadow-lg: var(--shadow-pop);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   App-level chart registries. The design system has registries for divisions, measures and cost
+   categories; this tool charts property categories and lease outcomes, so each gets its own
+   registry built from the validated hues. One segment, one colour, everywhere in the tool.
+   ------------------------------------------------------------------------------------------- */
+:root {
+  --seg-residential: var(--div-contracting);
+  --seg-commercial: var(--div-facilities);
+  --seg-retail: var(--div-realestate);
+  --seg-warehouse: var(--div-plant);
+  --seg-camps: var(--cat-other);
+  --seg-mall: var(--div-corporate);
+
+  --seg-renew: var(--cat-materials);
+  --seg-new-tenant: var(--cat-plant);
+  --seg-not-relet: var(--cat-overheads);
+}
+
+/* Cell states, spread further apart than the design-system defaults (which sit 3-6% apart in
+   lightness and blur together in a dense grid). Three clear steps in both themes:
+   editable = surface, boxed · calculated = light step, italic · fixed (Oracle) = darker step. */
+:root {
+  --cell-calc: #ebebeb;
+  --cell-locked: #d2d2d2;
+}
+[data-theme='dark'] {
+  --cell-calc: #2b2b2b;
+  --cell-locked: #474747;
 }
 
 :root {
+  color-scheme: light;
+}
+[data-theme='dark'] {
   color-scheme: dark;
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
-  --hdr-bg: #15233a;
-  --hdr-fg: #a9c7f5;
-  --band-bg: #1a2c47;
-  --band-fg: #d6e4fb;
-  --line: #263241;
-  --line-strong: #34445a;
-  --surface: #121821;
-  --surface-2: #0f151d;
 }
 
 body {
-  background: var(--color-slate-50);
-  color: var(--color-slate-700);
+  background: var(--ground);
+  color: var(--ink);
+  accent-color: var(--ink);
 }
 
 ::selection {
-  background: #1d4ed8;
-  color: #fff;
+  background: var(--ink);
+  color: var(--ink-inverse);
 }
 
 * {
-  scrollbar-color: #34445a transparent;
+  scrollbar-color: var(--control-border) transparent;
 }
 
+/* ---------------------------------------------------------------------------------------------
+   Shared controls, expressed in design-system terms (anh-btn, anh-input, anh-card, anh-seg, ...)
+   ------------------------------------------------------------------------------------------- */
 @layer components {
-  .input {
-    @apply rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[13px] text-slate-800 outline-none focus:border-sky-400;
+  /* form controls only: the design system also uses .input as a cell state (td.input, legend i.input) */
+  :is(input, select, textarea, button).input {
+    min-height: var(--control-h);
+    padding: 0 var(--space-2);
+    font: 400 13px/20px var(--font-sans);
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--control-border);
+    border-radius: var(--radius-sm);
+    min-width: 0;
   }
-  .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1 text-[13px] font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50;
+  :is(input, select, textarea, button).input::placeholder {
+    color: var(--ink-muted);
   }
-  .btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-50;
-    background: var(--accent-strong);
-    border-color: var(--accent);
-    color: #fff;
+  :is(input, select, textarea, button).input:hover {
+    border-color: var(--ink);
   }
-  .btn-primary:hover {
-    background: var(--accent);
+  :is(input, select, textarea, button).input:focus {
+    outline: var(--rule) solid var(--focus);
+    outline-offset: 1px;
+    border-color: var(--ink);
+  }
+  :is(input, select, textarea, button).input:disabled,
+  :is(input, select, textarea, button).input[readonly] {
+    background: var(--cell-locked);
+    color: var(--ink-2);
+    border-style: dashed;
+  }
+
+  .btn,
+  .btn-primary,
+  .btn-danger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    height: var(--control-h);
+    padding: 0 var(--space-4);
+    font: 600 13px/1 var(--font-sans);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--control-border);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .btn:hover {
+    background: var(--surface-sunken);
+    border-color: var(--ink);
+  }
+  /* ink means attention: the one primary action, and a destructive confirm */
+  .btn-primary,
+  .btn-danger {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--ink-inverse);
+  }
+  .btn-primary:hover,
+  .btn-danger:hover {
+    background: var(--ink-2);
+    border-color: var(--ink-2);
+  }
+  .btn:disabled,
+  .btn-primary:disabled,
+  .btn-danger:disabled {
+    background: var(--surface-sunken);
+    color: var(--ink-muted);
+    border-color: var(--line);
+    cursor: not-allowed;
   }
   .btn-xs {
-    @apply px-2 py-0.5 text-xs;
+    height: 24px;
+    padding: 0 var(--space-2);
+    font-size: 12px;
   }
-  .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1 text-[13px] font-medium disabled:opacity-50;
-    background: #b91c1c;
-    color: #fff;
-  }
+
   .card {
-    @apply rounded-lg border border-slate-200 bg-white;
+    background: var(--surface);
+    border: 1px solid var(--line);
   }
+
   .badge {
-    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 var(--space-2);
+    font: 700 10.5px/1 var(--font-sans);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    border: 1px solid var(--ink);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
   }
+
   .seg {
-    @apply inline-flex overflow-hidden rounded-md border border-slate-300 bg-white text-[13px];
+    display: inline-flex;
+    height: var(--control-h);
+    overflow: hidden;
+    border: 1px solid var(--control-border);
+    border-radius: var(--radius-sm);
   }
   .seg > * {
-    @apply border-l border-slate-300 px-2.5 py-1 text-slate-600 first:border-l-0 hover:text-slate-900;
+    display: inline-flex;
+    align-items: center;
+    border: 0;
+    background: var(--surface);
+    color: var(--ink-2);
+    font: 600 12px/1 var(--font-sans);
+    letter-spacing: 0.04em;
+    padding: 0 var(--space-3);
+    cursor: pointer;
   }
-  .seg > .on {
-    background: var(--accent-strong);
-    color: #fff;
+  .seg > * + * {
+    border-left: 1px solid var(--line);
   }
+  .seg > *:hover {
+    background: var(--surface-sunken);
+    color: var(--ink);
+  }
+  .seg > .on,
+  .seg > [aria-pressed='true'] {
+    background: var(--ink);
+    color: var(--ink-inverse);
+  }
+
   .page-title {
-    @apply text-lg font-semibold text-slate-900;
+    margin: 0;
+    font-size: 24px;
+    line-height: 30px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--ink);
   }
   .page-sub {
-    @apply text-[13px] text-slate-500;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--ink-muted);
   }
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Financial tables
+   Financial tables: .tbl follows .anh-grid (black column header, gray period band, section /
+   subtotal / total tiers, no zebra, no colour for variance). .tbl is a report grid (36px rows);
+   .tbl-compact is the entry density (28px).
    ------------------------------------------------------------------------------------------- */
 .frame {
   overflow: auto;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border: 1px solid var(--line);
   background: var(--surface);
 }
 .frame-tall {
-  max-height: calc(100vh - 150px);
+  max-height: calc(100vh - var(--topbar-h) - 150px);
 }
 
 .tbl {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-slate-700);
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--ink);
 }
 .tbl.tbl-fit {
   width: auto;
@@ -155,63 +295,58 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--hdr-bg);
-  color: var(--hdr-fg);
+  background: var(--header-1);
+  color: var(--ink-inverse);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   text-align: left;
   white-space: nowrap;
-  padding: 7px 10px;
-  border-bottom: 2px solid var(--accent);
+  padding: 6px var(--space-3);
+  border-bottom: var(--rule) solid var(--line-strong);
   vertical-align: bottom;
 }
 .tbl thead tr.tbl-band th {
-  text-transform: none;
-  font-size: 11px;
-  letter-spacing: 0.01em;
-  color: var(--band-fg);
-  background: var(--band-bg);
-  border-bottom: 1px solid var(--line-strong);
+  background: var(--header-2);
+  color: var(--ink);
+  border-bottom: 0;
+  border-left: 1px solid var(--surface);
   text-align: center;
-  padding: 4px 10px;
+  padding: 4px var(--space-3);
 }
 .tbl thead tr.tbl-band + tr th {
-  top: 25px;
+  top: 24px;
 }
 .tbl tbody td {
-  padding: 0 10px;
-  height: 30px;
+  height: var(--row-default);
+  padding: 0 var(--space-3);
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
   background: var(--surface);
 }
 .tbl.tbl-compact tbody td {
-  height: 26px;
-  padding: 0 8px;
+  height: var(--row-compact);
+  padding: 0 var(--space-2);
 }
 .tbl.tbl-compact thead th {
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
 }
 .tbl tbody tr:hover td {
-  background: #172130;
+  background: var(--cell-input-hover);
 }
 .tbl .num,
 .tbl th.num {
   text-align: right;
+  white-space: nowrap;
 }
 .tbl .muted {
-  color: var(--color-slate-500);
+  color: var(--ink-muted);
 }
-.tbl .neg {
-  color: #f87171;
-}
-.tbl .pos {
-  color: #34d399;
-}
+/* negatives carry brackets from fmt(); direction is never coloured */
 .tbl .na {
-  color: #3d4a5c;
+  color: var(--ink-muted);
   text-align: right;
 }
 .tbl .sep {
@@ -229,140 +364,144 @@ body {
   z-index: 3;
 }
 .tbl .stick-edge {
-  box-shadow: inset -1px 0 0 var(--line-strong);
+  box-shadow: inset -1px 0 0 var(--line);
 }
-.tbl tr.tbl-group td {
-  background: #0f1a28;
-  height: 26px;
-  font-size: 11px;
+.tbl tr.tbl-group td,
+.tbl tr.lvl-0 td {
+  background: var(--header-3);
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #7fa7e6;
-  border-top: 1px solid var(--line-strong);
+  color: var(--ink);
 }
 .tbl tr.tbl-sub td {
+  background: var(--cell-subtotal);
   font-weight: 600;
-  color: var(--color-slate-800);
-  background: #141c27;
-  border-bottom: 1px solid var(--line-strong);
+  color: var(--ink);
+  border-top: 1px solid var(--line-strong);
 }
 .tbl tr.tbl-total td {
   position: sticky;
   bottom: 0;
   z-index: 1;
+  background: var(--cell-total);
+  color: var(--ink-inverse);
   font-weight: 700;
-  color: var(--color-slate-900);
-  background: var(--hdr-bg);
-  border-top: 2px solid var(--accent);
+  border-top: var(--rule-double) var(--line-strong);
   border-bottom: none;
 }
 .tbl tr.tbl-total td.stick {
   z-index: 2;
 }
-.tbl tr.lvl-0 td {
-  font-weight: 600;
-  color: var(--color-slate-900);
-  background: #151f2c;
+.tbl tr.tbl-total td .muted,
+.tbl tr.tbl-total td.na {
+  color: var(--ink-inverse);
+}
+.tbl tr.tbl-total .anh-var.is-breach {
+  background: var(--ink-inverse);
+  color: var(--ink);
 }
 
+/* editable cell: white, boxed in control-border */
 .cell-edit {
   width: 100%;
   min-width: 0;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 0;
+  background: var(--cell-input);
   padding: 2px 4px;
   font: inherit;
   color: inherit;
 }
 .cell-edit:hover {
-  border-color: var(--line-strong);
-  background: #0f151d;
+  border-color: var(--ink);
+  background: var(--cell-input-hover);
 }
 .cell-edit:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: #0f151d;
+  outline: var(--rule) solid var(--focus);
+  outline-offset: -1px;
+  border-color: var(--ink);
 }
 .cell-edit::placeholder {
-  color: #4b596b;
-}
-input[type='date'].cell-edit::-webkit-calendar-picker-indicator {
-  filter: invert(0.7);
+  color: var(--ink-muted);
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Lease Budget grid (AG Grid). Column groups are colour-coded by where the data comes from.
+   Lease Budget grid (AG Grid). Column groups are told apart by cell state, not colour:
+   editable = boxed white, Oracle = locked gray, calculated = faint gray, override = bold.
    ------------------------------------------------------------------------------------------- */
-.ag-header-group-cell.hdr-unit,
-.ag-header-cell.hdr-unit {
-  --hdr-line: #64748b;
-  --hdr-text: #cbd5e1;
+.ag-header-group-cell {
+  background-color: var(--header-2);
+  color: var(--ink);
 }
-.ag-header-group-cell.hdr-fusion,
-.ag-header-cell.hdr-fusion {
-  --hdr-line: #14b8a6;
-  --hdr-text: #99f6e4;
-  background-color: #10262a;
+.ag-header-group-cell .ag-header-group-text {
+  color: var(--ink);
 }
-.ag-header-group-cell.hdr-input,
-.ag-header-cell.hdr-input {
-  --hdr-line: #f59e0b;
-  --hdr-text: #fde68a;
-  background-color: #2a2213;
+.ag-header-cell-text,
+.ag-header-group-text {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-.ag-header-group-cell.hdr-rera,
-.ag-header-cell.hdr-rera {
-  --hdr-line: #a78bfa;
-  --hdr-text: #ddd6fe;
-  background-color: #1e1a33;
-}
-.ag-header-group-cell.hdr-revenue,
-.ag-header-cell.hdr-revenue {
-  --hdr-line: #3b82f6;
-  --hdr-text: #bfdbfe;
-  background-color: #132544;
-}
-.ag-header-group-cell.hdr-cash,
-.ag-header-cell.hdr-cash {
-  --hdr-line: #10b981;
-  --hdr-text: #a7f3d0;
-  background-color: #10291f;
-}
-.ag-header-group-cell[class*='hdr-'] {
-  border-top: 3px solid var(--hdr-line) !important;
-}
-.ag-header-group-cell[class*='hdr-'] .ag-header-group-text,
-.ag-header-cell[class*='hdr-'] .ag-header-cell-text {
-  color: var(--hdr-text);
+/* calculated columns carry the fx mark (as .anh-grid th .fx) */
+.ag-header-cell.hdr-rera .ag-header-cell-text::before,
+.ag-header-cell.hdr-revenue .ag-header-cell-text::before,
+.ag-header-cell.hdr-cash .ag-header-cell-text::before {
+  content: 'fx';
+  margin-right: 4px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.75;
 }
 
 .cell-fusion {
-  color: #9fb4c8;
+  background-color: var(--cell-locked);
+  color: var(--ink-2);
+}
+.cell-derived,
+.anh-grid td.calc {
+  background-color: var(--cell-calc);
+  color: var(--ink-2);
+  font-style: italic;
 }
 .cell-input {
-  background-color: rgba(245, 158, 11, 0.07);
+  background-color: var(--cell-input);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--control-border);
+}
+.cell-input:hover {
+  background-color: var(--cell-input-hover);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+/* editable, currently showing the calculated value */
+.cell-input.cell-derived {
+  background-color: var(--cell-calc);
+  color: var(--ink-2);
 }
 .cell-override {
-  background-color: rgba(245, 158, 11, 0.18);
-  color: #fcd34d;
-  font-weight: 600;
-}
-.cell-derived {
-  color: #8b98a9;
+  color: var(--ink);
+  font-weight: 700;
 }
 .cell-month {
   font-variant-numeric: tabular-nums;
 }
 .cell-issue {
-  color: #fbbf24;
+  color: var(--ink);
   font-weight: 700;
   text-align: center;
 }
 .row-warning .ag-cell:first-child {
-  box-shadow: inset 3px 0 0 #f59e0b;
+  box-shadow: inset var(--rule) 0 0 var(--ink);
 }
 .group-start {
-  border-left: 1px solid #3a4a60 !important;
+  border-left: 1px solid var(--line-strong) !important;
+}
+.ag-cell-focus:not(.ag-cell-range-selected) {
+  box-shadow: inset 0 0 0 var(--rule) var(--cell-selected) !important;
+}
+/* pinned total row (theme params set its fill): cell-state fills give way to it */
+.ag-row-pinned .ag-cell {
+  background-color: transparent;
+  color: inherit;
+  box-shadow: none;
 }

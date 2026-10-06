@@ -137,7 +137,6 @@ export function AssumptionsPanel({
       action={(f) =>
         run(() =>
           saveAssumptions(versionId, {
-            vacancyGapDays: n(f.get('vacancyGapDays')),
             renewalTermDays: n(f.get('renewalTermDays')),
             staffDiscount: n(f.get('staffDiscount')) / 100,
             reraBands: bands,
@@ -152,7 +151,6 @@ export function AssumptionsPanel({
       }
     >
       <h2 className="mb-2 font-semibold">Assumptions · {versionName}</h2>
-      {field('vacancyGapDays', 'Vacancy gap for new tenants', a.vacancyGapDays, 'Days between a non-renewed lease ending and the new tenant starting', 1, 'days')}
       {field('renewalTermDays', 'Renewal term', a.renewalTermDays, 'Length of a renewed / new contract', 1, 'days')}
       {field('staffDiscount', 'Staff discount', a.staffDiscount, 'Grossed up when comparing staff rents with RERA', 100, '%')}
       {field('labourIncrease', 'Labour unit renewal increase', a.labourIncrease, 'R/C = L units outside the camps', 100, '%')}

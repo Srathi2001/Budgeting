@@ -68,6 +68,8 @@ export interface MasterRow {
   mfCurrent: boolean | null;
   renew1: boolean;
   noRenewal: boolean;
+  /** new tenant: empty days after the current lease before the new tenant starts (required) */
+  vacancyDays: number | null;
   r1Rent: number | null;
   r1Start: string | null;
   r1End: string | null;
@@ -135,6 +137,7 @@ export const LINE_FIELDS = [
   'mfCurrent',
   'renew1',
   'noRenewal',
+  'vacancyDays',
   'r1Rent',
   'r1Start',
   'r1End',
@@ -174,8 +177,8 @@ export const UNIT_FIELDS = [
 ] as const;
 
 /**
- * Fields that come from Oracle (the Tenant and Lease Details Report import): only an admin may
- * change them in the tool, and the next import overwrites them.
+ * Fields that come from Oracle (the Tenant and Lease Details Report import): fixed in the tool for
+ * everyone. Corrections are made in Oracle and arrive with the next import.
  */
 export const ORACLE_FIELDS = [
   'area',
@@ -212,9 +215,14 @@ export function contractedFields(contracted: number): string[] {
   return out;
 }
 
-/** Fields of this row that only an admin may change. */
-export function adminOnlyFields(contracted: number): Set<string> {
+/** Fields of this row that are fixed (from the Oracle import). */
+export function fixedFields(contracted: number): Set<string> {
   return new Set<string>([...ORACLE_FIELDS, ...contractedFields(contracted)]);
+}
+
+/** Budget input fields anyone allowed to edit the row may change (also the Excel template's input columns). */
+export function isEditableField(field: string, contracted: number) {
+  return ((LINE_FIELDS as readonly string[]).includes(field) || (UNIT_FIELDS as readonly string[]).includes(field)) && !fixedFields(contracted).has(field);
 }
 
 export type LineField = (typeof LINE_FIELDS)[number];

@@ -62,7 +62,6 @@ export async function recalcVersion(versionId: number): Promise<Result> {
 // ---- assumptions ----------------------------------------------------------------------------
 
 const AssumptionsSchema = z.object({
-  vacancyGapDays: z.number().int().min(0).max(365),
   renewalTermDays: z.number().int().min(28).max(3650),
   staffDiscount: z.number().min(0).max(1),
   reraBands: z.array(z.object({ gapAbove: z.number().min(-1).max(1), increase: z.number().min(0).max(1) })).max(10),

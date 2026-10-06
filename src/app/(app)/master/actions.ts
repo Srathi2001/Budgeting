@@ -3,10 +3,12 @@
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@/db';
-import { requireUser, canEditProperty, editablePropertyIds } from '@/lib/auth/dal';
+import { requireUser, canEditProperty, editablePropertyIds, visibleProperties } from '@/lib/auth/dal';
 import { recalcLines } from '@/lib/budget/calc';
 import { loadMasterRows } from '@/lib/budget/master';
 import { applyLineChanges } from '@/lib/budget/save';
+import { saveReraRange } from '@/lib/budget/rera';
+import { diffUpload, readTemplate, type UploadChange } from '@/lib/budget/excel-template';
 import type { RowPatch, SaveResult, MasterRow } from '@/lib/budget/master-types';
 
 export async function saveLines(versionId: number, changes: { lineId: number; patch: RowPatch }[]): Promise<SaveResult> {
@@ -91,38 +93,62 @@ export async function saveRera(versionId: number, input: z.infer<typeof ReraSche
   const parsed = ReraSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
   const { propertyId, bedroom, min, max } = parsed.data;
-  if ((min === null) !== (max === null)) return { error: 'Enter both the low and the high rent, or clear both' };
-  if (min !== null && max !== null && min > max) return { error: 'The low rent is above the high rent' };
   const check = await canEditProperty(user, versionId, propertyId);
   if (!check.ok) return { error: check.reason };
-  const [property] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
-  if (!property) return { error: 'Property not found' };
-  const code = bedroom.toUpperCase();
-
-  const lineIds = await db.transaction(async (tx) => {
-    const where = and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
-    await tx.delete(schema.reraIndex).where(where);
-    if (min !== null && max !== null) await tx.insert(schema.reraIndex).values({ versionId, propertyCode: property.code, bedroom: code, min, max });
-    await tx.insert(schema.auditLog).values({
-      userId: user.id,
-      versionId,
-      propertyId,
-      entity: 'rera_index',
-      entityId: `${property.code}|${code}`,
-      action: min === null ? 'delete' : 'upsert',
-      changes: { min, max },
-    });
-    const lines = await tx
-      .select({ id: schema.leaseLines.id, bedroom: schema.units.bedroom })
-      .from(schema.leaseLines)
-      .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
-      .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId)));
-    const ids = lines.filter((l) => (l.bedroom ?? '').trim().toUpperCase() === code).map((l) => l.id);
-    if (ids.length) await recalcLines(tx, versionId, ids);
-    return ids;
-  });
+  const saved = await saveReraRange(user, versionId, propertyId, bedroom, min, max);
+  if (saved.error) return { error: saved.error };
+  const lineIds = saved.lineIds!;
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   return { rows: await loadMasterRows(versionId, { lineIds, editableProperties: await editablePropertyIds(user, version) }) };
+}
+
+export interface TemplateUploadResult {
+  error?: string;
+  changes: UploadChange[];
+  errors: { excelRow: number; unit: string; message: string }[];
+  /** lines and RERA ranges saved (apply only) */
+  saved?: { lines: number; rera: number };
+}
+
+/**
+ * Lease Budget input template upload. Without `apply` it only reports what would change; with
+ * `apply` the changes go through the same save path as the grid.
+ */
+export async function uploadTemplate(versionId: number, form: FormData, apply: boolean): Promise<TemplateUploadResult> {
+  const user = await requireUser();
+  const file = form.get('file');
+  if (!(file instanceof File) || !file.size) return { error: 'Choose the filled-in template (.xlsx)', changes: [], errors: [] };
+  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  if (!version) return { error: 'Version not found', changes: [], errors: [] };
+  const { rows: uploaded, error } = await readTemplate(await file.arrayBuffer(), version.year);
+  if (error) return { error, changes: [], errors: [] };
+  if (!uploaded.length) return { error: 'No lines found in the “Lease Budget” sheet', changes: [], errors: [] };
+
+  const editable = await editablePropertyIds(user, version);
+  const visible = new Set((await visibleProperties(user)).map((p) => p.id));
+  const current = (await loadMasterRows(versionId, { lineIds: uploaded.map((u) => u.lineId), editableProperties: editable })).filter((r) => visible.has(r.propertyId));
+  const diff = diffUpload(uploaded, new Map(current.map((r) => [r.lineId, r])), version.year);
+  if (!apply) return { changes: diff.changes, errors: diff.errors };
+
+  const errors = [...diff.errors];
+  const rowOf = new Map(uploaded.map((u) => [u.lineId, u.excelRow]));
+  let reraSaved = 0;
+  for (const r of diff.rera) {
+    const check = await canEditProperty(user, versionId, r.propertyId);
+    const res = check.ok ? await saveReraRange(user, versionId, r.propertyId, r.bedroom, r.min, r.max) : { error: check.reason };
+    if (res.error) errors.push({ excelRow: r.excelRow, unit: r.unit, message: `RERA: ${res.error}` });
+    else reraSaved++;
+  }
+  const res = await applyLineChanges(user, versionId, [...diff.patches].map(([lineId, patch]) => ({ lineId, patch })));
+  for (const e of res.errors) errors.push({ excelRow: rowOf.get(e.lineId) ?? 0, unit: current.find((r) => r.lineId === e.lineId)?.unitCode ?? String(e.lineId), message: e.message });
+  await db.insert(schema.auditLog).values({
+    userId: user.id,
+    versionId,
+    entity: 'template_upload',
+    action: 'apply',
+    changes: { file: file.name, lines: diff.patches.size - res.errors.length, rera: reraSaved, rejected: errors.length },
+  });
+  return { changes: diff.changes, errors, saved: { lines: diff.patches.size - res.errors.length, rera: reraSaved } };
 }
 
 export async function removeLine(versionId: number, lineId: number): Promise<{ error?: string }> {

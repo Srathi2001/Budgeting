@@ -47,6 +47,7 @@ export function lineToInput(
     securityDeposit: line.securityDeposit,
     renew1: line.renew1,
     noRenewal: line.noRenewal,
+    vacancyDays: line.vacancyDays,
     r1Rent: line.r1Rent,
     r1Start: parseDay(line.r1Start),
     r1End: parseDay(line.r1End),

@@ -9,6 +9,10 @@ export const outcomeOf = (r: Pick<MasterRow, 'renew1' | 'noRenewal' | 'currentEn
   r.noRenewal ? 'Not re-let' : r.renew1 && r.currentEnd ? 'Renew' : 'New tenant';
 export const outcomePatch = (o: Outcome) => ({ renew1: o === 'Renew', noRenewal: o === 'Not re-let' });
 
+/** A current lease going to a new tenant (not contracted, not owner): vacancy days are required. */
+export const needsVacancyDays = (r: Pick<MasterRow, 'renew1' | 'noRenewal' | 'currentEnd' | 'contracted' | 'staffOwner'>) =>
+  !!r.currentEnd && !r.contracted && r.staffOwner !== 'OWNER' && outcomeOf(r) === 'New tenant';
+
 /** Current contract rent per year (a contract year can be longer or shorter than 12 months). */
 export function annualRent(r: Pick<MasterRow, 'current'>): number | null {
   const c = r.current;

@@ -5,16 +5,14 @@ import Link from 'next/link';
 import type { DashboardData, DashUnit, ExpiryOutcome } from '@/lib/budget/dashboard';
 import { CATEGORIES } from '@/lib/budget/category';
 import { MONTHS } from '@/lib/format';
-import { ChartCard, Columns, HBars, Legend, LineChart, StatTile, SERIES, MUTED_SERIES, compact } from '@/components/charts';
+import { ChartCard, Columns, HBars, Legend, LineChart, StatTile, compact } from '@/components/charts';
+import { CATEGORY_COLOR, MEASURE, OUTCOME_COLOR } from '@/lib/segments';
 import { MultiSelect } from '@/components/multi-select';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
 const add12 = (acc: number[], v: number[] | null) => (v ? acc.map((x, i) => x + v[i]) : acc);
 const pctTxt = (n: number | null, d = 1) => (n === null || !Number.isFinite(n) ? '–' : `${(n * 100).toFixed(d)}%`);
-
-// colour follows the entity, never its rank
-const CAT_COLOR = Object.fromEntries(CATEGORIES.map((c, i) => [c, SERIES[i]]));
 
 // ---- rent per sq ft: area-weighted (total annual rent ÷ total let sq ft); camps are priced per bed, so left out
 const SIZE_BANDS: [number, number, string][] = [
@@ -44,7 +42,6 @@ function psfBy(units: DashUnit[], key: (u: DashUnit) => string) {
   return [...m].map(([label, a]) => ({ label, ...a, psf: a.letArea > 0 ? a.rent / a.letArea : NaN })).filter((r) => r.letArea > 0);
 }
 const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
-const OUTCOME_COLOR: Record<ExpiryOutcome, string> = { Renew: SERIES[0], 'New tenant': SERIES[1], 'Not re-let': SERIES[2] };
 
 export function Dashboard({ data, locked }: { data: DashboardData; locked: boolean }) {
   // multi-select filters; an empty list means "All"
@@ -151,18 +148,19 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
   const propN = count((u) => String(u.propertyId));
 
   return (
-    <div className="space-y-4 p-6">
-      <header className="flex flex-wrap items-end gap-3">
+    <div className="anh-main">
+      <header className="anh-pagehead">
         <div>
-          <h1 className="page-title">{data.versionName}</h1>
-          <p className="page-sub">
-            {locked ? 'Locked — read only' : 'Open for input'} · AED · compared with {data.priorName ?? 'no prior budget'}
+          <span className="anh-eyebrow">Dashboard</span>
+          <h1>{data.versionName}</h1>
+          <p className="page-sub mt-1">
+            {locked ? 'Locked, read only' : 'Open for input'} · AED · vs {data.priorName ?? 'no prior budget'}
           </p>
         </div>
       </header>
 
       {/* one filter row; it scopes every tile and chart below */}
-      <div className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
+      <div className="anh-filterbar text-[13px]">
         <MultiSelect
           label="Business unit"
           value={bu}
@@ -224,7 +222,8 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           label={`Revenue ${B}`}
           value={compact(m.total)}
           delta={change === null ? undefined : `${pctTxt(change)} vs ${P}`}
-          deltaGood={change === null ? undefined : change >= 0}
+          deltaDir={change === null ? undefined : change >= 0 ? 'up' : 'down'}
+          adverse={change !== null && change < 0}
           sub={`${P}: ${compact(m.priorTotal)}`}
           spark={m.budget}
         />
@@ -244,14 +243,14 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         <ChartCard
           title={`Revenue by month · ${B} vs ${P}`}
           sub="Budget revenue recognised each month"
-          legend={<Legend shape="line" items={[{ label: B, color: SERIES[0] }, { label: P, color: MUTED_SERIES }]} />}
+          legend={<Legend shape="line" items={[{ label: B, color: MEASURE.budget }, { label: P, color: MEASURE.prior, dash: true }]} />}
           table={{ head: ['Month', B, P, 'Change'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, Math.round(m.budget[i]), Math.round(m.prior[i]), Math.round(m.budget[i] - m.prior[i])]) }}
         >
           <LineChart
             labels={monthLabels}
             series={[
-              { name: P, color: MUTED_SERIES, values: m.prior },
-              { name: B, color: SERIES[0], values: m.budget },
+              { name: P, color: MEASURE.prior, values: m.prior, dash: true },
+              { name: B, color: MEASURE.budget, values: m.budget },
             ]}
           />
         </ChartCard>
@@ -259,14 +258,14 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         <ChartCard
           title={`Revenue vs cash inflow · ${data.year}`}
           sub="Cash follows the cheque schedules; it includes VAT and security deposits"
-          legend={<Legend items={[{ label: 'Revenue', color: SERIES[0] }, { label: 'Cash inflow', color: SERIES[2] }]} />}
+          legend={<Legend items={[{ label: 'Revenue', color: MEASURE.budget }, { label: 'Cash inflow', color: MEASURE.cash }]} />}
           table={{ head: ['Month', 'Revenue', 'Cash inflow', 'Cash − revenue'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, Math.round(m.budget[i]), Math.round(m.cash[i]), Math.round(m.cash[i] - m.budget[i])]) }}
         >
           <Columns
             labels={monthLabels}
             series={[
-              { name: 'Revenue', color: SERIES[0], values: m.budget },
-              { name: 'Cash inflow', color: SERIES[2], values: m.cash },
+              { name: 'Revenue', color: MEASURE.budget, values: m.budget },
+              { name: 'Cash inflow', color: MEASURE.cash, values: m.cash },
             ]}
           />
         </ChartCard>
@@ -274,10 +273,10 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         <ChartCard
           title="Revenue mix · business unit by category"
           sub={`${B} revenue`}
-          legend={<Legend items={CATEGORIES.filter((c) => m.buCat.some((r) => r.values[CATEGORIES.indexOf(c)] > 0)).map((c) => ({ label: c, color: CAT_COLOR[c] }))} />}
+          legend={<Legend items={CATEGORIES.filter((c) => m.buCat.some((r) => r.values[CATEGORIES.indexOf(c)] > 0)).map((c) => ({ label: c, color: CATEGORY_COLOR[c] }))} />}
           table={{ head: ['Business unit', ...CATEGORIES, 'Total'], rows: m.buCat.map((r) => [r.label, ...r.values.map(Math.round), Math.round(sum(r.values))]) }}
         >
-          <HBars labelWidth={80} rows={m.buCat} series={CATEGORIES.map((c) => ({ name: c, color: CAT_COLOR[c] }))} />
+          <HBars labelWidth={80} rows={m.buCat} series={CATEGORIES.map((c) => ({ name: c, color: CATEGORY_COLOR[c] }))} />
         </ChartCard>
 
         <ChartCard
@@ -285,7 +284,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           sub="Share of units earning rent in the month"
           table={{ head: ['Month', 'Occupancy %'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, `${(m.occ[i] * 100).toFixed(1)}%`]) }}
         >
-          <LineChart labels={monthLabels} series={[{ name: 'Occupancy', color: SERIES[0], values: m.occ.map((v) => v * 100) }]} fmt={(n) => `${Math.round(n)}%`} min={Math.max(0, Math.floor((Math.min(...m.occ) * 100 - 5) / 10) * 10)} />
+          <LineChart labels={monthLabels} series={[{ name: 'Occupancy', color: MEASURE.budget, values: m.occ.map((v) => v * 100) }]} fmt={(n) => `${Math.round(n)}%`} min={Math.max(0, Math.floor((Math.min(...m.occ) * 100 - 5) / 10) * 10)} />
         </ChartCard>
 
         <ChartCard
@@ -295,7 +294,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         >
           <HBars
             rows={m.top.map((p) => ({ label: p.name, values: [p.budget], note: p.prior ? pctTxt((p.budget - p.prior) / p.prior) : undefined }))}
-            series={[{ name: B, color: SERIES[0] }]}
+            series={[{ name: B, color: MEASURE.budget }]}
             note={(r) => r.note}
           />
         </ChartCard>
@@ -305,7 +304,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           sub="Change in budget revenue by property"
           table={{ head: ['Property', B, P, 'Change'], rows: m.movers.map((p) => [p.name, Math.round(p.budget), Math.round(p.prior), Math.round(p.change)]) }}
         >
-          <HBars diverging rows={m.movers.map((p) => ({ label: p.name, values: [p.change] }))} series={[{ name: 'Change', color: SERIES[0] }]} />
+          <HBars diverging rows={m.movers.map((p) => ({ label: p.name, values: [p.change] }))} series={[{ name: 'Change', color: MEASURE.budget }]} />
         </ChartCard>
 
         <ChartCard
@@ -338,7 +337,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           <HBars
             labelWidth={190}
             rows={m.psfProp.map((r) => ({ label: r.label, values: [r.psf], note: `${compact(r.letArea)} sq ft` }))}
-            series={[{ name: 'AED / sq ft', color: SERIES[0] }]}
+            series={[{ name: 'AED / sq ft', color: MEASURE.budget }]}
             fmt={psf1}
             tipFmt={aedPsf}
             note={(r) => r.note}
@@ -354,7 +353,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
             <HBars
               labelWidth={150}
               rows={m.psfLoc.map((r) => ({ label: r.label, values: [r.psf], note: `${compact(r.letArea)} sq ft` }))}
-              series={[{ name: 'AED / sq ft', color: SERIES[0] }]}
+              series={[{ name: 'AED / sq ft', color: MEASURE.budget }]}
               fmt={psf1}
               tipFmt={aedPsf}
               note={(r) => r.note}
@@ -369,7 +368,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
             <HBars
               labelWidth={170}
               rows={m.psfType.map((r) => ({ label: r.label, values: [r.psf], note: `${r.units} units` }))}
-              series={[{ name: 'AED / sq ft', color: SERIES[0] }]}
+              series={[{ name: 'AED / sq ft', color: MEASURE.budget }]}
               fmt={psf1}
               tipFmt={aedPsf}
               note={(r) => r.note}
@@ -379,7 +378,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           <ChartCard
             title="By unit size and category"
             sub="AED per sq ft per year for each size band (sq ft)"
-            legend={<Legend items={m.psfCats.map((c) => ({ label: c, color: CAT_COLOR[c] }))} />}
+            legend={<Legend items={m.psfCats.map((c) => ({ label: c, color: CATEGORY_COLOR[c] }))} />}
             table={{
               head: ['Size (sq ft)', ...m.psfCats, 'All', 'Let sq ft'],
               rows: m.psfBands.map((b) => [b.label, ...m.psfCats.map((c) => psf1(b.byCat.get(c)?.psf ?? NaN)), psf1(b.all.psf), Math.round(b.all.letArea)]),
@@ -387,7 +386,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           >
             <Columns
               labels={m.psfBands.map((b) => b.label)}
-              series={m.psfCats.map((c) => ({ name: c, color: CAT_COLOR[c], values: m.psfBands.map((b) => b.byCat.get(c)?.psf ?? 0) }))}
+              series={m.psfCats.map((c) => ({ name: c, color: CATEGORY_COLOR[c], values: m.psfBands.map((b) => b.byCat.get(c)?.psf ?? 0) }))}
               fmt={(n) => String(Math.round(n))}
               tipFmt={aedPsf}
             />

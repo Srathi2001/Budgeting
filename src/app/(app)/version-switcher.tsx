@@ -12,10 +12,11 @@ export function VersionSwitcher({
 }) {
   const [pending, start] = useTransition();
   return (
-    <label className="block">
-      <span className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">Budget version</span>
+    <div className="anh-field">
+      <label htmlFor="budget-version">Budget version</label>
       <select
-        className="input mt-1 w-full"
+        id="budget-version"
+        className="anh-select w-full"
         value={current ?? ''}
         disabled={pending}
         onChange={(e) => start(() => setActiveVersion(Number(e.target.value)))}
@@ -23,10 +24,10 @@ export function VersionSwitcher({
         {versions.map((v) => (
           <option key={v.id} value={v.id}>
             {v.name}
-            {v.status === 'LOCKED' ? ' 🔒' : ''}
+            {v.status === 'LOCKED' ? ' · locked' : ''}
           </option>
         ))}
       </select>
-    </label>
+    </div>
   );
 }

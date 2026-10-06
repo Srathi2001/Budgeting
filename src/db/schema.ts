@@ -133,6 +133,8 @@ export const leaseLines = pgTable(
 
     renew1: boolean('renew1').notNull().default(true),
     noRenewal: boolean('no_renewal').notNull().default(false),
+    /** New tenant: empty days between the lease end and the new tenant's start (entered per lease). */
+    vacancyDays: integer('vacancy_days'),
     r1Rent: money('r1_rent'),
     r1Start: day('r1_start'),
     r1End: day('r1_end'),

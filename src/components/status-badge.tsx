@@ -1,12 +1,15 @@
-const STYLES: Record<string, string> = {
-  DRAFT: 'bg-slate-100 text-slate-700',
-  SUBMITTED: 'bg-sky-100 text-sky-800',
-  APPROVED: 'bg-emerald-100 text-emerald-800',
-  RETURNED: 'bg-amber-100 text-amber-800',
-  OPEN: 'bg-emerald-100 text-emerald-800',
-  LOCKED: 'bg-slate-200 text-slate-700',
+// .anh-tag: Approved (black), In review (gray), Draft / Open (outline), Locked (dashed), Returned (hatched).
+// The word carries the meaning; no colour.
+const TAGS: Record<string, { cls: string; label: string }> = {
+  DRAFT: { cls: '', label: 'Draft' },
+  SUBMITTED: { cls: 'anh-tag--review', label: 'In review' },
+  APPROVED: { cls: 'anh-tag--approved', label: 'Approved' },
+  RETURNED: { cls: 'anh-tag--rejected', label: 'Returned' },
+  OPEN: { cls: '', label: 'Open' },
+  LOCKED: { cls: 'anh-tag--locked', label: 'Locked' },
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  return <span className={`badge ${STYLES[status] ?? 'bg-slate-100 text-slate-700'}`}>{status.toLowerCase()}</span>;
+  const t = TAGS[status] ?? { cls: '', label: status.toLowerCase() };
+  return <span className={`anh-tag ${t.cls}`}>{t.label}</span>;
 }

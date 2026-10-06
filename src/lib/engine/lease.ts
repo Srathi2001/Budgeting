@@ -40,6 +40,11 @@ export interface LeaseInput {
   renew1: boolean;
   /** Unit is not re-let after the current contract (e.g. plot handed back, unit withdrawn). */
   noRenewal: boolean;
+  /**
+   * New tenant only: empty days between the current lease end and the new tenant's start, entered
+   * per lease (no default). Blank = the new letting can't be dated, so it isn't budgeted.
+   */
+  vacancyDays: number | null;
 
   // 1st renewal: null = derive per template logic, value = PM override
   r1Rent: number | null;
@@ -225,9 +230,16 @@ export function buildContracts(
   // only a sitting tenant can renew: a letting of a vacant unit is always a new tenant
   const renews = input.renew1 && hasCurrent;
   let r1Start = input.r1Start;
-  const r1StartDerived = r1Start === null;
-  if (r1Start === null && hasCurrent) {
-    r1Start = renews ? input.currentEnd! + 1 : input.currentEnd! + a.vacancyGapDays;
+  let r1StartDerived = r1Start === null;
+  if (hasCurrent && !renews) {
+    // new tenant after a current lease: the vacancy days entered for this lease decide the start
+    // (a start date typed earlier doesn't override them); without them the letting isn't budgeted
+    r1Start = input.vacancyDays !== null ? input.currentEnd! + input.vacancyDays + 1 : null;
+    r1StartDerived = true;
+    if (input.vacancyDays === null) warnings.push('New tenant: enter the vacancy days');
+  } else if (r1Start === null && hasCurrent) {
+    // renewal: the day after the lease ends
+    r1Start = input.currentEnd! + 1;
   }
   if (r1Start === null) return { contracts, increasePct, reraGap, reraAverage, warnings };
 

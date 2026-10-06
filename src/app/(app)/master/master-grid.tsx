@@ -6,7 +6,6 @@ import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
   ModuleRegistry,
-  colorSchemeDark,
   themeQuartz,
   type CellClassParams,
   type CellValueChangedEvent,
@@ -26,32 +25,43 @@ import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine, saveRera } from './actions';
 import { RowForm } from './row-form';
-import { OUTCOMES, annualRent, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
+import { TemplateImport } from './template-import';
+import { OUTCOMES, annualRent, needsVacancyDays, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
 import { MultiSelect } from '@/components/multi-select';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const theme = themeQuartz.withPart(colorSchemeDark).withParams({
+// Design-system tokens (CSS variables), so the grid follows the Paper / Carbon theme.
+// Black column header, gray group band, no zebra, square.
+const theme = themeQuartz.withParams({
+  browserColorScheme: 'inherit',
   fontFamily: 'inherit',
-  fontSize: 12,
+  fontSize: 13,
   rowHeight: 28,
   headerHeight: 30,
   spacing: 5,
-  backgroundColor: '#121821',
-  foregroundColor: '#c3ccd7',
-  chromeBackgroundColor: '#15233a',
-  headerBackgroundColor: '#15233a',
-  headerTextColor: '#a9c7f5',
-  headerFontWeight: 600,
-  borderColor: '#263241',
+  backgroundColor: 'var(--surface)',
+  foregroundColor: 'var(--ink)',
+  chromeBackgroundColor: 'var(--header-2)',
+  headerBackgroundColor: 'var(--header-1)',
+  headerTextColor: 'var(--ink-inverse)',
+  headerFontSize: 11,
+  headerFontWeight: 700,
+  borderColor: 'var(--line)',
   columnBorder: true,
-  headerColumnBorder: true,
-  oddRowBackgroundColor: '#131b25',
-  rowHoverColor: '#18263a',
-  selectedRowBackgroundColor: '#1a2c47',
-  accentColor: '#3b82f6',
-  wrapperBorderRadius: 8,
+  headerColumnBorder: { color: 'var(--ink-2)' },
+  oddRowBackgroundColor: 'var(--surface)',
+  rowHoverColor: 'var(--cell-input-hover)',
+  selectedRowBackgroundColor: 'var(--header-3)',
+  accentColor: 'var(--ink)',
+  // pinned total row: cell-total black, ink-inverse, double rule above
+  pinnedRowBackgroundColor: 'var(--cell-total)',
+  pinnedRowTextColor: 'var(--ink-inverse)',
+  pinnedRowFontWeight: 700,
+  pinnedRowBorder: { style: 'double', width: 3, color: 'var(--line-strong)' },
+  borderRadius: 2,
+  wrapperBorderRadius: 0,
 });
 
 type Row = MasterRow;
@@ -93,23 +103,22 @@ const inputClass = (p: CellClassParams<Row>) => (p.data?.editable && !p.node.isR
 const money = (p: ValueFormatterParams) => fmt(p.value as number | null);
 const money2 = (p: ValueFormatterParams) => fmt(p.value as number | null, 2);
 
-/** Field from Oracle (the lease report import): only an admin can edit it; the next import overwrites it. */
+/** Field from Oracle (the lease report import): fixed for everyone; the next import refreshes it. */
 function oracleCol(
   field: keyof Row,
   headerName: string,
-  isAdmin: boolean,
+  _isAdmin: boolean,
   kind: 'text' | 'money' | 'date' = 'text',
   extra: Partial<ColDef<Row>> = {},
 ): ColDef<Row> {
-  const canEdit = (p: EditableCallbackParams<Row>) => isAdmin && editable(p);
   return {
     colId: field as string,
     field,
     headerName,
     headerClass: extra.headerClass ?? 'hdr-fusion',
-    headerTooltip: 'From Oracle. Only an admin can change it; the next import replaces it.',
-    cellClass: (p) => (isAdmin && p.data?.editable && !p.node.isRowPinned() ? 'cell-fusion cell-input' : 'cell-fusion'),
-    editable: canEdit,
+    headerTooltip: 'Fixed: from the Oracle import',
+    cellClass: 'cell-fusion',
+    editable: false,
     cellDataType: false,
     ...(kind === 'text' ? { valueParser: (p: { newValue: unknown }) => (p.newValue === '' ? null : p.newValue) } : {}),
     ...(kind === 'money'
@@ -136,7 +145,7 @@ function overrideCol(
     headerName,
     headerClass: 'hdr-input',
     editable: (p) => editable(p) && !(p.data && lockedFor?.(p.data)),
-    headerTooltip: 'Blank = calculated (grey). Type a value to override (amber). Delete to revert.',
+    headerTooltip: 'Blank = calculated (grey). Type a value to override (bold). Delete to revert.',
     valueGetter: (p: ValueGetterParams<Row>) => {
       if (!p.data) return null;
       const o = p.data[field];
@@ -153,7 +162,11 @@ function overrideCol(
     ...(kind === 'yn' ? { cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['', 'Y', 'N'] } } : {}),
     ...(kind === 'date' ? { cellEditor: 'agTextCellEditor' } : {}),
     type: kind === 'money' ? 'rightAligned' : undefined,
-    cellClass: (p) => (p.node.isRowPinned() ? '' : p.data?.[field] !== null && p.data?.[field] !== undefined ? 'cell-override' : 'cell-derived'),
+    cellClass: (p) => {
+      if (p.node.isRowPinned()) return '';
+      const state = p.data?.[field] !== null && p.data?.[field] !== undefined ? 'cell-override' : 'cell-derived';
+      return p.data?.editable && !lockedFor?.(p.data) ? `${state} cell-input` : state;
+    },
   };
 }
 
@@ -200,6 +213,7 @@ function unitCol(field: keyof Row, headerName: string, opts: { edit?: 'text' | '
     field,
     headerName,
     headerClass: 'hdr-unit',
+    cellClass: 'cell-fusion',
     cellDataType: false,
     ...(isMoney ? { type: 'rightAligned', valueFormatter: money } : {}),
     ...extra,
@@ -268,6 +282,7 @@ export function MasterGrid({
   const [showCash, setShowCash] = useState(false);
   const [onlyIssues, setOnlyIssues] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [, startNav] = useTransition();
 
   const refreshTotals = useCallback(() => {
@@ -399,7 +414,8 @@ export function MasterGrid({
             headerName: 'Outcome',
             headerClass: 'hdr-input',
             headerTooltip: 'At the end of the current lease. Renew = RERA increase · New tenant = budget rate after the vacancy gap · Not re-let = stays empty',
-            editable: (p) => editable(p) && !!p.data && p.data.staffOwner !== 'OWNER' && (isAdmin || !p.data.contracted),
+            // contracted later years settle the outcome (Oracle): fixed
+            editable: (p) => editable(p) && !!p.data && p.data.staffOwner !== 'OWNER' && !p.data.contracted,
             cellClass: inputClass,
             cellDataType: false,
             valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? outcomeOf(p.data) : null),
@@ -410,6 +426,15 @@ export function MasterGrid({
             cellEditor: 'agSelectCellEditor',
             // a vacant unit has no tenant to renew
             cellEditorParams: (p: { data?: Row }) => ({ values: p.data?.currentEnd ? [...OUTCOMES] : OUTCOMES.filter((o) => o !== 'Renew') }),
+          },
+          {
+            ...inputCol('vacancyDays', 'Vacancy Days', 'int', {
+              headerTooltip: 'New tenant: empty days between the lease end and the new tenant. Required; no default.',
+            }),
+            editable: (p) => editable(p) && !!p.data && needsVacancyDays(p.data),
+            // required and missing: flagged like an issue
+            cellClass: (p) =>
+              !p.data || p.node.isRowPinned() || !needsVacancyDays(p.data) ? '' : p.data.vacancyDays === null ? 'cell-input cell-issue' : 'cell-input',
           },
           inputCol('budgetRate', 'Budget Rate', 'money', {
             headerTooltip: 'New-tenant rate. Residential: annual rent · Commercial/labour: AED per sq.ft per year · Camps: AED per bed per month',
@@ -435,12 +460,12 @@ export function MasterGrid({
             cellClass: (p) => (p.data?.increasePctOverride !== null && p.data?.increasePctOverride !== undefined ? 'cell-override' : 'cell-derived'),
           },
           {
-            ...overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Renewal Start', (r) => r.contracted >= 1 && !isAdmin),
-            headerTooltip: '1st renewal / new tenant start. Blank = calculated (grey); type to override (amber). More in the row form.',
+            ...overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Renewal Start', (r) => r.contracted >= 1 || needsVacancyDays(r)),
+            headerTooltip: '1st renewal / new tenant start. Blank = calculated (grey); type to override (bold). More in the row form.',
           },
           {
-            ...overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Renewal Rent', (r) => r.contracted >= 1 && !isAdmin),
-            headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (amber). More in the row form.',
+            ...overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Renewal Rent', (r) => r.contracted >= 1),
+            headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (bold). More in the row form.',
           },
         ],
       },
@@ -487,7 +512,7 @@ export function MasterGrid({
   const pParam = selectedProperties.length ? selectedProperties.join(',') : 'all';
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
         <MultiSelect
@@ -522,12 +547,22 @@ export function MasterGrid({
               + Add unit
             </button>
           )}
+          <a className="btn" href={`/api/export/template?p=${pParam}`} title="Input template: instructions and the editable fields of the lines in view">
+            Download template
+          </a>
+          {!locked && (
+            <button className="btn" onClick={() => setImporting((v) => !v)}>
+              Import Excel
+            </button>
+          )}
           <a className="btn" href={`/api/export/master?p=${pParam}`}>
             Export to Excel
           </a>
         </div>
       </div>
       <Legend />
+
+      {importing && <TemplateImport versionId={versionId} onClose={() => setImporting(false)} />}
 
       {adding && selectedProperty && (
         <AddUnitForm
@@ -625,25 +660,24 @@ export function MasterGrid({
   );
 }
 
+/** One short cell legend above the entry grid (.anh-legend-cells). */
 function Legend() {
-  const item = (color: string, label: string) => (
-    <span className="flex items-center gap-1.5">
-      <span className="inline-block h-0.5 w-4" style={{ background: color }} />
-      {label}
-    </span>
-  );
   return (
-    <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 bg-white px-4 py-1.5 text-[11px] text-slate-500">
-      {item('#64748b', 'Unit')}
-      {item('#14b8a6', 'Oracle (admin only; the next import overwrites)')}
-      {item('#f59e0b', 'Budget inputs')}
-      {item('#a78bfa', 'Calculated')}
-      {item('#3b82f6', 'Revenue')}
-      {item('#10b981', 'Cash')}
-      <span className="flex items-center gap-1.5">
-        <span className="inline-block h-3 w-4 rounded-sm" style={{ background: 'rgba(245,158,11,0.18)' }} /> overridden value
+    <div className="anh-legend-cells border-b border-slate-200 bg-white px-4 py-2">
+      <span>
+        <i className="input" />
+        Editable
       </span>
-      <span className="text-slate-400">Click a row to open its form · double-click a cell to edit in place</span>
+      <span>
+        <i className="locked" />
+        Fixed (Oracle import)
+      </span>
+      <span>
+        <i className="calc" />
+        <em>Calculated</em>
+      </span>
+      <span className="font-bold text-slate-900">Bold: overridden</span>
+      <span className="anh-muted">Click a row to open its form · double-click a cell to edit</span>
     </div>
   );
 }

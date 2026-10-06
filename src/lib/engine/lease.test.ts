@@ -28,6 +28,7 @@ function input(over: Partial<LeaseInput>): LeaseInput {
     r3Schedule: null,
     renew1: true,
     noRenewal: false,
+    vacancyDays: null,
     r1Rent: null,
     r1Start: null,
     r1End: null,
@@ -115,18 +116,36 @@ describe('renewal derivation', () => {
     expect(res.warnings.join()).toMatch(/RERA/);
   });
 
-  it('new tenant: vacancy gap, budget rate, MF and vacancy loss', () => {
-    const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000 }), 2027, A);
+  it('new tenant: starts after the vacancy days entered; budget rate, MF and vacancy loss', () => {
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000, vacancyDays: 59 }), 2027, A);
     const r1 = res.contracts.find((c) => c.kind === 'RENEWAL1')!;
-    expect(formatDay(r1.start)).toBe('2027-04-29'); // 28 Feb + 60 days
+    expect(formatDay(r1.start)).toBe('2027-04-29'); // ends 28 Feb, 59 empty days (1 Mar – 28 Apr)
     expect(r1.rent).toBe(65000);
     expect(r1.mf).toBe(true);
     expect(r1.newTenant).toBe(true);
-    expect(res.vacancyLoss).toBeGreaterThan(0);
+    // vacancy loss: the 59 empty days at the new tenant's daily rate
+    expect(res.vacancyLoss).toBeCloseTo((59 * 65000) / 365, 0);
+  });
+
+  it('new tenant without vacancy days: not budgeted, flagged', () => {
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000 }), 2027, A);
+    expect(res.contracts.find((c) => c.kind === 'RENEWAL1')).toBeUndefined();
+    expect(res.warnings.join()).toMatch(/vacancy days/);
+  });
+
+  it('new tenant: the vacancy days win over a start date typed earlier', () => {
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000, vacancyDays: 30, r1Start: d('2027-03-01') }), 2027, A);
+    expect(formatDay(res.contracts.find((c) => c.kind === 'RENEWAL1')!.start)).toBe('2027-03-31');
+  });
+
+  it('new tenant with 0 vacancy days starts the day after', () => {
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000, vacancyDays: 0 }), 2027, A);
+    expect(formatDay(res.contracts.find((c) => c.kind === 'RENEWAL1')!.start)).toBe('2027-03-01');
+    expect(res.vacancyLoss).toBe(0);
   });
 
   it('commercial new tenant: budget rate is per sq.ft', () => {
-    const res = computeLease(input({ ...base, rc: 'C', area: 1000, renew1: false, budgetRate: 80 }), 2027, A);
+    const res = computeLease(input({ ...base, rc: 'C', area: 1000, renew1: false, budgetRate: 80, vacancyDays: 30 }), 2027, A);
     expect(res.contracts.find((c) => c.kind === 'RENEWAL1')!.rent).toBe(80000);
   });
 
@@ -222,7 +241,7 @@ describe('cheque schedules, VAT and deposits', () => {
   });
 
   it('deposit refunded when the tenant leaves, new deposit taken from the new tenant', () => {
-    const res = computeLease(input({ ...base, renew1: false, budgetRate: 120000, securityDeposit: 5000 }), 2027, A);
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 120000, securityDeposit: 5000, vacancyDays: 59 }), 2027, A);
     expect(res.depositOut[6]).toBe(5000); // lease ends 30 Jun -> refund in July
     const r1 = res.contracts.find((c) => c.kind === 'RENEWAL1')!;
     const mi = new Date(r1.start * 86400000).getUTCMonth();

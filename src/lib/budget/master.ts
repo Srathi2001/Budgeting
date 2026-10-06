@@ -86,6 +86,7 @@ export async function loadMasterRows(
       mfCurrent: l.mfCurrent,
       renew1: l.renew1,
       noRenewal: l.noRenewal,
+      vacancyDays: l.vacancyDays,
       r1Rent: l.r1Rent,
       r1Start: l.r1Start,
       r1End: l.r1End,

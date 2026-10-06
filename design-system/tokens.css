@@ -1,0 +1,156 @@
+/* Al Naboodah Budget — design tokens. Light = default, dark via [data-theme="dark"] on <html>. */
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root, [data-theme="light"] {
+  --ground: #f4f4f2;
+  --surface: #ffffff;
+  --surface-sunken: #ebebeb;
+  --ink: #0a0a0a;
+  --ink-2: #3a3a3a;
+  --ink-muted: #636363;
+  --ink-inverse: #ffffff;
+  --line: #d6d6d6;
+  --line-strong: #0a0a0a;
+  --control-border: #7f7f7f;
+  --header-1: #0a0a0a;
+  --header-2: #d4d4d4;
+  --header-3: #ededed;
+  --cell-input: #ffffff;
+  --cell-input-hover: #f7f7f7;
+  --cell-locked: #efefef;
+  --cell-calc: #f7f7f7;
+  --cell-subtotal: #e3e3e3;
+  --cell-total: #0a0a0a;
+  --cell-selected: #0a0a0a;
+  --cell-dirty: #0a0a0a;
+  --chart-1: #0a0a0a;
+  --chart-2: #5c5c5c;
+  --chart-3: #9a9a9a;
+  --chart-4: #c9c9c9;
+  --chart-5: #ffffff;
+  --chart-other: #e6e6e6;
+  --chart-grid: #e6e6e6;
+  --div-contracting: #3065bd;
+  --div-facilities: #e3a64e;
+  --div-plant: #0c8b7a;
+  --div-realestate: #bd4e1c;
+  --div-corporate: #ce83dd;
+  --on-div-contracting: #ffffff;
+  --on-div-facilities: #0a0a0a;
+  --on-div-plant: #0a0a0a;
+  --on-div-realestate: #ffffff;
+  --on-div-corporate: #0a0a0a;
+  --m-actual: #1f3b73;
+  --m-budget: #8a96a8;
+  --m-committed: #8fa6cf;
+  --cat-labour: #663ca5;
+  --cat-materials: #43922c;
+  --cat-plant: #1b90be;
+  --cat-overheads: #a1274e;
+  --cat-other: #b8b2a7;
+  --on-m-actual: #ffffff;
+  --on-m-budget: #0a0a0a;
+  --on-m-committed: #0a0a0a;
+  --on-cat-labour: #ffffff;
+  --on-cat-materials: #0a0a0a;
+  --on-cat-plant: #0a0a0a;
+  --on-cat-overheads: #ffffff;
+  --on-cat-other: #0a0a0a;
+  --focus: #0a0a0a;
+  --scrim: rgba(10,10,10,0.48);
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.08);
+}
+[data-theme="dark"] {
+  --ground: #0c0c0c;
+  --surface: #151515;
+  --surface-sunken: #1d1d1d;
+  --ink: #f2f2f2;
+  --ink-2: #c8c8c8;
+  --ink-muted: #9c9c9c;
+  --ink-inverse: #0a0a0a;
+  --line: #2c2c2c;
+  --line-strong: #f2f2f2;
+  --control-border: #707070;
+  --header-1: #f2f2f2;
+  --header-2: #363636;
+  --header-3: #242424;
+  --cell-input: #151515;
+  --cell-input-hover: #1c1c1c;
+  --cell-locked: #202020;
+  --cell-calc: #191919;
+  --cell-subtotal: #2a2a2a;
+  --cell-total: #f2f2f2;
+  --cell-selected: #f2f2f2;
+  --cell-dirty: #f2f2f2;
+  --chart-1: #f2f2f2;
+  --chart-2: #a8a8a8;
+  --chart-3: #6b6b6b;
+  --chart-4: #474747;
+  --chart-5: #151515;
+  --chart-other: #2e2e2e;
+  --chart-grid: #262626;
+  --div-contracting: #3680d7;
+  --div-facilities: #b88518;
+  --div-plant: #159586;
+  --div-realestate: #c0432a;
+  --div-corporate: #92459c;
+  --on-div-contracting: #0a0a0a;
+  --on-div-facilities: #0a0a0a;
+  --on-div-plant: #0a0a0a;
+  --on-div-realestate: #ffffff;
+  --on-div-corporate: #ffffff;
+  --m-actual: #a9bfe8;
+  --m-budget: #7a8494;
+  --m-committed: #4d6aa3;
+  --cat-labour: #8a77ec;
+  --cat-materials: #599127;
+  --cat-plant: #1aa3ce;
+  --cat-overheads: #d84d7e;
+  --cat-other: #5a5650;
+  --on-m-actual: #0a0a0a;
+  --on-m-budget: #0a0a0a;
+  --on-m-committed: #ffffff;
+  --on-cat-labour: #0a0a0a;
+  --on-cat-materials: #0a0a0a;
+  --on-cat-plant: #0a0a0a;
+  --on-cat-overheads: #0a0a0a;
+  --on-cat-other: #ffffff;
+  --focus: #f2f2f2;
+  --scrim: rgba(0,0,0,0.64);
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.10);
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --row-compact: 28px;
+  --row-default: 36px;
+  --control-h: 32px;
+  --sidebar-w: 232px;
+  --topbar-h: 56px;
+  --radius-0: 0px;
+  --radius-sm: 2px;
+  --radius-pill: 999px;
+  --hairline: 1px;
+  --rule: 2px;
+  --rule-double: 3px double;
+  --font-sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+.t-display { font-family: var(--font-sans); font-size: 40px; line-height: 44px; font-weight: 800; letter-spacing: -0.02em; }
+.t-kpi-xl { font-family: var(--font-sans); font-size: 44px; line-height: 48px; font-weight: 600; letter-spacing: -0.02em; }
+.t-kpi { font-family: var(--font-sans); font-size: 28px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
+.t-h1 { font-family: var(--font-sans); font-size: 24px; line-height: 30px; font-weight: 700; letter-spacing: -0.01em; }
+.t-h2 { font-family: var(--font-sans); font-size: 18px; line-height: 24px; font-weight: 700; }
+.t-h3 { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 700; }
+.t-body { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 400; }
+.t-body-sm { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 400; }
+.t-label { font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.t-th { font-family: var(--font-sans); font-size: 11px; line-height: 16px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.t-td { font-family: var(--font-sans); font-size: 13px; line-height: 20px; font-weight: 400; }
+.t-td-strong { font-family: var(--font-sans); font-size: 13px; line-height: 20px; font-weight: 700; }
+.t-code { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; }

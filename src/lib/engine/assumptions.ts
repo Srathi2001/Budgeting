@@ -8,8 +8,7 @@ export interface ReraBand {
 }
 
 export interface Assumptions {
-  /** Gap between end of a non-renewed lease and the new tenant's start (Main!U: Q+60). */
-  vacancyGapDays: number;
+  // (the vacancy gap before a new tenant is entered per lease: LeaseInput.vacancyDays)
   /** Renewal contract length in days (Main!V: U+365-1). */
   renewalTermDays: number;
   /** Discount applied to staff rents when comparing with the RERA index (Main!AJ). */
@@ -31,7 +30,6 @@ export interface Assumptions {
 }
 
 export const DEFAULT_ASSUMPTIONS: Assumptions = {
-  vacancyGapDays: 60,
   renewalTermDays: 365,
   staffDiscount: 0.2,
   reraBands: [

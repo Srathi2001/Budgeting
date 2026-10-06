@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../tokens.css"><link rel="stylesheet" href="../components.css"><meta charset="utf-8"><title>Field</title>
+<style>body{margin:0;padding:16px;background:var(--ground)}</style></head>
+<body>
+<div class="anh">
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;max-width:880px">
+  <div class="anh-field"><label for="a">Cost centre</label><select id="a" class="anh-select"><option>CC-4102 · Dubai Contracting</option></select></div>
+  <div class="anh-field"><label for="b">Amount (AED)</label><input id="b" class="anh-input anh-num" value="1,284,500"></div>
+  <div class="anh-field"><label for="c">FY 2026 actual</label><input id="c" class="anh-input anh-num" value="1,192,040" readonly></div>
+  <div class="anh-field"><label for="d">Headcount</label><input id="d" class="anh-input anh-num is-error" value="-4" aria-invalid="true"><span class="anh-help is-error">Must be 0 or more</span></div>
+</div>
+</div>
+</body>
+</html>

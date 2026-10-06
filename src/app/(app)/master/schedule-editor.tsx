@@ -5,9 +5,9 @@ import type { DerivedContract, ScheduleItem } from '@/lib/budget/master-types';
 import { fmt } from '@/lib/format';
 
 const SOURCE: Record<DerivedContract['scheduleSource'], { label: string; cls: string }> = {
-  ACTUAL: { label: 'Actual', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
-  CUSTOM: { label: 'Edited', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
-  EQUAL: { label: 'Equal cheques', cls: 'bg-slate-100 text-slate-600 ring-slate-200' },
+  ACTUAL: { label: 'Actual', cls: '' },
+  CUSTOM: { label: 'Edited', cls: 'anh-tag--review' },
+  EQUAL: { label: 'Equal cheques', cls: 'anh-tag--locked' },
 };
 
 const dmy = (iso: string) => {
@@ -53,7 +53,7 @@ export function ScheduleEditor({
     <div className="w-[300px] shrink-0 rounded-md border border-slate-200">
       <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1.5">
         <span className="text-xs font-semibold text-slate-700">{title}</span>
-        <span className={`rounded px-1.5 py-px text-[10px] font-medium ring-1 ring-inset ${src.cls}`}>{src.label}</span>
+        <span className={`anh-tag ${src.cls}`}>{src.label}</span>
         {editable && !draft && (
           <button className="ml-auto text-xs text-sky-700 hover:underline" onClick={() => setDraft(contract.schedule.map((q) => ({ ...q })))}>
             Edit
