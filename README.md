@@ -119,8 +119,12 @@ npm run dev                     # http://localhost:3000
 
 **No Docker?** `npm run db:dev` starts an embedded Postgres (PGlite) on port 5433, with data in `.pgdata/`. Point `DATABASE_URL` at `postgres://postgres:postgres@127.0.0.1:5433/postgres` and set `DB_POOL_MAX=1`. This is for development only.
 
-* **Start on this PC:** `powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1` from a VS Code terminal. It opens a "Budget database" and a "Budget app" window, which run until you stop them.
-* **Stop:** press Ctrl+C in each window, the app first and the database last.
+* **Start on this PC:** opening new windows is blocked here, so use two VS Code terminals in the project folder:
+  * Terminal 1: `npm run db:dev`
+  * Terminal 2: `npm run dev`
+
+  They run until you stop them. On a PC that allows it, `scripts\start-dev.ps1` opens the two windows instead.
+* **Stop:** press Ctrl+C in each terminal, the app first and the database last.
 * **Native PostgreSQL can't run on this PC:** its setup and start tools need the command prompt, which group policy disables.
 
 **PGlite has no crash recovery**, so `scripts/dev-db.ts` protects the data itself:
