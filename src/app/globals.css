@@ -465,6 +465,42 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Other Income grid: a long list of property blocks. Blocks are set apart by space and their
+ * totals; inside a block, no rule per row and no box per cell. An editable cell is marked by an
+ * underline (its box shows on hover / while typing).
+ */
+.oi-grid tbody td {
+  border-bottom: 0;
+}
+.oi-grid td.input {
+  background: var(--cell-input);
+  box-shadow: inset 0 -1px 0 var(--control-border);
+}
+.oi-grid td.input:hover,
+.oi-grid td.input:focus-within {
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.oi-grid tr.section td {
+  /* space above each property block */
+  border-top: 14px solid var(--surface);
+  background-clip: padding-box;
+}
+.oi-grid tbody tr.section:first-child td {
+  border-top: 0;
+}
+.oi-grid tr.subtotal td {
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+.oi-grid tr.bu-total td {
+  background: var(--cell-subtotal);
+  border-top: 1px solid var(--line-strong);
+}
+.oi-legend i.input {
+  box-shadow: inset 0 -1px 0 var(--control-border);
+}
+
 .cell-fusion {
   background-color: var(--cell-locked);
   color: var(--ink-2);
