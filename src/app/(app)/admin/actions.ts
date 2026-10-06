@@ -71,6 +71,7 @@ const AssumptionsSchema = z.object({
   chequeSpanDays: z.number().min(28).max(400),
   vatRate: z.number().min(0).max(1),
   depositPct: z.number().min(0).max(1),
+  mfPct: z.number().min(0).max(1),
 }) satisfies z.ZodType<Assumptions>;
 
 export async function saveAssumptions(versionId: number, input: Assumptions): Promise<Result> {
@@ -237,20 +238,37 @@ export async function importComparatives(versionId: number, form: FormData): Pro
 
 // ---- lease data: Tenant and Lease Details Report ------------------------------------------------
 
+/** The lease report (required) with the Unit Dump and Maintenance Fee Report (optional). */
 async function reportRows(form: FormData) {
   const file = form.get('file');
   if (!(file instanceof File) || !file.size) throw new Error('Choose the Tenant and Lease Details Report (.xlsx)');
+  const optional = (key: string) => {
+    const f = form.get(key);
+    return f instanceof File && f.size ? f : null;
+  };
+  const dumpFile = optional('dump');
+  const mfFile = optional('mf');
   const { parseReport } = await import('@/lib/import/tenant-lease');
-  return { rows: parseReport(Buffer.from(await file.arrayBuffer())), name: file.name };
+  const { parseMfReport, parseUnitDump } = await import('@/lib/import/oracle-extras');
+  const buf = async (f: File) => Buffer.from(await f.arrayBuffer());
+  return {
+    rows: parseReport(await buf(file)),
+    name: file.name,
+    extras: {
+      dump: dumpFile ? parseUnitDump(await buf(dumpFile)) : null,
+      mf: mfFile ? parseMfReport(await buf(mfFile)) : null,
+      files: [file, dumpFile, mfFile].filter((f): f is File => !!f).map((f) => f.name),
+    },
+  };
 }
 
 /** What the import would change: nothing is written. */
 export async function previewLeaseImport(versionId: number, form: FormData): Promise<{ error?: string; preview?: ImportPreview }> {
   await requireFinance();
   try {
-    const { rows } = await reportRows(form);
+    const { rows, extras } = await reportRows(form);
     const { planImport } = await import('@/lib/import/tenant-lease');
-    return { preview: (await planImport(versionId, rows)).preview };
+    return { preview: (await planImport(versionId, rows, extras)).preview };
   } catch (e) {
     return { error: (e as Error).message };
   }
@@ -259,9 +277,9 @@ export async function previewLeaseImport(versionId: number, form: FormData): Pro
 export async function applyLeaseImport(versionId: number, form: FormData): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
-    const { rows, name } = await reportRows(form);
+    const { rows, name, extras } = await reportRows(form);
     const { applyImport } = await import('@/lib/import/tenant-lease');
-    const p = await applyImport(versionId, rows, user.id, name);
+    const p = await applyImport(versionId, rows, user.id, name, extras);
     return (
       `Imported: ${p.result.leasedLines} leased and ${p.result.vacantLines} vacant lines, current rent AED ${p.result.currentRent.toLocaleString('en-US')}` +
       (p.newLines.length ? `; ${p.newLines.length} new lines` : '') +

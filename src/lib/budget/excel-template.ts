@@ -5,7 +5,7 @@
 // where the user may change them in the tool. On upload only the input columns are read, and every
 // change goes through the same save path as the grid (permissions, fixed fields, validation).
 import ExcelJS from 'exceljs';
-import type { MasterRow, RowPatch } from './master-types';
+import { MF_LABEL, type MasterRow, type MfChoice, type RowPatch } from './master-types';
 import { annualRent, needsVacancyDays, outcomeOf, outcomePatch, OUTCOMES, type Outcome } from '@/app/(app)/master/row-logic';
 
 const SHEET = 'Lease Budget';
@@ -36,6 +36,10 @@ export function templateColumns(year: number): Col[] {
     { key: 'unitType', header: 'Unit type', width: 20, kind: 'text', get: (r) => r.resiCommercial ?? r.unitType },
     { key: 'bedroom', header: 'RERA code', width: 12, kind: 'text', get: (r) => r.bedroom },
     { key: 'area', header: 'Area (sq ft)', width: 11, kind: 'money', get: (r) => r.area },
+    { key: 'unitStatus', header: 'Unit status', width: 11, kind: 'text', get: (r) => r.unitStatus },
+    { key: 'unitUsage', header: 'Unit usage', width: 12, kind: 'text', get: (r) => r.unitUsage },
+    { key: 'mergedUnitNumber', header: 'Merged unit no.', width: 18, kind: 'text', get: (r) => r.mergedUnitNumber },
+    { key: 'landlord', header: 'Landlord', width: 24, kind: 'text', get: (r) => r.landlord },
     { key: 'tenantCode', header: 'Tenant code', width: 12, kind: 'text', get: (r) => r.tenantCode },
     { key: 'tenant', header: 'Tenant', width: 32, kind: 'text', get: (r) => r.tenant },
     { key: 'leaseNumber', header: 'Lease no.', width: 15, kind: 'text', get: (r) => r.leaseNumber },
@@ -43,6 +47,8 @@ export function templateColumns(year: number): Col[] {
     { key: 'currentEnd', header: 'Contract end', width: 12, kind: 'date', get: (r) => date(r.currentEnd) },
     { key: 'currentRent', header: 'Contract amount', width: 14, kind: 'money', get: (r) => r.currentRent },
     { key: 'annualRent', header: 'Annual rent', width: 13, kind: 'money', get: (r) => annualRent(r) },
+    { key: 'mfStatus', header: 'MF', width: 9, kind: 'text', get: (r) => r.mfStatus ?? (r.mfCurrent === true ? 'Yes' : r.mfCurrent === false ? 'No' : null), help: 'Maintenance fee on the current lease (Oracle MF report).' },
+    { key: 'maintenanceFee', header: 'MF amount', width: 11, kind: 'money', get: (r) => r.maintenanceFee },
     { key: 'contracted', header: 'Contracted years', width: 10, kind: 'int', get: (r) => r.contracted || null, help: 'Later lease years already contracted in Oracle: the renewals are fixed.' },
     {
       key: 'outcome',
@@ -106,6 +112,18 @@ export function templateColumns(year: number): Col[] {
       input: { open: (r) => !r.contracted, help: 'Blank = calculated (RERA increase, or the budget rate for a new tenant).' },
     },
     {
+      key: 'mfRenewal',
+      header: 'MF on renewal / new tenant',
+      width: 13,
+      kind: 'text',
+      get: (r) => (r.mfRenewal ? MF_LABEL[r.mfRenewal] : null),
+      input: {
+        open: (r) => r.staffOwner !== 'OWNER' && outcomeOf(r) !== 'Not re-let',
+        list: Object.values(MF_LABEL),
+        help: 'Maintenance fee on the renewal or new tenant: 5% of the rent, other income in the month the contract starts. Blank = default: a renewal follows the current lease, a new tenant is Yes.',
+      },
+    },
+    {
       key: 'cheques',
       header: 'Cheques per year',
       width: 10,
@@ -149,6 +167,7 @@ export function templateColumns(year: number): Col[] {
     { key: 'calcStart', header: 'Renewal start (calculated)', width: 13, kind: 'date', get: (r) => date(r.r1?.start) },
     { key: 'calcRent', header: 'Renewal rent (calculated)', width: 13, kind: 'money', get: (r) => r.r1?.rent ?? null },
     { key: 'revenue', header: `Revenue ${year}`, width: 14, kind: 'money', get: (r) => r.revenueTotal },
+    { key: 'maintenanceTotal', header: `Maintenance fee ${year}`, width: 13, kind: 'money', get: (r) => r.maintenanceTotal, help: 'Other income (not rent), calculated.' },
     { key: 'issues', header: 'Issues', width: 40, kind: 'text', get: (r) => (r.warnings.length ? r.warnings.join('; ') : null) },
   ];
 }
@@ -373,6 +392,14 @@ export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow
         if (c.key === 'staffOwner' && next !== null && !['STAFF', 'OWNER'].includes(next as string)) {
           bad('Staff / Owner', v);
           continue;
+        }
+        if (c.key === 'mfRenewal' && next !== null) {
+          const k = (Object.keys(MF_LABEL) as MfChoice[]).find((x) => MF_LABEL[x].toLowerCase() === (next as string).toLowerCase() || x === (next as string).toUpperCase());
+          if (!k) {
+            bad('MF on renewal / new tenant', v);
+            continue;
+          }
+          next = k;
         }
       } else {
         next = num(v);

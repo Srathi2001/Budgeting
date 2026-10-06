@@ -4,7 +4,7 @@
 // fixed (Oracle import); budget inputs open up depending on the lease (see leaseTiming).
 
 import { useState, type ReactNode } from 'react';
-import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
+import { MF_CHOICES, MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, type RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
 import { ScheduleEditor } from './schedule-editor';
 import { OUTCOMES, annualRent, dmy, leaseTiming, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
@@ -99,6 +99,7 @@ export function RowForm({
   row,
   year,
   staffDiscount,
+  mfPct,
   isAdmin,
   onSave,
   onClose,
@@ -110,6 +111,7 @@ export function RowForm({
   row: Row;
   year: number;
   staffDiscount: number;
+  mfPct: number;
   isAdmin: boolean;
   /** saves the RERA range of this row's property and bedroom code; resolves to an error message or null */
   onSaveRera?: (min: number | null, max: number | null) => Promise<string | null>;
@@ -147,6 +149,7 @@ export function RowForm({
   const decisionOpen = canEdit && !owner && !contractedLock;
   const camp = row.propertyKind === 'CAMP';
   const rateUnit = camp ? 'AED per bed per month' : row.rc === 'R' ? 'annual rent' : 'AED per sq ft per year';
+  const mfDefault = defaultMfRenewal({ rc: row.rc, renew1: val('renew1'), noRenewal: val('noRenewal'), mfCurrent: row.mfCurrent, vacant: row.vacant });
 
   const confirmLeave = (go?: () => void) => () => {
     if (!go) return;
@@ -282,6 +285,15 @@ export function RowForm({
             <Field label="Category" hint="From the unit type · groups the unit in reports" locked={oracleLock}>
               {text('pivotCategory', canOracle)}
             </Field>
+            <Field label="Unit usage" locked={oracleLock}>
+              {show(row.unitUsage)}
+            </Field>
+            <Field label="Merged unit no." locked={oracleLock}>
+              {show(row.mergedUnitNumber)}
+            </Field>
+            <Field label="Landlord" locked={oracleLock}>
+              {show(row.landlord)}
+            </Field>
             {camp && (
               <>
                 <Field label="Rooms" hint="Rooms in the lease (Oracle)" locked={oracleLock}>
@@ -326,9 +338,22 @@ export function RowForm({
             <Field label="Security deposit" locked={oracleLock}>
               {num('securityDeposit', canOracle)}
             </Field>
-            <Field label="Maintenance fee" hint="Other income · not in rent revenue">
+            <Field label="MF" locked={oracleLock} hint="Maintenance fee: Yes / No / Waived off">
+              {show(row.mfStatus ?? (row.mfCurrent === true ? 'Yes' : row.mfCurrent === false ? 'No' : null))}
+            </Field>
+            <Field label="MF amount" locked={oracleLock} hint="Other income · not in rent revenue">
               {show(row.maintenanceFee ? fmt(row.maintenanceFee) : null, true)}
             </Field>
+            {row.mfStatus && (
+              <>
+                <Field label="MF paid" locked={oracleLock} hint={row.mfPaidDate ? `Last payment ${dmy(row.mfPaidDate)}` : undefined}>
+                  {show(row.mfPaid === null ? null : fmt(row.mfPaid), true)}
+                </Field>
+                <Field label="MF outstanding" locked={oracleLock}>
+                  {show(row.mfOutstanding === null ? null : fmt(row.mfOutstanding), true)}
+                </Field>
+              </>
+            )}
             <Field label="Utility fee" hint="Other income">
               {show(row.utilityFee ? fmt(row.utilityFee) : null, true)}
             </Field>
@@ -428,6 +453,26 @@ export function RowForm({
                   </>
                 )}
               </>
+            )}
+            {outcome !== 'Not re-let' && (
+              <Field label={outcome === 'Renew' ? 'MF on renewal' : 'MF on new tenant'} hint={`${pct(mfPct)} of the rent · other income in the start month`}>
+                {canEdit && !owner ? (
+                  <select
+                    className={box(changed('mfRenewal'), val('mfRenewal') !== null)}
+                    value={val('mfRenewal') ?? ''}
+                    onChange={(e) => set('mfRenewal', (e.target.value || null) as MfChoice | null)}
+                  >
+                    <option value="">Default: {MF_LABEL[mfDefault]}</option>
+                    {MF_CHOICES.map((c) => (
+                      <option key={c} value={c}>
+                        {MF_LABEL[c]}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  show(MF_LABEL[val('mfRenewal') ?? mfDefault])
+                )}
+              </Field>
             )}
             <Field label="Staff / Owner">
               {canEdit ? (
@@ -535,6 +580,9 @@ export function RowForm({
             </span>
             <span>
               Vacancy loss <b className="text-slate-900 tabular-nums">{fmt(row.vacancyLoss)}</b>
+            </span>
+            <span>
+              Maintenance fee <b className="text-slate-900 tabular-nums">{fmt(row.maintenanceTotal)}</b>
             </span>
           </div>
           <div className="frame overflow-x-auto">

@@ -13,6 +13,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { dayFromExcelSerial, dayFromYMD, formatDay } from '@/lib/engine/dates';
 import { recalcLines } from '@/lib/budget/calc';
+import type { MfRow, UnitDumpRow } from './oracle-extras';
 
 // ---- parsing ---------------------------------------------------------------------------------
 
@@ -339,6 +340,25 @@ export interface ImportPreview {
   newProperties: { code: string; name: string; bu: string }[];
   skipped: { what: string; detail: string }[];
   conflicts: string[];
+  /** Unit Dump: lines matched, and their unit status */
+  dump: { rows: number; matched: number; unmatched: number; status: Record<string, number> } | null;
+  /** Maintenance Fee Report: leased lines matched, by MF status */
+  mf: { rows: number; matched: number; unmatched: number; status: Record<string, number>; amount: number; outstanding: number } | null;
+}
+
+/** The Unit Dump and the Maintenance Fee Report, uploaded with the lease report (both optional). */
+export interface ImportExtras {
+  dump?: UnitDumpRow[] | null;
+  mf?: MfRow[] | null;
+  asOf?: string;
+}
+
+interface MfFacts {
+  status: string | null;
+  amount: number | null;
+  paid: number | null;
+  paidDate: string | null;
+  outstanding: number | null;
 }
 
 interface PlannedLine {
@@ -346,6 +366,10 @@ interface PlannedLine {
   members: ReportUnit[];
   propertyKey: string;
   attrs: { area: number | null; unitType: string | null; resiCommercial: string | null; rc: string; pivotCategory: Family; bedroom: string | null; rooms: number | null; unitStatus: string | null };
+  /** from the Unit Dump (null: no dump uploaded, the unit keeps what it has) */
+  dump: { landlord: string | null; mergedUnitNumber: string | null; unitUsage: string | null } | null;
+  /** from the MF report (undefined: no report uploaded, the line keeps what it has for the same lease) */
+  mf: MfFacts | null | undefined;
   facts: Facts | null;
   carryFrom: schema.LeaseLine | null;
 }
@@ -394,7 +418,38 @@ function leaseRank(lease: ReportLease, asOf: string): [number, number] {
   return [2, -Date.parse(current.end)];
 }
 
-export async function planImport(versionId: number, rows: ReportRow[], asOf = new Date().toLocaleDateString('en-CA')) {
+const tally = (m: Record<string, number>, k: string | null) => {
+  m[k ?? '(blank)'] = (m[k ?? '(blank)'] ?? 0) + 1;
+};
+
+/** MF report rows of a line: rows on its units for its tenant (the report holds current leases only). */
+function mfFor(members: ReportUnit[], facts: Facts, mfByUnit: Map<string, MfRow[]>): MfFacts | null {
+  const rows = members.flatMap((m) => mfByUnit.get(m.key) ?? []).filter((r) => !facts.tenantCode || !r.tenantCode || r.tenantCode === facts.tenantCode);
+  if (!rows.length) return null;
+  // a lease on several units may be listed once per unit: count each MF lease once
+  const seen = new Set<string>();
+  const uniq = rows.filter((r) => {
+    const k = r.leaseNumber ?? r.unitCode;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const sum = (f: (r: MfRow) => number | null) => (uniq.some((r) => f(r) !== null) ? r2(uniq.reduce((s, r) => s + (f(r) ?? 0), 0)) : null);
+  const dates = uniq.map((r) => r.paidDate).filter((d): d is string => !!d).sort();
+  return {
+    status: uniq.find((r) => r.status === 'Yes')?.status ?? uniq.find((r) => r.status)?.status ?? null,
+    amount: sum((r) => r.amount),
+    paid: sum((r) => r.paid),
+    paidDate: dates.at(-1) ?? null,
+    outstanding: sum((r) => r.outstanding),
+  };
+}
+
+export async function planImport(versionId: number, rows: ReportRow[], extras: ImportExtras = {}) {
+  const asOf = extras.asOf ?? new Date().toLocaleDateString('en-CA');
+  const dumpByUnit = extras.dump ? new Map(extras.dump.map((r) => [unitKey(r.unitCode), r])) : null;
+  const mfByUnit = extras.mf ? new Map<string, MfRow[]>() : null;
+  for (const r of extras.mf ?? []) mfByUnit!.set(unitKey(r.unitCode), [...(mfByUnit!.get(unitKey(r.unitCode)) ?? []), r]);
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) throw new Error('Version not found');
   if (version.status === 'LOCKED') throw new Error('Version is locked');
@@ -451,6 +506,9 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
     if (facts && members.length > 1) {
       facts.leaseRemarks = `Lease ${facts.leaseNumber} covers ${members.length} units: ${members.slice(0, 12).map((m) => m.code).join(', ')}${members.length > 12 ? ', …' : ''}`;
     }
+    // Unit Dump: the held unit's row, else the first member listed
+    const d = dumpByUnit ? (dumpByUnit.get(held.key) ?? members.map((m) => dumpByUnit.get(m.key)).find(Boolean) ?? null) : null;
+    const pick = <K extends keyof UnitDumpRow>(k: K) => d?.[k] ?? members.map((m) => dumpByUnit!.get(m.key)?.[k]).find((v) => v) ?? null;
     planned.push({
       unit: held,
       members,
@@ -463,8 +521,11 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
         pivotCategory: familyOf(type),
         bedroom: bedroomCode(type),
         rooms: familyOf(type) === 'Camps' ? members.length : null,
-        unitStatus: facts ? 'Leased' : (held.status ?? 'Available'),
+        // the dump's status wins (it shows Pending); without it, from the lease report
+        unitStatus: d?.unitStatus ?? (facts ? 'Leased' : (held.status ?? 'Available')),
       },
+      dump: dumpByUnit ? { landlord: pick('landlord'), mergedUnitNumber: pick('mergedUnitNumber'), unitUsage: pick('unitUsage') } : null,
+      mf: mfByUnit ? (facts ? mfFor(members, facts, mfByUnit) : null) : undefined,
       facts,
       carryFrom,
     });
@@ -504,6 +565,32 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
     byBu.set(buOf(p), e);
   }
   const leased = keep.filter((p) => p.facts);
+  let dumpStats: ImportPreview['dump'] = null;
+  if (dumpByUnit) {
+    const status: Record<string, number> = {};
+    let matched = 0;
+    for (const p of keep) {
+      if (p.members.some((m) => dumpByUnit.has(m.key))) {
+        matched++;
+        tally(status, p.attrs.unitStatus);
+      }
+    }
+    dumpStats = { rows: extras.dump!.length, matched, unmatched: keep.length - matched, status };
+  }
+  let mfStats: ImportPreview['mf'] = null;
+  if (mfByUnit) {
+    const status: Record<string, number> = {};
+    const hit = leased.filter((p) => p.mf);
+    for (const p of hit) tally(status, p.mf!.status);
+    mfStats = {
+      rows: extras.mf!.length,
+      matched: hit.length,
+      unmatched: leased.length - hit.length,
+      status,
+      amount: Math.round(hit.reduce((s, p) => s + (p.mf!.amount ?? 0), 0)),
+      outstanding: Math.round(hit.reduce((s, p) => s + (p.mf!.outstanding ?? 0), 0)),
+    };
+  }
   const preview: ImportPreview = {
     asOf,
     report: { rows: rows.length, units: rUnits.size, available: [...rUnits.values()].filter((u) => !u.leaseNumbers.length).length, leases: leases.size },
@@ -526,6 +613,8 @@ export async function planImport(versionId: number, rows: ReportRow[], asOf = ne
     newProperties: [...newProps.values()].map((p) => ({ code: p.code, name: p.name, bu: p.buCode })),
     skipped,
     conflicts,
+    dump: dumpStats,
+    mf: mfStats,
   };
   return { plan: { lines: keep, newProperties: [...newProps.values()] }, preview };
 }
@@ -539,9 +628,29 @@ const NO_LEASE = {
   currentSchedule: null, vacant: true,
 } as const;
 
+const NO_MF = { mfStatus: null, mfPaid: null, mfPaidDate: null, mfOutstanding: null } as const;
+
+/** MF on the current lease from the MF report; without a report the same lease keeps what it had. */
+function mfFields(p: PlannedLine, old: schema.LeaseLine | null) {
+  if (!p.facts) return NO_MF;
+  if (p.mf === undefined) {
+    if (!old?.mfStatus || old.leaseNumber !== p.facts.leaseNumber) return NO_MF;
+    return { mfStatus: old.mfStatus, mfPaid: old.mfPaid, mfPaidDate: old.mfPaidDate, mfOutstanding: old.mfOutstanding, mfCurrent: old.mfStatus === 'Yes', maintenanceFee: old.maintenanceFee };
+  }
+  if (!p.mf) return NO_MF;
+  return {
+    mfStatus: p.mf.status,
+    mfPaid: p.mf.paid,
+    mfPaidDate: p.mf.paidDate,
+    mfOutstanding: p.mf.outstanding,
+    mfCurrent: p.mf.status === 'Yes',
+    maintenanceFee: p.mf.amount || p.facts.fees.maintenance || null,
+  };
+}
+
 /** Budget inputs a PM may have entered on a line; they follow the unit into the rebuilt line. */
 const INPUT_FIELDS = [
-  'staffOwner', 'mfCurrent', 'renew1', 'noRenewal', 'vacancyDays', 'budgetRate', 'increasePctOverride', 'cheques', 'notes',
+  'staffOwner', 'mfCurrent', 'mfRenewal', 'renew1', 'noRenewal', 'vacancyDays', 'budgetRate', 'increasePctOverride', 'cheques', 'notes',
   'r1Rent', 'r1Start', 'r1End', 'r1Mf', 'r1Schedule', 'r2Renew', 'r2Rent', 'r2Start', 'r2End', 'r2Mf', 'r2Schedule',
   'r3Renew', 'r3Rent', 'r3Start', 'r3End', 'r3Mf', 'r3Schedule',
 ] as const;
@@ -596,8 +705,8 @@ function factFields(line: Pick<schema.LeaseLine, 'leaseNumber' | 'currentStart' 
   };
 }
 
-export async function applyImport(versionId: number, rows: ReportRow[], userId: number | null, fileName?: string) {
-  const { plan, preview } = await planImport(versionId, rows);
+export async function applyImport(versionId: number, rows: ReportRow[], userId: number | null, fileName?: string, extras: ImportExtras & { files?: string[] } = {}) {
+  const { plan, preview } = await planImport(versionId, rows, extras);
   const now = new Date();
 
   await db.transaction(async (tx) => {
@@ -610,8 +719,9 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
     await tx.delete(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
     for (const p of plan.lines) {
       const prop = propByKey.get(p.propertyKey)!;
-      // unit details come from the report only; beds (capacity) have no source there and stay as entered
-      const attrs = { ...p.attrs, propertyId: prop.id, mergedUnitNumber: null, landlord: null };
+      // unit details come from the reports only; beds (capacity) have no source there and stay as entered.
+      // Landlord / merged no. / usage come from the Unit Dump: without one, the unit keeps what it has.
+      const attrs = { ...p.attrs, propertyId: prop.id, ...(p.dump ?? {}) };
       let unit = unitByKey.get(p.unit.key);
       if (unit) await tx.update(schema.units).set(attrs).where(eq(schema.units.id, unit.id));
       else [unit] = await tx.insert(schema.units).values({ unitCode: p.unit.code, ...attrs }).returning();
@@ -623,6 +733,7 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
         renew1: true,
         ...carriedInputs(old),
         ...(p.facts ? factFields(old, p.facts, now) : { ...NO_LEASE, leaseSyncedAt: now }),
+        ...mfFields(p, old),
         ...renewalFields(p.facts),
         updatedBy: userId,
       });
@@ -635,7 +746,10 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
       action: 'tenant_lease_details',
       changes: {
         file: fileName ?? null,
+        files: extras.files ?? null,
         asOf: preview.asOf,
+        dump: preview.dump,
+        mf: preview.mf,
         report: preview.report,
         result: { ...preview.result, byBu: undefined },
         kept: preview.kept,

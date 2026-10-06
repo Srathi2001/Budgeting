@@ -1,5 +1,6 @@
 import { getCurrentUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
 import { loadMasterRows } from '@/lib/budget/master';
+import { MF_LABEL, defaultMfRenewal } from '@/lib/budget/master-types';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { xlsxResponse, excelDate, r2 } from '@/lib/export/xlsx';
 import { MONTHS } from '@/lib/format';
@@ -34,6 +35,7 @@ export async function GET(request: Request) {
     'Vacant (Y/N)', 'STAFF/OWNER', 'Renew (Y/N)', 'Not re-let', 'Budget Rate', 'Cheques / yr',
     'RERA Index', 'RERA Low', 'RERA High', 'RERA Average', 'Old Rent psf', 'New Rent psf', '% Difference', 'Increase Allowed', 'Staff Discount',
     'Vacancy Loss', 'Issues', 'Lease Remarks', 'Notes',
+    'UNIT USAGE', 'MF STATUS', 'MF AMOUNT', 'MF PAID', 'MF OUTSTANDING', 'MF ON RENEWAL', `MF ${version.year}`,
   ];
   const psf = (rent: number | null | undefined, area: number | null) => (rent && area ? r2(rent / area) : null);
   const body = rows.map((r, i) => [
@@ -50,6 +52,7 @@ export async function GET(request: Request) {
     `${r.propertyCode}-${r.bedroom ?? ''}`, r.reraMin, r.reraMax, r2(r.reraAverage), psf(r.currentRent, r.area), psf(r.r1?.rent, r.area),
     r.reraGap === null ? null : r2(r.reraGap), r.increasePct, r.staffOwner === 'STAFF' ? staffDiscount : 0,
     r2(r.vacancyLoss), r.warnings.join('; '), r.leaseRemarks, r.notes,
+    r.unitUsage, r.mfStatus, r.maintenanceFee, r.mfPaid, r.mfOutstanding, MF_LABEL[r.mfRenewal ?? defaultMfRenewal(r)], r2(r.maintenanceTotal),
   ]);
   const name = `Lease Budget ${version.name}.xlsx`.replace(/[^\w .()-]/g, '');
   return xlsxResponse([{ name: 'Lease Budget', rows: [header, ...body], cols: [5, 18, 5, 10, 28, 20, 8, 8, 9, 6, 6, 18, 10, 14, 14, 12, 16, 6, 11, 30] }], name);

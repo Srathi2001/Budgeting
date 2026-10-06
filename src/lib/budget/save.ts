@@ -5,7 +5,7 @@ import { db, schema } from '@/db';
 import { canEditProperty, editablePropertyIds, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { recalcLines } from './calc';
 import { loadMasterRows } from './master';
-import { LINE_FIELDS, UNIT_FIELDS, fixedFields, type RowPatch, type SaveResult } from './master-types';
+import { LINE_FIELDS, MF_CHOICES, UNIT_FIELDS, fixedFields, type RowPatch, type SaveResult } from './master-types';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 const money = z.number().finite().min(0).max(1e10);
@@ -36,9 +36,10 @@ export const PatchSchema = z
     resiCommercial: text(40),
     staffOwner: z.enum(['STAFF', 'OWNER']).nullable(),
     mfCurrent: z.boolean().nullable(),
+    mfRenewal: z.enum(MF_CHOICES).nullable(),
     renew1: z.boolean(),
     noRenewal: z.boolean(),
-    vacancyDays: z.number().int().min(0, 'Vacancy days canâ€™t be negative').max(1095, 'Vacancy days: at most 1,095').nullable(),
+    vacancyDays: z.number().int().min(0, 'Vacancy days can’t be negative').max(1095, 'Vacancy days: at most 1,095').nullable(),
     r1Rent: money.nullable(),
     r1Start: isoDate.nullable(),
     r1End: isoDate.nullable(),
@@ -115,7 +116,7 @@ export async function applyLineChanges(
       // Oracle data and contracted lease years are fixed for everyone: corrections are made in Oracle
       // and arrive with the next import
       {
-        const locked = fixedFields(row.l.contracted);
+        const locked = fixedFields(row.l.contracted, row.l.mfStatus);
         const blocked = Object.entries(patch).filter(([k, v]) => {
           if (!locked.has(k)) return false;
           const before = (k in row.l ? (row.l as Record<string, unknown>)[k] : (row.u as Record<string, unknown>)[k]) ?? null;

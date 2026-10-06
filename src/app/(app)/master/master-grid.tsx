@@ -21,7 +21,7 @@ import {
   type ValueGetterParams,
   type ValueSetterParams,
 } from 'ag-grid-community';
-import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
+import { MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, type RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine, saveRera } from './actions';
 import { RowForm } from './row-form';
@@ -255,6 +255,7 @@ export function MasterGrid({
   year,
   locked,
   staffDiscount,
+  mfPct,
   rows,
   properties,
   selectedProperties,
@@ -264,6 +265,8 @@ export function MasterGrid({
   year: number;
   locked: boolean;
   staffDiscount: number;
+  /** maintenance fee on renewals / new tenants, share of rent */
+  mfPct: number;
   rows: Row[];
   properties: P[];
   /** properties in view; empty = all */
@@ -288,11 +291,12 @@ export function MasterGrid({
   const refreshTotals = useCallback(() => {
     const api = apiRef.current;
     if (!api) return;
-    const t = { revenue: Array(12).fill(0), cashFlow: Array(12).fill(0), revenueTotal: 0, cashFlowTotal: 0, currentRent: 0, count: 0 };
+    const t = { revenue: Array(12).fill(0), cashFlow: Array(12).fill(0), revenueTotal: 0, cashFlowTotal: 0, currentRent: 0, maintenanceTotal: 0, count: 0 };
     api.forEachNodeAfterFilter((n) => {
       if (!n.data) return;
       t.count++;
       t.currentRent += n.data.currentRent ?? 0;
+      t.maintenanceTotal += n.data.maintenanceTotal;
       n.data.revenue.forEach((v, i) => (t.revenue[i] += v));
       n.data.cashFlow.forEach((v, i) => (t.cashFlow[i] += v));
       t.revenueTotal += n.data.revenueTotal;
@@ -306,6 +310,7 @@ export function MasterGrid({
         cashFlow: t.cashFlow,
         revenueTotal: t.revenueTotal,
         cashFlowTotal: t.cashFlowTotal,
+        maintenanceTotal: t.maintenanceTotal,
         warnings: [],
         editable: false,
       } as unknown as Row,
@@ -389,6 +394,9 @@ export function MasterGrid({
           oracleCol('bedroom', 'Bedroom / RERA', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'From the Oracle unit type: the key into the RERA index' }),
           oracleCol('area', 'Area (sq ft)', isAdmin, 'money', { headerClass: 'hdr-unit' }),
           oracleCol('unitStatus', 'Unit Status', isAdmin, 'text', { headerClass: 'hdr-unit' }),
+          oracleCol('unitUsage', 'Unit Usage', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'Fixed: from the Oracle Unit Dump' }),
+          oracleCol('mergedUnitNumber', 'Merged Unit No.', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'Fixed: from the Oracle Unit Dump' }),
+          oracleCol('landlord', 'Landlord', isAdmin, 'text', { headerClass: 'hdr-unit', maxWidth: 220, headerTooltip: 'Fixed: from the Oracle Unit Dump' }),
         ],
       },
       {
@@ -404,6 +412,11 @@ export function MasterGrid({
           derivedCol('annualRent', 'Annual Rent', (r) => annualRent(r), 'money', 'Contract amount ÷ contract days × 365'),
           derivedCol('rentPsf', 'Rent / sq ft', (r) => rentPsf(r), 'money2', 'Annual rent ÷ area'),
           oracleCol('securityDeposit', 'Security Deposit', isAdmin, 'money'),
+          {
+            ...oracleCol('mfStatus', 'MF', isAdmin, 'text', { headerTooltip: 'Maintenance fee on the current lease. Fixed: from the Oracle MF report' }),
+            valueGetter: (p) => (!p.data || p.node?.isRowPinned() ? null : (p.data.mfStatus ?? (p.data.mfCurrent === true ? 'Yes' : p.data.mfCurrent === false ? 'No' : null))),
+          },
+          oracleCol('maintenanceFee', 'MF Amount', isAdmin, 'money', { headerTooltip: 'Maintenance fee on the current contract. Fixed: from Oracle' }),
         ],
       },
       {
@@ -468,6 +481,27 @@ export function MasterGrid({
             ...overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Renewal Rent', (r) => r.contracted >= 1),
             headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (bold). More in the row form.',
           },
+          {
+            colId: 'mfRenewal',
+            headerName: 'MF on Renewal',
+            headerClass: 'hdr-input',
+            headerTooltip: `Maintenance fee on the renewal / new tenant: ${Math.round(mfPct * 100)}% of the rent, other income in the month the contract starts. Blank = default (grey): renewal follows the current lease, new tenant Yes.`,
+            editable: (p) => editable(p) && !!p.data && outcomeOf(p.data) !== 'Not re-let',
+            cellDataType: false,
+            valueGetter: (p) => (!p.data || p.node?.isRowPinned() ? null : MF_LABEL[p.data.mfRenewal ?? defaultMfRenewal(p.data)]),
+            valueSetter: (p) => {
+              const v = (Object.keys(MF_LABEL) as MfChoice[]).find((k) => MF_LABEL[k] === p.newValue) ?? null;
+              p.data.mfRenewal = v;
+              return true;
+            },
+            cellEditor: 'agSelectCellEditor',
+            cellEditorParams: { values: ['', ...Object.values(MF_LABEL)] },
+            cellClass: (p) => {
+              if (!p.data || p.node.isRowPinned()) return '';
+              const state = p.data.mfRenewal ? 'cell-override' : 'cell-derived';
+              return p.data.editable && outcomeOf(p.data) !== 'Not re-let' ? `${state} cell-input` : state;
+            },
+          },
         ],
       },
       {
@@ -477,13 +511,14 @@ export function MasterGrid({
           { ...derivedCol('revenueTotal', 'Revenue', (r) => r.revenueTotal, 'money'), headerClass: 'hdr-revenue', valueGetter: (p) => p.data?.revenueTotal ?? 0 },
           { ...derivedCol('cashFlowTotal', 'Cash Inflow', (r) => r.cashFlowTotal, 'money', 'Rent cheques + VAT + deposits in − deposits out'), headerClass: 'hdr-cash', valueGetter: (p) => p.data?.cashFlowTotal ?? 0 },
           derivedCol('vacancyLoss', 'Vacancy Loss', (r) => r.vacancyLoss, 'money', 'Gap between the lease ending and the next tenant, at the new rent'),
+          { ...derivedCol('maintenanceTotal', 'Maintenance Fee', (r) => r.maintenanceTotal, 'money', 'Other income (not rent): booked in the month each contract starts'), valueGetter: (p) => p.data?.maintenanceTotal ?? 0 },
         ],
       },
     ];
     if (showRevenue) defs.push({ headerName: `Revenue by month ${year}`, headerClass: 'hdr-revenue', children: monthCols('revenue', 'hdr-revenue') });
     if (showCash) defs.push({ headerName: `Cash inflow by month ${year} (rent + VAT + deposits)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'hdr-cash') });
     return defs;
-  }, [showRevenue, showCash, year, isAdmin]);
+  }, [showRevenue, showCash, year, isAdmin, mfPct]);
 
   const onGridReady = useCallback(
     (e: GridReadyEvent<Row>) => {
@@ -621,6 +656,7 @@ export function MasterGrid({
           row={selected}
           year={year}
           staffDiscount={staffDiscount}
+          mfPct={mfPct}
           isAdmin={isAdmin}
           onClose={() => {
             apiRef.current?.deselectAll();

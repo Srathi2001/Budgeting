@@ -27,6 +27,8 @@ export interface Assumptions {
   vatRate: number;
   /** Security deposit taken from a new tenant, % of annual rent (Fusion leases: median 5%). */
   depositPct: number;
+  /** Maintenance service fee on residential leases with MF, % of the contract rent (other income). */
+  mfPct: number;
 }
 
 export const DEFAULT_ASSUMPTIONS: Assumptions = {
@@ -44,6 +46,7 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
   chequeSpanDays: 370,
   vatRate: 0.05,
   depositPct: 0.05,
+  mfPct: 0.05,
 };
 
 export function withDefaults(partial: Partial<Assumptions> | null | undefined): Assumptions {

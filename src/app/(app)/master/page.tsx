@@ -32,6 +32,7 @@ export default async function MasterPage(props: PageProps<'/master'>) {
       year={version!.year}
       locked={version!.status === 'LOCKED'}
       staffDiscount={withDefaults(version!.assumptions).staffDiscount}
+      mfPct={withDefaults(version!.assumptions).mfPct}
       rows={rows}
       properties={visible.map((p) => ({ id: p.id, code: p.code, name: p.name, editable: editable.has(p.id) }))}
       selectedProperties={selected}

@@ -76,8 +76,10 @@ export const units = pgTable(
     // Fusion unit attributes (Unit Dump)
     mergedUnitNumber: text('merged_unit_number'),
     unitStatus: text('unit_status'), // Leased / Available / Pending …
-    resiCommercial: text('resi_commercial'), // unit usage as per Fusion
+    resiCommercial: text('resi_commercial'), // unit type as per Oracle (lease report)
     landlord: text('landlord'),
+    /** Unit usage as per the Oracle Unit Dump: Residential / Commercial / Retail / Mixed Use */
+    unitUsage: text('unit_usage'),
     active: boolean('active').notNull().default(true),
   },
   (t) => [uniqueIndex('units_code_uq').on(t.unitCode), index('units_property_idx').on(t.propertyId)],
@@ -128,6 +130,13 @@ export const leaseLines = pgTable(
     securityDeposit: money('security_deposit'),
     /** Other income billed with the current contract year (Oracle). Not part of rent revenue. */
     maintenanceFee: money('maintenance_fee'),
+    /** Current lease, from the Oracle Maintenance Fee report: Yes / No / Waived Off, and payment status */
+    mfStatus: text('mf_status'),
+    mfPaid: money('mf_paid'),
+    mfPaidDate: day('mf_paid_date'),
+    mfOutstanding: money('mf_outstanding'),
+    /** Budget input: MF on the renewal / new tenant: YES / NO / WAIVED; null = default (see lease engine) */
+    mfRenewal: text('mf_renewal'),
     utilityFee: money('utility_fee'),
     carParkFee: money('car_park_fee'),
 
@@ -216,6 +225,31 @@ export const comparatives = pgTable(
     amount: money('amount'),
   },
   (t) => [uniqueIndex('comparatives_uq').on(t.versionId, t.propertyId, t.label)],
+);
+
+/**
+ * Other income by property (or a BU's "General" row for company-level items) × GL account × period.
+ * Periods are relative to the version year Y: A2 = Y-3 actual, A1 = Y-2 actual, YTD = Y-1 Jan–Sep
+ * actual, OD = Y-1 Oct–Dec (input), B = budget Y (input). Maintenance service fee B is calculated
+ * from the leases and not stored here.
+ */
+export const otherIncome = pgTable(
+  'other_income',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    buCode: text('bu_code').notNull().references(() => businessUnits.code),
+    /** null = the BU's General row */
+    propertyId: integer('property_id').references(() => properties.id),
+    /** 'P:<property id>' or 'G:<bu code>' — one key for the unique index */
+    scope: text('scope').notNull(),
+    account: text('account').notNull(),
+    period: text('period').notNull(),
+    amount: money('amount'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [uniqueIndex('other_income_uq').on(t.versionId, t.scope, t.account, t.period), index('other_income_version_idx').on(t.versionId)],
 );
 
 export const propertyNotes = pgTable(

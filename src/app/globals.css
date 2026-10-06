@@ -454,6 +454,17 @@ body {
   opacity: 0.75;
 }
 
+/* a typed value inside an .anh-grid input cell: the cell carries the look */
+.anh-grid td.input > input {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 9ch;
+  text-align: right;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
 .cell-fusion {
   background-color: var(--cell-locked);
   color: var(--ink-2);

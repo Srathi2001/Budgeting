@@ -146,6 +146,7 @@ export function AssumptionsPanel({
             chequeSpanDays: n(f.get('chequeSpanDays')),
             vatRate: n(f.get('vatRate')) / 100,
             depositPct: n(f.get('depositPct')) / 100,
+            mfPct: n(f.get('mfPct')) / 100,
           }),
         )
       }
@@ -159,6 +160,7 @@ export function AssumptionsPanel({
       {field('chequeSpanDays', 'Cheque schedule span', a.chequeSpanDays, 'Cheque interval = span ÷ cheques (template: 370 ÷ 4 = 92.5 days)', 1, 'days')}
       {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. Included in cash inflow', 100, '%')}
       {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
+      {field('mfPct', 'Maintenance service fee', a.mfPct, 'Of the renewal / new-tenant rent, residential leases with MF: other income, in the month the contract starts', 100, '%')}
 
       <div className="pt-3">
         <div className="text-sm font-medium text-slate-700">RERA increase bands</div>
@@ -647,19 +649,22 @@ export function LeaseImportPanel({
   locked: boolean;
   stats: { lines: number; leased: number; lastImport: string | null; lastFile: string | null };
 }) {
+  const [files, setFiles] = useState<{ file?: File; dump?: File; mf?: File }>({});
   const [form, setForm] = useState<FormData | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, startCheck] = useTransition();
   const apply = useAction();
 
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // any file change re-runs the preview with all three
+  const onFile = (key: 'file' | 'dump' | 'mf') => (e: React.ChangeEvent<HTMLInputElement>) => {
     setPreview(null);
     setError(null);
-    const file = e.target.files?.[0];
-    if (!file) return setForm(null);
+    const next = { ...files, [key]: e.target.files?.[0] };
+    setFiles(next);
+    if (!next.file) return setForm(null);
     const f = new FormData();
-    f.set('file', file);
+    for (const k of ['file', 'dump', 'mf'] as const) if (next[k]) f.set(k, next[k]!);
     setForm(f);
     startCheck(async () => {
       const r = await previewLeaseImport(versionId, f);
@@ -667,6 +672,11 @@ export function LeaseImportPanel({
       setPreview(r.preview ?? null);
     });
   };
+  const counts = (m: Record<string, number>) =>
+    Object.entries(m)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `${k} ${fmt(n)}`)
+      .join(' · ');
 
   const p = preview;
   return (
@@ -677,7 +687,8 @@ export function LeaseImportPanel({
           Export it from Oracle (Custom Applications → Lease Reports → Reports → <b>Tenant and Lease Details Report</b>) for all business units, then
           choose the file here. It is the only source for the unit list and current leases: one line per lease (a lease on several units is one
           line) and one per available unit, with unit type, area, status, tenant, contract dates, rent, deposit, other charges and contracted later
-          years. Fields the report doesn&apos;t have stay blank. Choosing the file shows what would change; nothing is saved until you click{' '}
+          years. Add the <b>Unit Dump</b> for landlord, merged unit no., unit usage and unit status, and the <b>Maintenance Fee Report</b> for MF
+          Yes / No / Waived off, amount, paid and outstanding. Without them, those fields keep their last import. Choosing a file shows what would change; nothing is saved until you click{' '}
           <b>Import</b>. The lines of <b>{versionName}</b> are rebuilt; budget inputs (outcome, budget rate, overrides, cheques, notes) stay with
           their unit. Personal data in the report (phone, email, passport, Emirates ID) is not read.
         </p>
@@ -688,9 +699,23 @@ export function LeaseImportPanel({
         {locked ? (
           <div className="mt-3 text-xs text-amber-700">This version is locked.</div>
         ) : (
+          <>
+          <div className="mt-3 flex flex-wrap items-end gap-4">
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="font-medium">Tenant and Lease Details Report</span>
+              <input type="file" accept=".xlsx,.xls" onChange={onFile('file')} className="text-xs" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="font-medium">Unit Dump (optional)</span>
+              <input type="file" accept=".xls,.xlsx,.htm,.html,.mht" onChange={onFile('dump')} className="text-xs" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="font-medium">Maintenance Fee Report (optional)</span>
+              <input type="file" accept=".xls,.xlsx,.htm,.html,.mht" onChange={onFile('mf')} className="text-xs" />
+            </label>
+          </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <input type="file" accept=".xlsx,.xls" onChange={onFile} className="text-xs" />
-            {checking && <span className="text-sm text-slate-500">Reading the report…</span>}
+            {checking && <span className="text-sm text-slate-500">Reading the reports…</span>}
             <button
               className="btn-primary"
               disabled={!form || !p || apply.pending}
@@ -705,6 +730,7 @@ export function LeaseImportPanel({
             <apply.Msg />
             {error && <span className="text-sm text-red-600">{error}</span>}
           </div>
+          </>
         )}
       </section>
 
@@ -722,6 +748,20 @@ export function LeaseImportPanel({
             />
             <Tile label="Current annual rent" value={`AED ${fmt(p.result.currentRent)}`} sub="current contract year, all lines" />
             <Tile label="Contracted later years" value={`${fmt(p.result.contractedLines)} lines`} sub="set as fixed renewals" />
+            {p.dump && (
+              <Tile
+                label="Unit Dump"
+                value={`${fmt(p.dump.matched)} lines matched`}
+                sub={`${fmt(p.dump.unmatched)} not in the dump · ${counts(p.dump.status)}`}
+              />
+            )}
+            {p.mf && (
+              <Tile
+                label="Maintenance fee"
+                value={`${fmt(p.mf.matched)} leases matched`}
+                sub={`${fmt(p.mf.unmatched)} leased lines not in the report · ${counts(p.mf.status)} · AED ${fmt(p.mf.amount)}, outstanding ${fmt(p.mf.outstanding)}`}
+              />
+            )}
           </div>
           <div className="frame max-w-2xl">
             <table className="tbl">

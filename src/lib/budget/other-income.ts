@@ -1,69 +1,158 @@
-// Other income by property: charges billed with the current leases besides rent (maintenance fee,
-// utility fee, additional car park), from the Oracle lease import. Kept apart from rent revenue.
-import 'server-only';
-import { and, eq, inArray } from 'drizzle-orm';
+// Other income by property × GL account: actuals (GL), the current-year forecast and the budget.
+// Company-level items sit on each BU's General row. The maintenance service fee budget comes from
+// the leases (5% of renewal / new-tenant rent, in the month the contract starts); everything else is
+// entered by the property manager (properties) or Finance (General) and phased evenly over 12 months.
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import { canEditProperty, isFinance, type EditCheck } from '@/lib/auth/permissions';
+import type { Actor } from '@/lib/auth/permissions';
+import { OI_ACCOUNT, OI_INPUT, OI_STORED, oiInput, type OiBlock, type OiChange, type OiPeriod } from './other-income-types';
 
-export const FEE_TYPES = [
-  { key: 'maintenance', label: 'Maintenance fee' },
-  { key: 'utility', label: 'Utility fee' },
-  { key: 'carPark', label: 'Additional car park' },
-] as const;
-export type FeeKey = (typeof FEE_TYPES)[number]['key'];
+export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor, props: schema.Property[], editable: Set<number>): Promise<OiBlock[]> {
+  const ids = props.map((p) => p.id);
+  const bus = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
+  const finance = isFinance(user);
+  const open = version.status !== 'LOCKED';
 
-export interface OtherIncomeRow {
-  propertyId: number;
-  code: string;
-  name: string;
-  bu: string;
-  pm: string;
-  /** budget lines with a current lease */
-  leases: number;
-  /** annualised amount per fee, and how many leases carry it */
-  fees: Record<FeeKey, { amount: number; leases: number }>;
-  /** annualised rent of the leases that pay a maintenance fee (for the fee as % of rent) */
-  rentWithMaintenance: number;
+  const blocks = new Map<string, OiBlock>();
+  for (const p of props) {
+    blocks.set(`P:${p.id}`, {
+      scope: `P:${p.id}`,
+      kind: 'P',
+      propertyId: p.id,
+      buCode: p.buCode,
+      buName: bus.get(p.buCode) ?? p.buCode,
+      code: p.code,
+      name: p.name,
+      pm: p.coordinator,
+      editable: editable.has(p.id),
+      values: {},
+      mfBudget: 0,
+    });
+  }
+  // company-level items: Finance only
+  if (finance) {
+    for (const bu of [...new Set(props.map((p) => p.buCode))]) {
+      blocks.set(`G:${bu}`, {
+        scope: `G:${bu}`,
+        kind: 'G',
+        propertyId: null,
+        buCode: bu,
+        buName: bus.get(bu) ?? bu,
+        code: 'General',
+        name: 'Company level',
+        pm: null,
+        editable: open,
+        values: {},
+        mfBudget: 0,
+      });
+    }
+  }
+
+  const stored = await db.select().from(schema.otherIncome).where(eq(schema.otherIncome.versionId, version.id));
+  for (const r of stored) {
+    const b = blocks.get(r.scope);
+    if (!b) continue;
+    (b.values[r.account] ??= {})[r.period as OiPeriod] = r.amount;
+  }
+
+  // maintenance service fee from the lease calculation
+  if (ids.length) {
+    const mf = await db
+      .select({ propertyId: schema.leaseLines.propertyId, amount: sql<string>`sum(coalesce((${schema.leaseLines.calc}->'totals'->>'maintenance')::numeric, 0))` })
+      .from(schema.leaseLines)
+      .where(and(eq(schema.leaseLines.versionId, version.id), inArray(schema.leaseLines.propertyId, ids)))
+      .groupBy(schema.leaseLines.propertyId);
+    for (const m of mf) {
+      const b = blocks.get(`P:${m.propertyId}`);
+      if (b) b.mfBudget = Math.round(Number(m.amount) * 100) / 100;
+    }
+  }
+
+  return [...blocks.values()].sort((a, b) => a.buCode.localeCompare(b.buCode) || (a.kind === b.kind ? a.code.localeCompare(b.code) : a.kind === 'G' ? 1 : -1));
 }
 
-const days = (a: string, b: string) => (Date.parse(b) - Date.parse(a)) / 86_400_000 + 1;
+/** Saves typed values (Oct–Dec forecast, budget). Properties: whoever may edit the property; General: Finance. */
+export async function saveOtherIncome(user: Actor, versionId: number, changes: OiChange[]): Promise<{ saved: number; errors: string[] }> {
+  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  if (!version) return { saved: 0, errors: ['Version not found'] };
+  if (version.status === 'LOCKED') return { saved: 0, errors: ['This budget version is locked'] };
 
-export async function loadOtherIncome(versionId: number, propertyIds: number[]): Promise<OtherIncomeRow[]> {
-  const ids = propertyIds.length ? propertyIds : [-1];
-  const rows = await db
-    .select({ l: schema.leaseLines, p: schema.properties, bu: schema.businessUnits.name })
-    .from(schema.leaseLines)
-    .innerJoin(schema.properties, eq(schema.properties.id, schema.leaseLines.propertyId))
-    .innerJoin(schema.businessUnits, eq(schema.businessUnits.code, schema.properties.buCode))
-    .where(and(eq(schema.leaseLines.versionId, versionId), inArray(schema.leaseLines.propertyId, ids)));
+  const errors: string[] = [];
+  const checks = new Map<string, EditCheck>();
+  const props = new Map((await db.select().from(schema.properties)).map((p) => [p.id, p]));
+  let saved = 0;
 
-  const byProp = new Map<number, OtherIncomeRow>();
-  for (const { l, p, bu } of rows) {
-    const r =
-      byProp.get(p.id) ??
-      ({
-        propertyId: p.id,
-        code: p.code,
-        name: p.name,
-        bu,
-        pm: p.coordinator ?? '—',
-        leases: 0,
-        fees: { maintenance: { amount: 0, leases: 0 }, utility: { amount: 0, leases: 0 }, carPark: { amount: 0, leases: 0 } },
-        rentWithMaintenance: 0,
-      } satisfies OtherIncomeRow);
-    byProp.set(p.id, r);
-    if (!l.currentStart || !l.currentEnd) continue;
-    r.leases++;
-    // fees are billed per contract year like the rent: put them on a 12-month basis
-    const perYear = 365 / Math.max(days(l.currentStart, l.currentEnd), 1);
-    const add = (k: FeeKey, v: number | null) => {
-      if (!v) return;
-      r.fees[k].amount += v * perYear;
-      r.fees[k].leases++;
-    };
-    add('maintenance', l.maintenanceFee);
-    add('utility', l.utilityFee);
-    add('carPark', l.carParkFee);
-    if (l.maintenanceFee) r.rentWithMaintenance += (l.currentRent ?? 0) * perYear;
+  for (const c of changes) {
+    const acct = OI_ACCOUNT.get(c.account);
+    if (!acct || !(OI_STORED as readonly string[]).includes(c.period) || !OI_INPUT.includes(c.period)) {
+      errors.push(`${c.account} ${c.period}: not an input`);
+      continue;
+    }
+    if (c.amount !== null && (!Number.isFinite(c.amount) || Math.abs(c.amount) > 1e11)) {
+      errors.push(`${c.account}: not a valid amount`);
+      continue;
+    }
+    const m = /^([PG]):(.+)$/.exec(c.scope);
+    if (!m) {
+      errors.push(`${c.scope}: unknown row`);
+      continue;
+    }
+    let propertyId: number | null = null;
+    let buCode: string;
+    if (m[1] === 'P') {
+      propertyId = Number(m[2]);
+      const p = props.get(propertyId);
+      if (!p) {
+        errors.push(`${c.scope}: unknown property`);
+        continue;
+      }
+      buCode = p.buCode;
+      if (!oiInput({ kind: 'P' } as OiBlock, c.account, c.period)) {
+        errors.push(`${p.code} ${acct.name}: calculated from the leases`);
+        continue;
+      }
+      if (!checks.has(c.scope)) checks.set(c.scope, await canEditProperty(user, versionId, propertyId));
+      const check = checks.get(c.scope)!;
+      if (!check.ok) {
+        errors.push(`${p.code}: ${check.reason}`);
+        continue;
+      }
+    } else {
+      buCode = m[2];
+      if (!isFinance(user)) {
+        errors.push(`General ${buCode}: Finance only`);
+        continue;
+      }
+    }
+
+    const where = and(
+      eq(schema.otherIncome.versionId, versionId),
+      eq(schema.otherIncome.scope, c.scope),
+      eq(schema.otherIncome.account, c.account),
+      eq(schema.otherIncome.period, c.period),
+    );
+    const [before] = await db.select().from(schema.otherIncome).where(where);
+    if ((before?.amount ?? null) === c.amount) continue;
+    if (c.amount === null) await db.delete(schema.otherIncome).where(where);
+    else
+      await db
+        .insert(schema.otherIncome)
+        .values({ versionId, buCode, propertyId, scope: c.scope, account: c.account, period: c.period, amount: c.amount, updatedBy: user.id })
+        .onConflictDoUpdate({
+          target: [schema.otherIncome.versionId, schema.otherIncome.scope, schema.otherIncome.account, schema.otherIncome.period],
+          set: { amount: c.amount, updatedAt: new Date(), updatedBy: user.id },
+        });
+    await db.insert(schema.auditLog).values({
+      userId: user.id,
+      versionId,
+      propertyId,
+      entity: 'other_income',
+      entityId: `${c.scope}|${c.account}|${c.period}`,
+      action: 'update',
+      changes: { from: before?.amount ?? null, to: c.amount },
+    });
+    saved++;
   }
-  return [...byProp.values()].sort((a, b) => a.bu.localeCompare(b.bu) || a.code.localeCompare(b.code));
+  return { saved, errors };
 }

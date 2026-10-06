@@ -29,6 +29,8 @@ function input(over: Partial<LeaseInput>): LeaseInput {
     renew1: true,
     noRenewal: false,
     vacancyDays: null,
+    mfRenewal: null,
+    currentMfAmount: null,
     r1Rent: null,
     r1Start: null,
     r1End: null,
@@ -265,5 +267,38 @@ describe('multi-year leases', () => {
     expect(res.contracts[0].schedule).toHaveLength(12);
     expect(res.totals.cash).toBeCloseTo(100000, 0);
     expect(res.totals.revenue).toBeCloseTo(100000, -2);
+  });
+});
+
+describe('maintenance service fee (other income)', () => {
+  const base = { currentRent: 60000, currentStart: d('2026-05-01'), currentEnd: d('2027-04-30') };
+  const rera = { min: 60000, max: 60000 };
+
+  it('renewal keeps the current lease MF: 5% of the renewal rent, in the month it starts', () => {
+    const res = computeLease(input({ ...base, mfCurrent: true }), 2027, A, rera);
+    expect(res.maintenance[4]).toBeCloseTo(3000); // May
+    expect(res.totals.maintenance).toBeCloseTo(3000);
+    expect(res.totals.revenue).toBeLessThan(61000); // not in rent revenue
+  });
+
+  it('renewal without MF on the current lease: none', () => {
+    expect(computeLease(input({ ...base, mfCurrent: false }), 2027, A, rera).totals.maintenance).toBe(0);
+  });
+
+  it('new tenant: MF by default', () => {
+    const res = computeLease(input({ ...base, renew1: false, budgetRate: 70000, vacancyDays: 30 }), 2027, A);
+    expect(res.totals.maintenance).toBeCloseTo(3500);
+    expect(res.maintenance[4]).toBeCloseTo(3500); // starts 31 May
+  });
+
+  it('waived off or No: none; commercial: none by default', () => {
+    expect(computeLease(input({ ...base, renew1: false, budgetRate: 70000, vacancyDays: 30, mfRenewal: 'WAIVED' }), 2027, A).totals.maintenance).toBe(0);
+    expect(computeLease(input({ ...base, mfCurrent: true, mfRenewal: 'NO' }), 2027, A, rera).totals.maintenance).toBe(0);
+    expect(computeLease(input({ ...base, rc: 'C', area: 1000, renew1: false, budgetRate: 80, vacancyDays: 0 }), 2027, A).totals.maintenance).toBe(0);
+  });
+
+  it('current lease starting inside the year: its billed MF in its first month', () => {
+    const res = computeLease(input({ currentRent: 60000, currentStart: d('2027-02-01'), currentEnd: d('2028-01-31'), mfCurrent: true, currentMfAmount: 2900 }), 2027, A, rera);
+    expect(res.maintenance[1]).toBe(2900);
   });
 });

@@ -45,6 +45,13 @@ export interface LeaseInput {
    * per lease (no default). Blank = the new letting can't be dated, so it isn't budgeted.
    */
   vacancyDays: number | null;
+  /**
+   * Maintenance fee on the renewal / new tenant: YES / NO / WAIVED. null = default: residential
+   * only; a renewal keeps the current lease's MF, a new tenant pays it.
+   */
+  mfRenewal: 'YES' | 'NO' | 'WAIVED' | null;
+  /** MF billed on the current lease (Oracle); used when the current contract starts inside the year. */
+  currentMfAmount: number | null;
 
   // 1st renewal: null = derive per template logic, value = PM override
   r1Rent: number | null;
@@ -120,8 +127,13 @@ export interface LeaseResult extends MonthlySeries {
   rera: ReraRange | null;
   /** Revenue lost to the vacancy gap between a non-renewed lease and the next tenant, within the year. */
   vacancyLoss: number;
+  /**
+   * Maintenance service fee by month: other income, not rent revenue. Booked in full in the month a
+   * contract with MF starts (the fee is collected at the start of the lease).
+   */
+  maintenance: number[];
   /** cash = rent cheques (ex VAT); cashFlow = rent + VAT + deposits in - deposits out */
-  totals: { revenue: number; cash: number; cashFlow: number };
+  totals: { revenue: number; cash: number; cashFlow: number; maintenance: number };
   warnings: string[];
 }
 
@@ -267,13 +279,14 @@ export function buildContracts(
     }
   }
 
-  // Main!S: MF on renewal. Commercial never; residential keeps MF, or gets MF when a new tenant comes in.
-  let r1Mf = input.r1Mf;
+  // MF on renewal / new tenant: the PM's choice (Yes / No / Waived off), else the default: residential
+  // only; a renewing tenant keeps the current lease's MF, a new tenant pays it (Main!S).
+  let r1Mf = input.r1Mf ?? (input.mfRenewal ? input.mfRenewal === 'YES' : null);
   const r1MfDerived = r1Mf === null;
   if (r1Mf === null) {
-    if (input.rc === 'C') r1Mf = false;
-    else if (input.mfCurrent === true) r1Mf = true;
-    else r1Mf = !renews;
+    if (input.rc !== 'R') r1Mf = false;
+    else if (renews) r1Mf = input.mfCurrent === true;
+    else r1Mf = true;
   }
 
   if (hasCurrent && r1Start <= input.currentEnd!) warnings.push('1st renewal starts before the current contract ends');
@@ -355,6 +368,7 @@ export function computeLease(
   const chain = buildContracts(input, year, a, rera);
   const months = monthsOfYear(year);
   const s: MonthlySeries = { revenue: zeros(), cash: zeros(), vat: zeros(), depositIn: zeros(), depositOut: zeros() };
+  const maintenance = zeros();
   const monthIndexOf = (d: Day) => months.findIndex((m) => d >= m.start && d <= m.end);
   // Residential rent is VAT exempt; commercial and labour accommodation rent is standard rated
   const rentVat = input.rc === 'R' ? 0 : a.vatRate;
@@ -381,6 +395,13 @@ export function computeLease(
     // Security deposit received from a new tenant when the lease starts
     const si = monthIndexOf(c.start);
     if (si >= 0 && c.newTenant) s.depositIn[si] += c.rent * a.depositPct;
+
+    // Maintenance service fee (other income): in full in the month the contract starts
+    if (si >= 0) {
+      if (c.kind === 'CURRENT') {
+        if (input.rc === 'R' && input.mfCurrent === true) maintenance[si] += input.currentMfAmount ?? c.rent * a.mfPct;
+      } else if (c.mf) maintenance[si] += c.rent * a.mfPct;
+    }
   }
 
   const cur = chain.contracts.find((c) => c.kind === 'CURRENT');
@@ -415,10 +436,12 @@ export function computeLease(
     ...out,
     rera,
     vacancyLoss: round2(vacancyLoss),
+    maintenance: round(maintenance),
     totals: {
       revenue: sum(out.revenue),
       cash: sum(out.cash),
       cashFlow: round2(sum(out.cash) + sum(out.vat) + sum(out.depositIn) - sum(out.depositOut)),
+      maintenance: sum(maintenance),
     },
   };
 }

@@ -37,6 +37,8 @@ for (const l of leases) {
       noRenewal: l.noRenewal,
       // the workbook gives the new tenant's start date itself: as vacancy days
       vacancyDays: !l.renew1 && l.r1Start !== null && l.currentEnd !== null ? l.r1Start - l.currentEnd - 1 : null,
+      mfRenewal: null,
+      currentMfAmount: null,
       r1Rent: l.r1Rent ?? 0,
       r1Start: l.r1Start,
       r1End: l.r1End,

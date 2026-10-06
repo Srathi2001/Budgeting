@@ -1,5 +1,16 @@
 // Shared between the server (loading/saving) and the Lease Budget grid.
 
+export const MF_CHOICES = ['YES', 'NO', 'WAIVED'] as const;
+export type MfChoice = (typeof MF_CHOICES)[number];
+export const MF_LABEL: Record<MfChoice, string> = { YES: 'Yes', NO: 'No', WAIVED: 'Waived off' };
+
+/** What a blank "MF on renewal / new tenant" means for a row. */
+export function defaultMfRenewal(row: { rc: string; renew1: boolean; noRenewal: boolean; mfCurrent: boolean | null; vacant: boolean }): MfChoice {
+  if (row.rc !== 'R') return 'NO';
+  if (row.renew1 && !row.noRenewal && !row.vacant) return row.mfCurrent ? 'YES' : 'NO';
+  return 'YES';
+}
+
 export interface ScheduleItem {
   date: string; // YYYY-MM-DD
   amount: number; // ex VAT
@@ -40,6 +51,8 @@ export interface MasterRow {
   unitStatus: string | null;
   resiCommercial: string | null;
   landlord: string | null;
+  /** Residential / Commercial / Retail (Unit Dump) */
+  unitUsage: string | null;
 
   // current lease: Oracle Fusion (read-only)
   leaseNumber: string | null;
@@ -57,6 +70,11 @@ export interface MasterRow {
   maintenanceFee: number | null;
   utilityFee: number | null;
   carParkFee: number | null;
+  /** maintenance fee on the current lease (MF report): Yes / No / Waived Off, paid and outstanding */
+  mfStatus: string | null;
+  mfPaid: number | null;
+  mfPaidDate: string | null;
+  mfOutstanding: number | null;
   leaseStatus: string | null;
   leaseRemarks: string | null;
   currentSchedule: ScheduleItem[] | null;
@@ -66,6 +84,8 @@ export interface MasterRow {
   // budget inputs (property managers)
   staffOwner: string | null;
   mfCurrent: boolean | null;
+  /** MF on the renewal / new tenant (blank: the default; renewal follows the current lease, new tenant Yes) */
+  mfRenewal: MfChoice | null;
   renew1: boolean;
   noRenewal: boolean;
   /** new tenant: empty days after the current lease before the new tenant starts (required) */
@@ -105,6 +125,8 @@ export interface MasterRow {
   reraMin: number | null;
   reraMax: number | null;
   vacancyLoss: number;
+  /** maintenance fee booked in the budget year (other income, not rent) */
+  maintenanceTotal: number;
   warnings: string[];
   revenue: number[];
   cash: number[];
@@ -135,6 +157,7 @@ export const LINE_FIELDS = [
   'vacant',
   'staffOwner',
   'mfCurrent',
+  'mfRenewal',
   'renew1',
   'noRenewal',
   'vacancyDays',
@@ -192,6 +215,7 @@ export const ORACLE_FIELDS = [
   'rooms',
   'mergedUnitNumber',
   'landlord',
+  'unitUsage',
   'leaseNumber',
   'leaseVersion',
   'tenantCode',
@@ -215,14 +239,14 @@ export function contractedFields(contracted: number): string[] {
   return out;
 }
 
-/** Fields of this row that are fixed (from the Oracle import). */
-export function fixedFields(contracted: number): Set<string> {
-  return new Set<string>([...ORACLE_FIELDS, ...contractedFields(contracted)]);
+/** Fields of this row that are fixed (from the Oracle import); MF on the current lease is fixed once the MF report has it. */
+export function fixedFields(contracted: number, mfStatus: string | null = null): Set<string> {
+  return new Set<string>([...ORACLE_FIELDS, ...contractedFields(contracted), ...(mfStatus ? ['mfCurrent'] : [])]);
 }
 
 /** Budget input fields anyone allowed to edit the row may change (also the Excel template's input columns). */
-export function isEditableField(field: string, contracted: number) {
-  return ((LINE_FIELDS as readonly string[]).includes(field) || (UNIT_FIELDS as readonly string[]).includes(field)) && !fixedFields(contracted).has(field);
+export function isEditableField(field: string, contracted: number, mfStatus: string | null = null) {
+  return ((LINE_FIELDS as readonly string[]).includes(field) || (UNIT_FIELDS as readonly string[]).includes(field)) && !fixedFields(contracted, mfStatus).has(field);
 }
 
 export type LineField = (typeof LINE_FIELDS)[number];
