@@ -222,10 +222,12 @@ export function buildContracts(
   if (input.staffOwner === 'OWNER' || input.noRenewal) return { contracts, increasePct, reraGap, reraAverage, warnings };
 
   // ---- 1st renewal -------------------------------------------------------
+  // only a sitting tenant can renew: a letting of a vacant unit is always a new tenant
+  const renews = input.renew1 && hasCurrent;
   let r1Start = input.r1Start;
   const r1StartDerived = r1Start === null;
   if (r1Start === null && hasCurrent) {
-    r1Start = input.renew1 ? input.currentEnd! + 1 : input.currentEnd! + a.vacancyGapDays;
+    r1Start = renews ? input.currentEnd! + 1 : input.currentEnd! + a.vacancyGapDays;
   }
   if (r1Start === null) return { contracts, increasePct, reraGap, reraAverage, warnings };
 
@@ -238,7 +240,7 @@ export function buildContracts(
   const inc = reraIncrease(input, a, rera);
   reraGap = inc.gap;
   reraAverage = inc.avg;
-  if (input.renew1) {
+  if (renews) {
     increasePct = input.increasePctOverride ?? inc.increase;
     if (r1Rent === null) {
       // zero-rent units (e.g. bulk leases billed on one unit) have nothing to compare with RERA
@@ -259,7 +261,7 @@ export function buildContracts(
   if (r1Mf === null) {
     if (input.rc === 'C') r1Mf = false;
     else if (input.mfCurrent === true) r1Mf = true;
-    else r1Mf = !input.renew1;
+    else r1Mf = !renews;
   }
 
   if (hasCurrent && r1Start <= input.currentEnd!) warnings.push('1st renewal starts before the current contract ends');
@@ -271,7 +273,7 @@ export function buildContracts(
       start: r1Start,
       end: r1End,
       mf: r1Mf,
-      newTenant: !input.renew1,
+      newTenant: !renews,
       derived: { rent: r1RentDerived, start: r1StartDerived, end: r1EndDerived, mf: r1MfDerived },
     },
     input.r1Schedule,

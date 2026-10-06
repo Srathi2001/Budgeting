@@ -1,7 +1,7 @@
 // Integration check of the save path against the database (run after the import):
 // edits, overrides, permissions, validation, locked versions, audit trail. Restores data at the end.
 import 'dotenv/config';
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../src/db';
 import { applyLineChanges } from '../src/lib/budget/save';
 import { recalcLines } from '../src/lib/budget/calc';
@@ -17,6 +17,7 @@ async function main() {
   const [locked] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.status, 'LOCKED'));
   const [pm] = await db.select().from(schema.users).where(eq(schema.users.email, 'ruchi@budget.local'));
   const [fin] = await db.select().from(schema.users).where(eq(schema.users.email, 'finance@budget.local'));
+  const [admin] = await db.select().from(schema.users).where(eq(schema.users.email, 'admin@budget.local'));
 
   // a residential unit of one of Ruchi's properties
   const [mine] = await db
@@ -24,7 +25,7 @@ async function main() {
     .from(schema.leaseLines)
     .innerJoin(schema.properties, eq(schema.properties.id, schema.leaseLines.propertyId))
     .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
-    .where(and(eq(schema.leaseLines.versionId, open.id), eq(schema.properties.coordinator, 'RUCHI'), eq(schema.units.rc, 'R')))
+    .where(and(eq(schema.leaseLines.versionId, open.id), eq(schema.properties.coordinator, 'RUCHI'), eq(schema.units.rc, 'R'), eq(schema.leaseLines.contracted, 0)))
     .limit(1);
   const [theirs] = await db
     .select({ l: schema.leaseLines })
@@ -70,9 +71,23 @@ async function main() {
   res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { r1Start: '31/12/2026' } }]);
   check('bad date format rejected', res.errors.length === 1);
   res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentRent: 72000, tenant: 'EDITED TENANT' } }]);
-  check('PM can edit current-lease fields', res.errors.length === 0 && res.rows[0].tenant === 'EDITED TENANT' && res.rows[0].current?.rent === 72000);
-  res = await applyLineChanges(pm, open.id, [{ lineId: original.id, patch: { currentRent: -1 } }]);
+  check('PM cannot change Oracle lease fields', /only an admin/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+  res = await applyLineChanges(fin, open.id, [{ lineId: original.id, patch: { area: 999 } }]);
+  check('Finance cannot change Oracle unit fields', /only an admin/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+  res = await applyLineChanges(admin, open.id, [{ lineId: original.id, patch: { currentRent: 72000, tenant: 'EDITED TENANT' } }]);
+  check('admin can change Oracle lease fields', res.errors.length === 0 && res.rows[0].tenant === 'EDITED TENANT' && res.rows[0].current?.rent === 72000);
+  res = await applyLineChanges(admin, open.id, [{ lineId: original.id, patch: { currentRent: -1 } }]);
   check('negative lease amount rejected', res.errors.length === 1);
+  // contracted lease years are fixed for everyone but an admin
+  const [withYears] = await db
+    .select({ l: schema.leaseLines })
+    .from(schema.leaseLines)
+    .where(and(eq(schema.leaseLines.versionId, open.id), sql`${schema.leaseLines.contracted} > 0`))
+    .limit(1);
+  if (withYears) {
+    res = await applyLineChanges(fin, open.id, [{ lineId: withYears.l.id, patch: { r1Rent: 1 } }]);
+    check('contracted renewal is admin only', /only an admin/.test(res.errors[0]?.message ?? ''), res.errors[0]?.message);
+  }
 
   // 4. Permissions
   res = await applyLineChanges(pm, open.id, [{ lineId: theirs.l.id, patch: { notes: 'HACK' } }]);

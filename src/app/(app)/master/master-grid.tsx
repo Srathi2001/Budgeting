@@ -25,7 +25,8 @@ import {
 import type { MasterRow, RowPatch } from '@/lib/budget/master-types';
 import { fmt, MONTHS, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine } from './actions';
-import { ScheduleEditor } from './schedule-editor';
+import { RowForm } from './row-form';
+import { OUTCOMES, annualRent, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
 import { MultiSelect } from '@/components/multi-select';
 
@@ -92,16 +93,23 @@ const inputClass = (p: CellClassParams<Row>) => (p.data?.editable && !p.node.isR
 const money = (p: ValueFormatterParams) => fmt(p.value as number | null);
 const money2 = (p: ValueFormatterParams) => fmt(p.value as number | null, 2);
 
-/** Current-lease field: loaded from Oracle Fusion, editable in the tool (a Fusion upload overwrites it). */
-function fusionCol(field: keyof Row, headerName: string, kind: 'text' | 'money' | 'date' = 'text', extra: Partial<ColDef<Row>> = {}): ColDef<Row> {
+/** Field from Oracle (the lease report import): only an admin can edit it; the next import overwrites it. */
+function oracleCol(
+  field: keyof Row,
+  headerName: string,
+  isAdmin: boolean,
+  kind: 'text' | 'money' | 'date' = 'text',
+  extra: Partial<ColDef<Row>> = {},
+): ColDef<Row> {
+  const canEdit = (p: EditableCallbackParams<Row>) => isAdmin && editable(p);
   return {
     colId: field as string,
     field,
     headerName,
-    headerClass: 'hdr-fusion',
-    headerTooltip: 'Loaded from Oracle Fusion. You can edit it; the next Fusion upload replaces it.',
-    cellClass: (p) => (p.data?.editable && !p.node.isRowPinned() ? 'cell-fusion cell-input' : 'cell-fusion'),
-    editable,
+    headerClass: extra.headerClass ?? 'hdr-fusion',
+    headerTooltip: 'From Oracle. Only an admin can change it; the next import replaces it.',
+    cellClass: (p) => (isAdmin && p.data?.editable && !p.node.isRowPinned() ? 'cell-fusion cell-input' : 'cell-fusion'),
+    editable: canEdit,
     cellDataType: false,
     ...(kind === 'text' ? { valueParser: (p: { newValue: unknown }) => (p.newValue === '' ? null : p.newValue) } : {}),
     ...(kind === 'money'
@@ -115,12 +123,19 @@ function fusionCol(field: keyof Row, headerName: string, kind: 'text' | 'money' 
 }
 
 /** Column for a field that holds a PM override; blank override shows the engine's derived value. */
-function overrideCol(field: keyof Row, derived: (r: Row) => unknown, kind: 'money' | 'date' | 'yn', headerName: string): ColDef<Row> {
+function overrideCol(
+  field: keyof Row,
+  derived: (r: Row) => unknown,
+  kind: 'money' | 'date' | 'yn',
+  headerName: string,
+  /** rows where the field is fixed (e.g. a contracted lease year for non-admins) */
+  lockedFor?: (r: Row) => boolean,
+): ColDef<Row> {
   return {
     colId: field as string,
     headerName,
     headerClass: 'hdr-input',
-    editable,
+    editable: (p) => editable(p) && !(p.data && lockedFor?.(p.data)),
     headerTooltip: 'Blank = calculated (grey). Type a value to override (amber). Delete to revert.',
     valueGetter: (p: ValueGetterParams<Row>) => {
       if (!p.data) return null;
@@ -205,32 +220,19 @@ function derivedCol(colId: string, headerName: string, get: (r: Row) => unknown,
   };
 }
 
-function monthCols(key: 'revenue' | 'cashFlow', totalKey: 'revenueTotal' | 'cashFlowTotal', hdr: string): ColDef<Row>[] {
-  return [
-    ...MONTHS.map(
-      (m, i): ColDef<Row> => ({
-        colId: `${key}_${i}`,
-        headerName: m,
-        headerClass: hdr,
-        type: 'rightAligned',
-        cellClass: `cell-month${i === 0 ? ' group-start' : ''}`,
-        valueGetter: (p) => p.data?.[key]?.[i] ?? 0,
-        valueFormatter: money,
-      }),
-    ),
-    {
-      colId: totalKey,
-      headerName: 'Total',
+function monthCols(key: 'revenue' | 'cashFlow', hdr: string): ColDef<Row>[] {
+  return MONTHS.map(
+    (m, i): ColDef<Row> => ({
+      colId: `${key}_${i}`,
+      headerName: m,
       headerClass: hdr,
       type: 'rightAligned',
-      cellClass: 'cell-month font-semibold group-start',
-      valueGetter: (p) => p.data?.[totalKey] ?? 0,
+      cellClass: `cell-month${i === 0 ? ' group-start' : ''}`,
+      valueGetter: (p) => p.data?.[key]?.[i] ?? 0,
       valueFormatter: money,
-    },
-  ];
+    }),
+  );
 }
-
-const psf = (rent: number | null | undefined, area: number | null) => (rent && area ? rent / area : null);
 
 // ---------- component --------------------------------------------------------------------------
 
@@ -242,6 +244,7 @@ export function MasterGrid({
   rows,
   properties,
   selectedProperties,
+  isAdmin,
 }: {
   versionId: number;
   year: number;
@@ -251,6 +254,8 @@ export function MasterGrid({
   properties: P[];
   /** properties in view; empty = all */
   selectedProperties: number[];
+  /** only an admin can change Oracle fields and contracted lease years */
+  isAdmin: boolean;
 }) {
   const router = useRouter();
   const apiRef = useRef<GridApi<Row> | null>(null);
@@ -259,7 +264,7 @@ export function MasterGrid({
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [errors, setErrors] = useState<string[]>([]);
   const [selected, setSelected] = useState<Row | null>(null);
-  const [showRevenue, setShowRevenue] = useState(true);
+  const [showRevenue, setShowRevenue] = useState(false);
   const [showCash, setShowCash] = useState(false);
   const [onlyIssues, setOnlyIssues] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -292,10 +297,11 @@ export function MasterGrid({
     ]);
   }, []);
 
-  const flush = useCallback(async () => {
+  /** Sends queued edits; returns the first rejection message, or null. */
+  const flush = useCallback(async (): Promise<string | null> => {
     const changes = [...queue.current.entries()].map(([lineId, patch]) => ({ lineId, patch }));
     queue.current.clear();
-    if (!changes.length) return;
+    if (!changes.length) return null;
     setStatus({ kind: 'saving' });
     try {
       const res = await saveLines(versionId, changes);
@@ -305,21 +311,24 @@ export function MasterGrid({
       if (res.errors.length) {
         setErrors(res.errors.map((e) => `${res.rows.find((r) => r.lineId === e.lineId)?.unitCode ?? e.lineId}: ${e.message}`));
         setStatus({ kind: 'error', text: `${res.errors.length} change(s) rejected` });
-      } else {
-        setErrors([]);
-        setStatus({ kind: 'saved', text: `Saved ${changes.length} row(s) · recalculated` });
+        return res.errors[0].message;
       }
+      setErrors([]);
+      setStatus({ kind: 'saved', text: `Saved ${changes.length} row(s) · recalculated` });
+      return null;
     } catch (e) {
       setStatus({ kind: 'error', text: (e as Error).message });
+      return (e as Error).message;
     }
   }, [versionId, refreshTotals]);
 
   const onCellValueChanged = useCallback(
     (e: CellValueChangedEvent<Row>) => {
-      const field = e.column.getColId() as keyof RowPatch;
+      const col = e.column.getColId();
       if (!e.data) return;
       const patch = queue.current.get(e.data.lineId) ?? {};
-      (patch as Record<string, unknown>)[field] = (e.data as unknown as Record<string, unknown>)[field];
+      // the Outcome column stands for the two engine flags
+      for (const field of col === 'outcome' ? ['renew1', 'noRenewal'] : [col]) (patch as Record<string, unknown>)[field] = (e.data as unknown as Record<string, unknown>)[field];
       queue.current.set(e.data.lineId, patch);
       setStatus({ kind: 'saving', text: 'Unsaved changes…' });
       if (timer.current) clearTimeout(timer.current);
@@ -356,45 +365,29 @@ export function MasterGrid({
         ],
       },
       {
-        headerName: 'Unit master',
+        headerName: 'Unit · Oracle',
         headerClass: 'hdr-unit',
         children: [
-          unitCol('buName', 'Reference sheet', { valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? `Revenue Budget_${p.data.buName}` : null) }),
           unitCol('buCode', 'BU'),
-          unitCol('propertyCode', 'Property Code'),
           unitCol('coordinator', 'PC'),
-          unitCol('bedroom', 'Bedroom / Code', { edit: 'text' }),
-          unitCol('area', 'Area (sq.ft)', { edit: 'money' }),
-          { ...unitCol('rc', 'Type (R/C)', { edit: 'text' }), cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['R', 'C', 'L'] } },
-          { ...inputCol('mfCurrent', 'MF (Y/N)', 'yn'), headerClass: 'hdr-unit' },
-          unitCol('mergedUnitNumber', 'Merged Unit No.', { edit: 'text' }),
-          unitCol('unitStatus', 'Unit Status', { edit: 'text' }),
-          unitCol('unitType', 'Unit Type', { edit: 'text' }),
-          unitCol('resiCommercial', 'Resi / Commercial (Fusion)', { edit: 'text' }),
-          unitCol('landlord', 'Landlord', { edit: 'text' }),
-          unitCol('pivotCategory', 'Category', { edit: 'text' }),
-          unitCol('rooms', 'Rooms', { edit: 'int' }),
-          unitCol('capacity', 'Capacity', { edit: 'int' }),
+          oracleCol('resiCommercial', 'Unit Type', isAdmin, 'text', { headerClass: 'hdr-unit' }),
+          unitCol('bedroom', 'Bedroom / RERA', { edit: 'text', headerTooltip: 'Bedroom code: the key into the RERA index' }),
+          oracleCol('area', 'Area (sq ft)', isAdmin, 'money', { headerClass: 'hdr-unit' }),
+          oracleCol('unitStatus', 'Unit Status', isAdmin, 'text', { headerClass: 'hdr-unit' }),
         ],
       },
       {
-        headerName: 'Current lease · Oracle Fusion',
+        headerName: 'Current lease · Oracle',
         headerClass: 'hdr-fusion',
         children: [
-          fusionCol('leaseNumber', 'Lease Number'),
-          fusionCol('leaseVersion', 'Version'),
-          fusionCol('tenantCode', 'Tenant Code'),
-          fusionCol('tenant', 'Tenant Name', 'text', { maxWidth: 260 }),
-          fusionCol('customerClass', 'Customer Class'),
-          fusionCol('currentStart', 'Lease Start', 'date'),
-          fusionCol('rentStart', 'Rent Start', 'date'),
-          fusionCol('currentEnd', 'Lease End', 'date'),
-          fusionCol('currentRent', 'Actual Lease Amount', 'money'),
-          fusionCol('vatAmount', 'VAT', 'money'),
-          fusionCol('securityDeposit', 'Security Deposit', 'money'),
-          fusionCol('leaseStatus', 'Lease Status'),
-          fusionCol('leaseRemarks', 'Lease Remarks', 'text', { maxWidth: 280, tooltipField: 'leaseRemarks' }),
-          { ...inputCol('vacant', 'Vacant', 'ynReq'), headerClass: 'hdr-fusion' },
+          oracleCol('tenant', 'Tenant', isAdmin, 'text', { maxWidth: 260 }),
+          oracleCol('leaseNumber', 'Lease No.', isAdmin),
+          oracleCol('currentStart', 'Contract Start', isAdmin, 'date'),
+          oracleCol('currentEnd', 'Contract End', isAdmin, 'date'),
+          oracleCol('currentRent', 'Contract Amount', isAdmin, 'money', { headerTooltip: 'Rent for the contract dates (from Oracle)' }),
+          derivedCol('annualRent', 'Annual Rent', (r) => annualRent(r), 'money', 'Contract amount ÷ contract days × 365'),
+          derivedCol('rentPsf', 'Rent / sq ft', (r) => rentPsf(r), 'money2', 'Annual rent ÷ area'),
+          oracleCol('securityDeposit', 'Security Deposit', isAdmin, 'money'),
         ],
       },
       {
@@ -402,13 +395,22 @@ export function MasterGrid({
         headerClass: 'hdr-input',
         children: [
           {
-            ...inputCol('staffOwner', 'Staff / Owner', 'text'),
+            colId: 'outcome',
+            headerName: 'Outcome',
+            headerClass: 'hdr-input',
+            headerTooltip: 'At the end of the current lease. Renew = RERA increase · New tenant = budget rate after the vacancy gap · Not re-let = stays empty',
+            editable: (p) => editable(p) && !!p.data && p.data.staffOwner !== 'OWNER' && (isAdmin || !p.data.contracted),
+            cellClass: inputClass,
+            cellDataType: false,
+            valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? outcomeOf(p.data) : null),
+            valueSetter: (p) => {
+              Object.assign(p.data, outcomePatch(p.newValue as Outcome));
+              return true;
+            },
             cellEditor: 'agSelectCellEditor',
-            cellEditorParams: { values: ['', 'STAFF', 'OWNER'] },
-            valueParser: (p) => (p.newValue ? p.newValue : null),
+            // a vacant unit has no tenant to renew
+            cellEditorParams: (p: { data?: Row }) => ({ values: p.data?.currentEnd ? [...OUTCOMES] : OUTCOMES.filter((o) => o !== 'Renew') }),
           },
-          inputCol('renew1', 'Renew (Y/N)', 'ynReq', { headerTooltip: 'Y = tenant renews (RERA increase). N = new tenant after the vacancy gap, at the budget rate.' }),
-          inputCol('noRenewal', 'Not re-let', 'ynReq', { headerTooltip: 'Y = unit is not let again after the current lease' }),
           inputCol('budgetRate', 'Budget Rate', 'money', {
             headerTooltip: 'New-tenant rate. Residential: annual rent · Commercial/labour: AED per sq.ft per year · Camps: AED per bed per month',
           }),
@@ -432,68 +434,30 @@ export function MasterGrid({
             valueFormatter: (p) => (p.value === null || p.value === undefined ? '' : `${p.value}%`),
             cellClass: (p) => (p.data?.increasePctOverride !== null && p.data?.increasePctOverride !== undefined ? 'cell-override' : 'cell-derived'),
           },
-          inputCol('cheques', 'Cheques / yr', 'int', { headerTooltip: 'Equal cheques per year for renewals (blank = 4). Exact dates/amounts in the row panel.' }),
-          inputCol('notes', 'Notes', 'text', { cellEditor: 'agLargeTextCellEditor', cellEditorPopup: true, maxWidth: 260 }),
+          {
+            ...overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Renewal Start', (r) => r.contracted >= 1 && !isAdmin),
+            headerTooltip: '1st renewal / new tenant start. Blank = calculated (grey); type to override (amber). More in the row form.',
+          },
+          {
+            ...overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Renewal Rent', (r) => r.contracted >= 1 && !isAdmin),
+            headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (amber). More in the row form.',
+          },
         ],
       },
       {
-        headerName: 'RERA index',
+        headerName: `Result ${year}`,
         headerClass: 'hdr-rera',
         children: [
-          derivedCol('reraKey', 'Index', (r) => `${r.propertyCode}-${r.bedroom ?? ''}`, 'text', 'Property code - bedroom code: the RERA index row used'),
-          derivedCol('reraMin', 'Low', (r) => r.reraMin, 'money'),
-          derivedCol('reraMax', 'High', (r) => r.reraMax, 'money'),
-          derivedCol('reraAvg', 'Average', (r) => r.reraAverage, 'money'),
-          derivedCol('oldPsf', 'Old Rent psf', (r) => psf(r.currentRent, r.area), 'money2'),
-          derivedCol('newPsf', 'New Rent psf', (r) => psf(r.r1?.rent, r.area), 'money2'),
-          derivedCol('reraGap', '% Difference', (r) => r.reraGap, 'pct', 'How far the current rent is below the RERA average'),
-          derivedCol('incAllowed', 'Increase Allowed', (r) => r.increasePct, 'pct', 'From the RERA bands (or labour / camp increase)'),
-          derivedCol('staffDisc', 'Staff Discount', (r) => (r.staffOwner === 'STAFF' ? staffDiscount : 0), 'pct'),
+          { ...derivedCol('revenueTotal', 'Revenue', (r) => r.revenueTotal, 'money'), headerClass: 'hdr-revenue', valueGetter: (p) => p.data?.revenueTotal ?? 0 },
+          { ...derivedCol('cashFlowTotal', 'Cash Inflow', (r) => r.cashFlowTotal, 'money', 'Rent cheques + VAT + deposits in − deposits out'), headerClass: 'hdr-cash', valueGetter: (p) => p.data?.cashFlowTotal ?? 0 },
+          derivedCol('vacancyLoss', 'Vacancy Loss', (r) => r.vacancyLoss, 'money', 'Gap between the lease ending and the next tenant, at the new rent'),
         ],
-      },
-      {
-        headerName: '1st renewal',
-        headerClass: 'hdr-input',
-        children: [
-          overrideCol('r1Mf', (r) => r.r1?.mf ?? null, 'yn', 'MF'),
-          overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Start Date'),
-          overrideCol('r1End', (r) => r.r1?.end ?? null, 'date', 'End Date'),
-          overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Amount'),
-        ],
-      },
-      {
-        headerName: '2nd renewal',
-        headerClass: 'hdr-input',
-        children: [
-          inputCol('r2Renew', 'Renew', 'yn', { headerTooltip: 'Blank = automatic when the 1st renewal ends inside the year. N = none.' }),
-          overrideCol('r2Mf', (r) => r.r2?.mf ?? null, 'yn', 'MF'),
-          overrideCol('r2Start', (r) => r.r2?.start ?? null, 'date', 'Start Date'),
-          overrideCol('r2End', (r) => r.r2?.end ?? null, 'date', 'End Date'),
-          overrideCol('r2Rent', (r) => r.r2?.rent ?? null, 'money', 'Amount'),
-        ],
-      },
-      {
-        headerName: '3rd renewal',
-        headerClass: 'hdr-input',
-        children: [
-          inputCol('r3Renew', 'Renew', 'yn', { headerTooltip: 'Blank = automatic when the 2nd renewal ends inside the year. N = none.' }),
-          overrideCol('r3Mf', (r) => r.r3?.mf ?? null, 'yn', 'MF'),
-          overrideCol('r3Start', (r) => r.r3?.start ?? null, 'date', 'Start Date'),
-          overrideCol('r3End', (r) => r.r3?.end ?? null, 'date', 'End Date'),
-          overrideCol('r3Rent', (r) => r.r3?.rent ?? null, 'money', 'Amount'),
-        ],
-      },
-      {
-        headerName: 'Vacancy',
-        headerClass: 'hdr-rera',
-        children: [derivedCol('vacancyLoss', 'Vacancy Loss', (r) => r.vacancyLoss, 'money', 'Gap between the lease ending and the next tenant, at the new rent')],
       },
     ];
-    if (showRevenue) defs.push({ headerName: `Revenue budget ${year}`, headerClass: 'hdr-revenue', children: monthCols('revenue', 'revenueTotal', 'hdr-revenue') });
-    if (showCash)
-      defs.push({ headerName: `Cash inflow ${year} (rent + VAT + deposits)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'cashFlowTotal', 'hdr-cash') });
+    if (showRevenue) defs.push({ headerName: `Revenue by month ${year}`, headerClass: 'hdr-revenue', children: monthCols('revenue', 'hdr-revenue') });
+    if (showCash) defs.push({ headerName: `Cash inflow by month ${year} (rent + VAT + deposits)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'hdr-cash') });
     return defs;
-  }, [showRevenue, showCash, year, staffDiscount]);
+  }, [showRevenue, showCash, year, isAdmin]);
 
   const onGridReady = useCallback(
     (e: GridReadyEvent<Row>) => {
@@ -504,6 +468,18 @@ export function MasterGrid({
   );
 
   const visibleRows = useMemo(() => (onlyIssues ? rows.filter((r) => r.warnings.length) : rows), [rows, onlyIssues]);
+
+  /** Moves the form to the previous / next row as displayed (after sorting and filters). */
+  const step = (dir: 1 | -1) => {
+    const api = apiRef.current;
+    if (!api || !selected) return;
+    const node = api.getRowNode(String(selected.lineId));
+    if (!node || node.rowIndex === null) return;
+    const target = api.getDisplayedRowAtIndex(node.rowIndex + dir);
+    if (!target?.data) return;
+    target.setSelected(true, true);
+    api.ensureNodeVisible(target);
+  };
   // adding a unit needs exactly one property in view
   const selectedProperty = selectedProperties.length === 1 ? selectedProperties[0] : null;
   const editableSelected = selectedProperty ? properties.find((p) => p.id === selectedProperty)?.editable : false;
@@ -523,10 +499,10 @@ export function MasterGrid({
         />
         <input className="input w-56" placeholder="Search unit, tenant…" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
         <label className="flex items-center gap-1 text-[13px]">
-          <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue
+          <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue by month
         </label>
         <label className="flex items-center gap-1 text-[13px]">
-          <input type="checkbox" checked={showCash} onChange={(e) => setShowCash(e.target.checked)} /> Cash
+          <input type="checkbox" checked={showCash} onChange={(e) => setShowCash(e.target.checked)} /> Cash by month
         </label>
         <label className="flex items-center gap-1 text-[13px]">
           <input type="checkbox" checked={onlyIssues} onChange={(e) => setOnlyIssues(e.target.checked)} /> Issues only
@@ -535,7 +511,7 @@ export function MasterGrid({
           Auto-fit columns
         </button>
         <span className="text-xs text-slate-500">
-          {leased} of {rows.length} units have a Fusion lease
+          {leased} of {rows.length} units have a current lease
         </span>
         <div className="ml-auto flex items-center gap-2">
           <span className={`text-xs ${status.kind === 'error' ? 'text-red-600' : status.kind === 'saved' ? 'text-emerald-700' : 'text-slate-500'}`}>
@@ -575,7 +551,8 @@ export function MasterGrid({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 p-2">
+      <div className="flex min-h-0 flex-1">
+      <div className="min-w-0 flex-1 p-2">
         <AgGridReact<Row>
           theme={theme}
           rowData={visibleRows}
@@ -603,14 +580,22 @@ export function MasterGrid({
       </div>
 
       {selected && (
-        <RowDetail
+        <RowForm
+          key={selected.lineId}
           row={selected}
           year={year}
-          onClose={() => setSelected(null)}
+          staffDiscount={staffDiscount}
+          isAdmin={isAdmin}
+          onClose={() => {
+            apiRef.current?.deselectAll();
+            setSelected(null);
+          }}
+          onPrev={() => step(-1)}
+          onNext={() => step(1)}
           onSave={(patch) => {
             queue.current.set(selected.lineId, { ...(queue.current.get(selected.lineId) ?? {}), ...patch });
             if (timer.current) clearTimeout(timer.current);
-            void flush();
+            return flush();
           }}
           onRemove={
             selected.editable
@@ -626,6 +611,7 @@ export function MasterGrid({
           }
         />
       )}
+      </div>
     </div>
   );
 }
@@ -639,8 +625,8 @@ function Legend() {
   );
   return (
     <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 bg-white px-4 py-1.5 text-[11px] text-slate-500">
-      {item('#64748b', 'Unit master')}
-      {item('#14b8a6', 'Oracle Fusion (editable; an upload overwrites)')}
+      {item('#64748b', 'Unit')}
+      {item('#14b8a6', 'Oracle (admin only; the next import overwrites)')}
       {item('#f59e0b', 'Budget inputs')}
       {item('#a78bfa', 'Calculated')}
       {item('#3b82f6', 'Revenue')}
@@ -648,7 +634,7 @@ function Legend() {
       <span className="flex items-center gap-1.5">
         <span className="inline-block h-3 w-4 rounded-sm" style={{ background: 'rgba(245,158,11,0.18)' }} /> overridden value
       </span>
-      <span className="text-slate-400">Click a row for its contracts and cheque schedules</span>
+      <span className="text-slate-400">Click a row to open its form · double-click a cell to edit in place</span>
     </div>
   );
 }
@@ -705,134 +691,5 @@ function AddUnitForm({
       </button>
       {error && <span className="text-red-600">{error}</span>}
     </form>
-  );
-}
-
-function RowDetail({
-  row,
-  year,
-  onClose,
-  onRemove,
-  onSave,
-}: {
-  row: Row;
-  year: number;
-  onClose: () => void;
-  onRemove?: () => void;
-  onSave: (patch: RowPatch) => void;
-}) {
-  const kind = row.rc === 'R' ? 'Residential' : row.rc === 'C' ? 'Commercial' : 'Labour';
-  const contracts = [
-    row.current && { key: 'current', title: 'Current lease', c: row.current, field: 'currentSchedule' as const, note: 'Actual cheques; Fusion lease schedules will fill this once connected' },
-    row.r1 && { key: 'r1', title: row.renew1 ? '1st renewal' : '1st renewal · new tenant', c: row.r1, field: 'r1Schedule' as const, note: undefined },
-    row.r2 && { key: 'r2', title: '2nd renewal', c: row.r2, field: 'r2Schedule' as const, note: undefined },
-    row.r3 && { key: 'r3', title: '3rd renewal', c: row.r3, field: 'r3Schedule' as const, note: undefined },
-  ].filter(Boolean) as {
-    key: string;
-    title: string;
-    c: NonNullable<Row['r1']>;
-    field: 'r1Schedule' | 'r2Schedule' | 'r3Schedule' | null;
-    note?: string;
-  }[];
-
-  return (
-    <div className="max-h-[46vh] overflow-auto border-t-2 border-sky-700 bg-white px-4 py-3 text-[13px]">
-      <div className="mb-3 flex items-start gap-3">
-        <div>
-          <div className="font-semibold text-slate-900">
-            {row.unitCode} <span className="font-normal text-slate-400">·</span> {row.tenant ?? 'No current lease'}
-          </div>
-          <div className="text-xs text-slate-500">
-            {row.propertyName} · {kind}
-            {row.area ? ` · ${fmt(row.area)} sq.ft` : ''}
-            {row.leaseNumber ? ` · lease ${row.leaseNumber} v${row.leaseVersion ?? '–'}` : ''}
-            {row.increasePct !== null ? ` · renewal increase ${pct(row.increasePct)}` : ''}
-            {row.reraAverage ? ` · RERA avg ${fmt(row.reraAverage)}` : ''}
-          </div>
-        </div>
-        <div className="ml-auto flex gap-2">
-          {onRemove && (
-            <button className="btn text-red-700" onClick={onRemove}>
-              Remove unit
-            </button>
-          )}
-          <button className="btn" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-
-      {row.warnings.length > 0 && (
-        <ul className="mb-3 list-disc rounded-md border border-amber-200 bg-amber-50 py-1.5 pr-3 pl-7 text-xs text-amber-700">
-          {row.warnings.map((w) => (
-            <li key={w}>{w}</li>
-          ))}
-        </ul>
-      )}
-
-      {contracts.length === 0 && (
-        <p className="mb-3 text-xs text-slate-500">
-          No current lease. Enter it in the Current lease columns (or load it from Fusion), or budget a lease-up with Renew = N, a budget
-          rate and the 1st renewal start date.
-        </p>
-      )}
-
-      <div className="flex gap-3 overflow-x-auto pb-1">
-        {contracts.map(({ key, title, c, field, note }) => (
-          <div key={key} className="shrink-0">
-            <div className="mb-1 flex gap-3 px-0.5 text-xs text-slate-600">
-              <span>
-                Rent <b className="text-slate-900 tabular-nums">{fmt(c.rent)}</b>
-              </span>
-              <span>
-                {ymdToDmy(c.start)} – {ymdToDmy(c.end)}
-              </span>
-              <span>MF {yn(c.mf)}</span>
-            </div>
-            <ScheduleEditor
-              title={title}
-              contract={c}
-              year={year}
-              editable={row.editable && field !== null}
-              overrideNote={note}
-              onSave={(items) => field && onSave({ [field]: items } as RowPatch)}
-            />
-          </div>
-        ))}
-      </div>
-
-      <table className="tbl mt-3">
-        <thead>
-          <tr>
-            <th className="w-72">{year}</th>
-            {MONTHS.map((m) => (
-              <th key={m} className="num w-20">
-                {m}
-              </th>
-            ))}
-            <th className="num w-24">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(
-            [
-              ['Revenue', row.revenue, row.revenueTotal],
-              ['Rent cheques (ex VAT)', row.cash, row.cashTotal],
-              ['Cash inflow (incl. VAT, deposits)', row.cashFlow, row.cashFlowTotal],
-            ] as const
-          ).map(([label, vals, total]) => (
-            <tr key={label}>
-              <td>{label}</td>
-              {vals.map((v, i) => (
-                <td key={i} className="num">
-                  {fmt(v)}
-                </td>
-              ))}
-              <td className="num font-semibold">{fmt(total)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }

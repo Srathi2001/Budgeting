@@ -35,6 +35,7 @@ export default async function MasterPage(props: PageProps<'/master'>) {
       rows={rows}
       properties={visible.map((p) => ({ id: p.id, code: p.code, name: p.name, editable: editable.has(p.id) }))}
       selectedProperties={selected}
+      isAdmin={user.role === 'ADMIN'}
     />
   );
 }

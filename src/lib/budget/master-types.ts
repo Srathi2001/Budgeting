@@ -85,6 +85,8 @@ export interface MasterRow {
   increasePctOverride: number | null;
   cheques: number | null;
   notes: string | null;
+  /** how many renewals (1st, 2nd, 3rd) are contracted lease years from Oracle */
+  contracted: number;
 
   // engine output
   current: DerivedContract | null;
@@ -166,6 +168,44 @@ export const UNIT_FIELDS = [
   'unitStatus',
   'resiCommercial',
 ] as const;
+
+/**
+ * Fields that come from Oracle (the Tenant and Lease Details Report import): only an admin may
+ * change them in the tool, and the next import overwrites them.
+ */
+export const ORACLE_FIELDS = [
+  'area',
+  'unitStatus',
+  'resiCommercial',
+  'mergedUnitNumber',
+  'landlord',
+  'leaseNumber',
+  'leaseVersion',
+  'tenantCode',
+  'tenant',
+  'customerClass',
+  'rentStart',
+  'currentStart',
+  'currentEnd',
+  'currentRent',
+  'vatAmount',
+  'securityDeposit',
+  'leaseStatus',
+  'leaseRemarks',
+  'vacant',
+] as const;
+
+/** Fields fixed by contracted lease years (the first `contracted` renewals), plus the outcome they settle. */
+export function contractedFields(contracted: number): string[] {
+  const out: string[] = contracted > 0 ? ['renew1', 'noRenewal'] : [];
+  for (let i = 1; i <= Math.min(contracted, 3); i++) out.push(`r${i}Rent`, `r${i}Start`, `r${i}End`, ...(i > 1 ? [`r${i}Renew`] : []));
+  return out;
+}
+
+/** Fields of this row that only an admin may change. */
+export function adminOnlyFields(contracted: number): Set<string> {
+  return new Set<string>([...ORACLE_FIELDS, ...contractedFields(contracted)]);
+}
 
 export type LineField = (typeof LINE_FIELDS)[number];
 export type UnitField = (typeof UNIT_FIELDS)[number];

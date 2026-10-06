@@ -114,11 +114,35 @@ npm run dev                     # http://localhost:3000
 
 Logins: `admin@budget.local`, `finance@budget.local`, and one per coordinator (`ruchi@…`, `azin@…`, `meghal@…`, `packi@…`). All use the password `SEED_PASSWORD` (default `ChangeMe!2027`). **Change these in Admin → Users.**
 
-## Roles
+## Lease Budget: grid and row form
+
+* **The grid** is a list to scan and filter (about 25 columns): unit, current lease, outcome, budget rate, increase %, renewal start and rent, and the year's revenue, cash and vacancy loss. Monthly columns are a checkbox away. Double-click a cell to edit in place.
+* **Clicking a row** opens its form on the right half of the screen. Sections:
+  * Unit and Current lease (Oracle)
+  * Contracted later years
+  * Budget decision
+  * Renewals
+  * Cheque schedules
+  * RERA check
+  * Result
+  * Notes
+
+  The form has Save / Cancel and ↑ ↓ to move between rows.
+* **Outcome** is one field: Renew / New tenant / Not re-let. A vacant unit can only be let to a new tenant.
+
+## Roles and what can be edited
+
+| Fields | PM (own properties, draft or returned) | Finance | Admin |
+| --- | --- | --- | --- |
+| Oracle fields: unit type, area, unit status, tenant, lease no., customer class, commencement, contract dates and amount, security deposit | locked | locked | yes |
+| Contracted later years, and the outcome they settle | locked | locked | yes |
+| Outcome, increase %, budget rate, new-tenant start, renewal overrides, cheques, schedules, staff/owner, bedroom/RERA code, R/C/L, category, camp beds and rooms, notes | yes | yes | yes |
+
+The rule is enforced on save, not only in the screens. Oracle fields are corrected in Oracle and arrive with the next import.
 
 * **PM:** edits the budget inputs of their own properties while those properties are in draft or returned. Submits properties to Finance.
-* **Finance:** edits everything in open versions. Loads Fusion data, approves or returns submissions, and maintains assumptions, the RERA index, comparatives and users. Can lock a version.
-* **Admin:** Finance, plus can create other admins.
+* **Finance:** edits budget inputs in open versions. Imports lease data, approves or returns submissions, and maintains assumptions, the RERA index, comparatives and users. Can lock a version.
+* **Admin:** Finance, plus Oracle fields and creating other admins.
 
 Every change is written to `audit_log`.
 

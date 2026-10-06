@@ -104,6 +104,7 @@ export async function loadMasterRows(
       increasePctOverride: l.increasePctOverride,
       cheques: l.cheques,
       notes: l.notes,
+      contracted: l.contracted,
 
       current: find('CURRENT'),
       r1: find('RENEWAL1'),

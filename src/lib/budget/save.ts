@@ -5,7 +5,7 @@ import { db, schema } from '@/db';
 import { canEditProperty, editablePropertyIds, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { recalcLines } from './calc';
 import { loadMasterRows } from './master';
-import { LINE_FIELDS, UNIT_FIELDS, type RowPatch, type SaveResult } from './master-types';
+import { LINE_FIELDS, UNIT_FIELDS, adminOnlyFields, type RowPatch, type SaveResult } from './master-types';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 const money = z.number().finite().min(0).max(1e10);
@@ -110,6 +110,19 @@ export async function applyLineChanges(
       if (!check.ok) {
         errors.push({ lineId, message: check.reason });
         continue;
+      }
+      // Oracle data and contracted lease years: admin only (corrections belong in Oracle)
+      if (user.role !== 'ADMIN') {
+        const locked = adminOnlyFields(row.l.contracted);
+        const blocked = Object.entries(patch).filter(([k, v]) => {
+          if (!locked.has(k)) return false;
+          const before = (k in row.l ? (row.l as Record<string, unknown>)[k] : (row.u as Record<string, unknown>)[k]) ?? null;
+          return JSON.stringify(before) !== JSON.stringify(v ?? null);
+        });
+        if (blocked.length) {
+          errors.push({ lineId, message: `Comes from Oracle; only an admin can change it: ${blocked.map(([k]) => k).join(', ')}` });
+          continue;
+        }
       }
       const linePatch: Record<string, unknown> = {};
       const unitPatch: Record<string, unknown> = {};
