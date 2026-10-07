@@ -6,8 +6,8 @@ import type { AnalysisData, AnalysisProperty, AnalysisUnit } from '@/lib/budget/
 import { MONTHS } from '@/lib/format';
 import { Num, Pct } from '@/components/num';
 import { saveNote } from './actions';
-import { MultiSelect } from '@/components/multi-select';
-import { CATEGORIES } from '@/lib/budget/category';
+import { useFilters } from '@/components/filter-bar';
+import { unitPasses } from '@/lib/filters';
 
 // ---- dimensions ------------------------------------------------------------------------------
 
@@ -64,30 +64,17 @@ export function AnalysisPivot({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [depth, setDepth] = useState(1); // levels opened by "Show"
   const [msg, setMsg] = useState<string | null>(null);
-  // multi-select filters (empty = all); they scope every row and the total
-  const [fBu, setFBu] = useState<string[]>([]);
-  const [fPm, setFPm] = useState<string[]>([]);
-  const [fCat, setFCat] = useState<string[]>([]);
-  const [fProp, setFProp] = useState<string[]>([]);
+  // the shared page filters scope every row and the total
+  const { filters } = useFilters();
   const propMeta = useMemo(() => new Map(data.properties.map((p) => [p.id, p])), [data.properties]);
   const units = useMemo(
     () =>
       data.units.filter((u) => {
         const p = propMeta.get(u.propertyId)!;
-        return (
-          (!fBu.length || fBu.includes(p.buName)) &&
-          (!fPm.length || fPm.includes(p.pm)) &&
-          (!fCat.length || fCat.includes(u.category)) &&
-          (!fProp.length || fProp.includes(String(u.propertyId)))
-        );
+        return unitPasses({ bu: p.bu, pm: p.pm, propertyId: u.propertyId, category: u.category }, filters);
       }),
-    [data.units, propMeta, fBu, fPm, fCat, fProp],
+    [data.units, propMeta, filters],
   );
-  const optionCounts = (key: (u: AnalysisUnit) => string) => {
-    const m = new Map<string, number>();
-    for (const u of data.units) m.set(key(u), (m.get(key(u)) ?? 0) + 1);
-    return m;
-  };
   const { labels } = data;
   // the forecast: Oracle revenue actuals to the last month imported, Lease Budget projection after
   const forecastNote = (() => {
@@ -210,13 +197,6 @@ export function AnalysisPivot({
   };
 
   const grand = metrics({ key: 'all', dim: 'bu', label: 'Total', depth: -1, units, children: [] });
-  const buN = optionCounts((u) => propMeta.get(u.propertyId)!.buName);
-  const pmN = optionCounts((u) => propMeta.get(u.propertyId)!.pm);
-  const catN = optionCounts((u) => u.category);
-  const propN = optionCounts((u) => String(u.propertyId));
-  const propChoices = data.properties
-    .filter((p) => (!fBu.length || fBu.includes(p.buName)) && (!fPm.length || fPm.includes(p.pm)))
-    .sort((a, b) => a.name.localeCompare(b.name));
   const periods = period === 'M' ? MONTHS : period === 'Q' ? ['Q1', 'Q2', 'Q3', 'Q4'] : [];
   const byPeriod = (a: number[] | null) => (a ? (period === 'M' ? a : quarters(a)) : periods.map(() => null));
 
@@ -432,48 +412,6 @@ export function AnalysisPivot({
           </a>
         </div>
       </header>
-
-      <div className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
-        <MultiSelect
-          label="Business unit"
-          value={fBu}
-          onChange={(v) => {
-            setFBu(v);
-            setFProp([]);
-          }}
-          options={[...new Set(data.properties.map((p) => p.buName))].sort().map((b) => ({ value: b, label: b, count: buN.get(b) }))}
-        />
-        <MultiSelect
-          label="Property manager"
-          value={fPm}
-          onChange={(v) => {
-            setFPm(v);
-            setFProp([]);
-          }}
-          options={[...new Set(data.properties.map((p) => p.pm))].sort().map((p) => ({ value: p, label: p.charAt(0) + p.slice(1).toLowerCase(), count: pmN.get(p) }))}
-        />
-        <MultiSelect label="Category" value={fCat} onChange={setFCat} options={CATEGORIES.map((c) => ({ value: c, label: c, count: catN.get(c) ?? 0 }))} />
-        <MultiSelect
-          label="Property"
-          width="w-72"
-          value={fProp}
-          onChange={setFProp}
-          options={propChoices.map((p) => ({ value: String(p.id), label: `${p.name} · ${p.code}`, count: propN.get(String(p.id)) }))}
-        />
-        {fBu.length + fPm.length + fCat.length + fProp.length > 0 && (
-          <button
-            className="btn btn-xs"
-            onClick={() => {
-              setFBu([]);
-              setFPm([]);
-              setFCat([]);
-              setFProp([]);
-            }}
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
 
       <div className="card flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 text-[13px]">
         <label className="flex items-center gap-2">

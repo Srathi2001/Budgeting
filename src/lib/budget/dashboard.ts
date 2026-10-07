@@ -4,16 +4,33 @@ import 'server-only';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { parseDay } from '@/lib/engine/dates';
+import type { Contract } from '@/lib/engine/lease';
 import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
 import { locationOf } from './location';
 
-export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let';
+/** What follows a contract that falls due: the Lease Budget decision, or a year already contracted in Oracle. */
+export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let' | 'Contracted';
+
+/** A contract (current lease or a renewal) falling due: in the budget year, or already overdue. */
+export interface DueEvent {
+  /** month index 0–11 in the budget year; -1 = overdue (ended before today, no renewal on record) */
+  month: number;
+  outcome: ExpiryOutcome;
+  /** annual rent of the contract falling due */
+  rent: number;
+  /** annual rent of the next contract (renewal or new tenant); null when not re-let */
+  nextRent: number | null;
+  /** new tenant: empty days between the lease ending and the new tenant */
+  vacancyDays: number | null;
+}
 
 export interface DashUnit {
   unitId: number;
   propertyId: number;
+  /** business unit name (labels) and code (filters) */
   bu: string;
+  buCode: string;
   pm: string;
   category: Category;
   /** current-year budget revenue by month (null when not in this version) */
@@ -24,10 +41,10 @@ export interface DashUnit {
   leased: boolean;
   vacancyLoss: number;
   issues: number;
-  /** month index (0-11) of the current lease expiry when it falls in the budget year */
-  expiryMonth: number | null;
-  expiryRent: number;
-  expiryOutcome: ExpiryOutcome | null;
+  /** contracts falling due in the budget year (and overdue ones) with what the budget assumes next */
+  due: DueEvent[];
+  /** new tenants moving in during the budget year after a lease: month index and annual rent */
+  moveIns: { month: number; rent: number }[];
   /** sq ft; null when unknown */
   area: number | null;
   /** current contract rent, annualised (rent ÷ contract days × 365); 0 without a current lease */
@@ -55,6 +72,46 @@ export interface DashboardData {
   pms: string[];
 }
 
+const annual = (c: Contract) => (c.end >= c.start ? (c.rent * 365) / (c.end - c.start + 1) : 0);
+const monthOf = (day: number) => new Date(day * 86_400_000);
+
+/**
+ * Contracts of a line that fall due in the budget year, or are already overdue, and what follows:
+ * after the current lease, the PM's decision (renew / new tenant after the vacancy days / not re-let)
+ * unless Oracle has the next year contracted; after a renewal, a further renewal unless marked No.
+ */
+function dueEvents(d: DashUnit, l: schema.LeaseLine, contracts: Contract[], year: number, yearStart: number, today: number) {
+  const order: Contract['kind'][] = ['CURRENT', 'RENEWAL1', 'RENEWAL2', 'RENEWAL3'];
+  const byKind = new Map(contracts.map((k) => [k.kind, k]));
+  order.forEach((kind, i) => {
+    const c = byKind.get(kind);
+    if (!c) return;
+    const next = byKind.get(order[i + 1]);
+    const endDate = monthOf(c.end);
+    // overdue: the current lease has already ended and Oracle holds no renewal for it
+    const overdue = kind === 'CURRENT' && c.end < today && c.end < yearStart && l.contracted === 0;
+    const inYear = endDate.getUTCFullYear() === year;
+    if (!inYear && !overdue) return;
+    // from the decisions, not from whether the next contract falls inside the year (one ending on
+    // 31 Dec renews into the next year)
+    let outcome: ExpiryOutcome;
+    if (i + 1 <= l.contracted) outcome = 'Contracted';
+    else if (kind === 'CURRENT') outcome = l.noRenewal ? 'Not re-let' : l.renew1 ? 'Renew' : 'New tenant';
+    else outcome = (i === 1 ? l.r2Renew : i === 2 ? l.r3Renew : null) === false ? 'Not re-let' : 'Renew';
+    d.due.push({
+      month: inYear ? endDate.getUTCMonth() : -1,
+      outcome,
+      rent: annual(c),
+      nextRent: next ? annual(next) : null,
+      vacancyDays: outcome !== 'New tenant' ? null : next ? Math.max(next.start - c.end - 1, 0) : l.vacancyDays,
+    });
+  });
+  // new tenants moving in this year after a lease (vacant units let for the first time are not counted)
+  const cur = byKind.get('CURRENT');
+  const r1 = byKind.get('RENEWAL1');
+  if (cur && r1?.newTenant && monthOf(r1.start).getUTCFullYear() === year) d.moveIns.push({ month: monthOf(r1.start).getUTCMonth(), rent: annual(r1) });
+}
+
 export async function loadDashboardData(version: schema.BudgetVersion, propertyIds: number[]): Promise<DashboardData> {
   const ids = propertyIds.length ? propertyIds : [-1];
   const [prior] = await db
@@ -79,6 +136,7 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
       .where(and(eq(schema.leaseLines.versionId, versionId), inArray(schema.leaseLines.propertyId, ids)));
 
   const yearStart = parseDay(`${version.year}-01-01`)!;
+  const today = parseDay(new Date().toISOString().slice(0, 10))!;
   const units = new Map<number, DashUnit>();
   const make = (u: schema.Unit, propertyId: number): DashUnit => {
     const pp = propById.get(propertyId)!;
@@ -86,6 +144,7 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
       unitId: u.id,
       propertyId,
       bu: pp.bu,
+      buCode: pp.p.buCode,
       pm: pp.p.coordinator ?? '—',
       category: categoryOf(u, pp.p.kind),
       revenue: null,
@@ -94,9 +153,8 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
       leased: false,
       vacancyLoss: 0,
       issues: 0,
-      expiryMonth: null,
-      expiryRent: 0,
-      expiryOutcome: null,
+      due: [],
+      moveIns: [],
       area: u.area && u.area > 0 ? u.area : null,
       passing: 0,
       type: (u.resiCommercial ?? u.unitType ?? '—').trim(),
@@ -114,16 +172,7 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     d.issues = c?.warnings.length ?? 0;
     const cur = c?.contracts.find((k) => k.kind === 'CURRENT');
     d.passing = cur && cur.end >= cur.start ? (cur.rent * 365) / (cur.end - cur.start + 1) : 0;
-    const end = parseDay(l.currentEnd);
-    if (end !== null && end >= yearStart) {
-      const m = new Date(end * 86_400_000).getUTCMonth();
-      const y = new Date(end * 86_400_000).getUTCFullYear();
-      if (y === version.year) {
-        d.expiryMonth = m;
-        d.expiryRent = l.currentRent ?? 0;
-        d.expiryOutcome = l.noRenewal ? 'Not re-let' : l.renew1 ? 'Renew' : 'New tenant';
-      }
-    }
+    if (c && l.staffOwner !== 'OWNER') dueEvents(d, l, c.contracts, version.year, yearStart, today);
     units.set(u.id, d);
   }
   if (prior) {

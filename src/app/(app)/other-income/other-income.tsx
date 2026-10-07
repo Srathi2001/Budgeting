@@ -6,7 +6,8 @@
 
 import { Fragment, useMemo, useState, useTransition } from 'react';
 import { fmt } from '@/lib/format';
-import { MultiSelect } from '@/components/multi-select';
+import { useFilters } from '@/components/filter-bar';
+import { propertyPasses } from '@/lib/filters';
 import {
   OI_ACCOUNT,
   OI_ACCOUNTS,
@@ -47,18 +48,22 @@ export function OtherIncome({
   mfPct: number;
 }) {
   const [blocks, setBlocks] = useState(initial);
-  const [bu, setBu] = useState<string[]>([]);
-  const [pm, setPm] = useState<string[]>([]);
+  // the shared page filters (BU, PM, category, property)
+  const { filters, universe } = useFilters();
   const [allAccounts, setAllAccounts] = useState(false);
-  const [search, setSearch] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [bad, setBad] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [, start] = useTransition();
 
-  const bus = [...new Set(initial.map((b) => `${b.buCode} ${b.buName}`))].sort();
-  const pms = [...new Set(initial.map((b) => b.pm).filter((p): p is string => !!p))].sort();
+  const propInfo = useMemo(() => new Map(universe.map((p) => [p.id, p])), [universe]);
+  /** property rows follow every filter; a BU's General (company-level) row only the business unit one */
+  const blockPasses = (b: OiBlock) => {
+    if (b.kind === 'G') return (filters.bu.length === 0 || filters.bu.includes(b.buCode)) && !filters.pm.length && !filters.cat.length && !filters.prop.length;
+    const p = propInfo.get(b.propertyId!);
+    return !!p && propertyPasses(p, filters);
+  };
 
   /** accounts shown in a block */
   const accountsOf = (b: OiBlock) =>
@@ -68,17 +73,11 @@ export function OtherIncome({
       return allAccounts && (b.kind === 'G' ? !!a.general : !a.general);
     });
 
-  const view = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return blocks.filter(
-      (b) =>
-        (bu.length === 0 || bu.includes(`${b.buCode} ${b.buName}`)) &&
-        (pm.length === 0 || (b.pm !== null && pm.includes(b.pm))) &&
-        (!q || b.code.toLowerCase().includes(q) || b.name.toLowerCase().includes(q)) &&
-        accountsOf(b).length > 0,
-    );
+  const view = useMemo(
+    () => blocks.filter((b) => blockPasses(b) && accountsOf(b).length > 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, bu, pm, search, allAccounts, dirty]);
+    [blocks, filters, propInfo, allAccounts, dirty],
+  );
 
   const total = (bs: OiBlock[], c: OiColumn, account?: string) => {
     let s = 0;
@@ -183,9 +182,6 @@ export function OtherIncome({
       </header>
 
       <div className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
-        <MultiSelect label="Business unit" value={bu} onChange={setBu} options={bus.map((b) => ({ value: b, label: b }))} />
-        <MultiSelect label="Property manager" value={pm} onChange={setPm} options={pms.map((p) => ({ value: p, label: p.charAt(0) + p.slice(1).toLowerCase() }))} />
-        <input className="input w-56" placeholder="Property" value={search} onChange={(e) => setSearch(e.target.value)} />
         <label className="flex items-center gap-1">
           <input type="checkbox" checked={allAccounts} onChange={(e) => setAllAccounts(e.target.checked)} /> All accounts
         </label>
@@ -300,7 +296,7 @@ export function OtherIncome({
                 {OI_ACCOUNTS.filter((a) => OI_COLUMNS.some((c) => total(view, c, a.code) !== null)).map((a) => (
                   <tr key={a.code} className="child">
                     <td>{a.name}</td>
-                    <td>{bu.length === 1 ? bu[0].split(' ')[0] : 'All'}</td>
+                    <td>{filters.bu.length === 1 ? filters.bu[0] : 'All'}</td>
                     <td>
                       <span className="anh-code">{a.code}</span>
                     </td>

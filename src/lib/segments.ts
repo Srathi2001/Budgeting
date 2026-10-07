@@ -24,4 +24,8 @@ export const OUTCOME_COLOR: Record<ExpiryOutcome, string> = {
   Renew: 'var(--seg-renew)',
   'New tenant': 'var(--seg-new-tenant)',
   'Not re-let': 'var(--seg-not-relet)',
+  Contracted: 'var(--seg-contracted)',
 };
+
+/** New tenants moving in (a line over the renewal profile) */
+export const MOVE_IN_COLOR = 'var(--seg-move-in)';

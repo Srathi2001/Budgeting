@@ -279,6 +279,7 @@ export function LineChart({
 export function Columns({
   labels,
   series,
+  lines = [],
   stacked = false,
   height = 220,
   fmt = compact,
@@ -286,6 +287,8 @@ export function Columns({
 }: {
   labels: string[];
   series: { name: string; color: string; values: number[] }[];
+  /** measures drawn as a line over the columns, on the same axis (null = no point that month) */
+  lines?: { name: string; color: string; values: (number | null)[] }[];
   stacked?: boolean;
   height?: number;
   fmt?: (n: number) => string;
@@ -295,7 +298,8 @@ export function Columns({
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
   const totals = labels.map((_, i) => series.reduce((s, x) => s + Math.max(x.values[i], 0), 0));
-  const max = stacked ? Math.max(...totals, 1) : Math.max(...series.flatMap((s) => s.values), 1);
+  const lineMax = Math.max(0, ...lines.flatMap((l) => l.values.filter((v): v is number => v !== null)));
+  const max = Math.max(stacked ? Math.max(...totals, 1) : Math.max(...series.flatMap((s) => s.values), 1), lineMax);
   const ys = ticks(max);
   const hi = ys[ys.length - 1];
   const band = (w - PAD.l - PAD.r) / labels.length;
@@ -312,6 +316,7 @@ export function Columns({
           rows: [
             ...series.map((s) => ({ color: s.color, label: s.name, value: tipFmt(s.values[hover]) })),
             ...(stacked && series.length > 1 ? [{ label: 'Total', value: tipFmt(totals[hover]) }] : []),
+            ...lines.map((l) => ({ color: l.color, label: l.name, value: l.values[hover] === null ? '–' : tipFmt(l.values[hover]!) })),
           ],
         };
   return (
@@ -341,18 +346,35 @@ export function Columns({
                 <text x={cx} y={height - 8} textAnchor="middle" fontSize={11} style={{ fill: INK.muted }}>
                   {l}
                 </text>
-                <rect
-                  x={PAD.l + band * i}
-                  y={PAD.t}
-                  width={band}
-                  height={height - PAD.t - PAD.b}
-                  fill="transparent"
-                  onPointerEnter={() => setHover(i)}
-                  onPointerLeave={() => setHover(null)}
-                />
               </g>
             );
           })}
+          {/* lines over the columns: 2px, with a surface-ringed marker on each point */}
+          {lines.map((l) => {
+            const pts = l.values.map((v, i) => (v === null ? null : ([PAD.l + band * i + band / 2, y(v)] as const)));
+            const path = pts.reduce((d, p, i) => (p ? `${d}${d && pts[i - 1] ? 'L' : 'M'}${p[0]},${p[1]}` : d), '');
+            return (
+              <g key={l.name} pointerEvents="none">
+                <path d={path} fill="none" stroke={l.color} strokeWidth={2} strokeLinejoin="round" />
+                {pts.map((p, i) =>
+                  p ? <circle key={i} cx={p[0]} cy={p[1]} r={hover === i ? 5 : 4} fill={l.color} stroke="var(--surface)" strokeWidth={2} /> : null,
+                )}
+              </g>
+            );
+          })}
+          {/* hover targets: the whole column band */}
+          {labels.map((l, i) => (
+            <rect
+              key={l}
+              x={PAD.l + band * i}
+              y={PAD.t}
+              width={band}
+              height={height - PAD.t - PAD.b}
+              fill="transparent"
+              onPointerEnter={() => setHover(i)}
+              onPointerLeave={() => setHover(null)}
+            />
+          ))}
         </svg>
       )}
       <Tooltip tip={tip} width={w} />

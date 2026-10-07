@@ -1,4 +1,5 @@
-import { getCurrentUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
+import { getCurrentUser, getActiveVersion } from '@/lib/auth/dal';
+import { filteredScope } from '@/lib/filters-server';
 import { loadAnalysisData } from '@/lib/budget/analysis';
 import { xlsxResponse, r2 } from '@/lib/export/xlsx';
 import { MONTHS } from '@/lib/format';
@@ -11,8 +12,10 @@ export async function GET() {
   if (!user) return new Response('Unauthorized', { status: 401 });
   const { version } = await getActiveVersion();
   if (!version) return new Response('No version', { status: 404 });
-  const props = await visibleProperties(user);
-  const d = await loadAnalysisData(version, props.map((p) => p.id), new Set());
+  // the export follows the page filters: their properties; with a category filter, only those units
+  const scope = await filteredScope(user);
+  const d = await loadAnalysisData(version, scope.propertyIds, new Set());
+  if (scope.categories.length) d.units = d.units.filter((u) => scope.categories.includes(u.category));
   const { labels } = d;
 
   const byProp = d.properties

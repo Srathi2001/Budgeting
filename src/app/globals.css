@@ -83,6 +83,9 @@
   --seg-renew: var(--cat-materials);
   --seg-new-tenant: var(--cat-plant);
   --seg-not-relet: var(--cat-overheads);
+  --seg-contracted: var(--cat-labour);
+  /* the move-in line rides over the outcome stack: the lead measure colour, not a fifth segment hue */
+  --seg-move-in: var(--m-actual);
 }
 
 /* Cell states, spread further apart than the design-system defaults (which sit 3-6% apart in

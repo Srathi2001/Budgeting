@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
+import { requireUser, getActiveVersion } from '@/lib/auth/dal';
+import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups, cashFlow } from '@/lib/budget/reports';
 import { sum } from '@/lib/format';
 import { Num, Pct } from '@/components/num';
@@ -12,7 +13,9 @@ const COST_COLUMNS = ['Maintenance', 'Capex / repl.', 'FM staff', 'Water & elec.
 export default async function PnlPage() {
   const user = await requireUser();
   const { version } = await getActiveVersion();
-  const rolls = await propertyRollups(version!.id, (await visibleProperties(user)).map((p) => p.id));
+  // the shared page filters (BU, PM, category, property)
+  const scope = await filteredScope(user);
+  const rolls = await propertyRollups(version!.id, scope.propertyIds, scope.categories);
 
   const lines = rolls
     .map((r) => {

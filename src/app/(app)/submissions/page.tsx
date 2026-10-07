@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { requireUser, getActiveVersion, visibleProperties, isFinance } from '@/lib/auth/dal';
+import { requireUser, getActiveVersion, isFinance } from '@/lib/auth/dal';
+import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups } from '@/lib/budget/reports';
 import { fmt, sum } from '@/lib/format';
 import { StatusBadge } from '@/components/status-badge';
@@ -13,8 +14,8 @@ export default async function SubmissionsPage() {
   const user = await requireUser();
   const { version } = await getActiveVersion();
   const v = version!;
-  const visible = await visibleProperties(user);
-  const ids = visible.map((p) => p.id);
+  // the shared page filters pick the properties; a submission covers the whole property
+  const ids = (await filteredScope(user)).propertyIds;
   const rolls = await propertyRollups(v.id, ids);
   const subs = await db.select().from(schema.submissions).where(eq(schema.submissions.versionId, v.id));
   const finance = isFinance(user);

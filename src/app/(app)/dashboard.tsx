@@ -1,13 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import Link from 'next/link';
-import type { DashboardData, DashUnit, ExpiryOutcome } from '@/lib/budget/dashboard';
+import type { DashboardData, DashUnit, DueEvent, ExpiryOutcome } from '@/lib/budget/dashboard';
 import { CATEGORIES } from '@/lib/budget/category';
 import { MONTHS } from '@/lib/format';
 import { ChartCard, Columns, HBars, Legend, LineChart, StatTile, compact } from '@/components/charts';
-import { CATEGORY_COLOR, MEASURE, OUTCOME_COLOR } from '@/lib/segments';
-import { MultiSelect } from '@/components/multi-select';
+import { CATEGORY_COLOR, MEASURE, MOVE_IN_COLOR, OUTCOME_COLOR } from '@/lib/segments';
+import { useFilters } from '@/components/filter-bar';
+import { unitPasses } from '@/lib/filters';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
@@ -41,39 +42,25 @@ function psfBy(units: DashUnit[], key: (u: DashUnit) => string) {
   }
   return [...m].map(([label, a]) => ({ label, ...a, psf: a.letArea > 0 ? a.rent / a.letArea : NaN })).filter((r) => r.letArea > 0);
 }
-const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
+// stack order: already contracted at the base, then the budget decisions (validated palette order)
+const OUTCOMES: ExpiryOutcome[] = ['Contracted', 'Renew', 'New tenant', 'Not re-let'];
+const OUTCOME_LABEL: Record<ExpiryOutcome, string> = {
+  Contracted: 'Renewed in Oracle',
+  Renew: 'Renew',
+  'New tenant': 'New tenant',
+  'Not re-let': 'Not re-let',
+};
 
 export function Dashboard({ data, locked }: { data: DashboardData; locked: boolean }) {
-  // multi-select filters; an empty list means "All"
-  const [bu, setBu] = useState<string[]>([]);
-  const [pm, setPm] = useState<string[]>([]);
-  const [cat, setCat] = useState<string[]>([]);
-  const [prop, setProp] = useState<string[]>([]);
+  // the shared page filters (Business unit, Property manager, Category, Property)
+  const { filters } = useFilters();
   const yy = String(data.year).slice(2);
   const B = `${data.year}B`;
   const P = `${data.year - 1}B`;
-  const pass = (sel: string[], v: string) => sel.length === 0 || sel.includes(v);
 
   const propById = useMemo(() => new Map(data.properties.map((p) => [p.id, p])), [data.properties]);
-  const propOptions = data.properties.filter((p) => pass(bu, p.bu) && pass(pm, p.pm)).sort((a, b) => a.name.localeCompare(b.name));
 
-  const units = useMemo(
-    () =>
-      data.units.filter(
-        (u) =>
-          (bu.length === 0 || bu.includes(u.bu)) &&
-          (pm.length === 0 || pm.includes(u.pm)) &&
-          (cat.length === 0 || cat.includes(u.category)) &&
-          (prop.length === 0 || prop.includes(String(u.propertyId))),
-      ),
-    [data.units, bu, pm, cat, prop],
-  );
-  // value counts shown next to each option, Excel-style
-  const count = (key: (u: DashUnit) => string) => {
-    const m = new Map<string, number>();
-    for (const u of data.units) m.set(key(u), (m.get(key(u)) ?? 0) + 1);
-    return m;
-  };
+  const units = useMemo(() => data.units.filter((u) => unitPasses({ ...u, bu: u.buCode }, filters)), [data.units, filters]);
 
   const m = useMemo(() => {
     const budget = units.reduce((a, u) => add12(a, u.revenue), z12());
@@ -82,7 +69,28 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
     const inBudget = units.filter((u) => u.revenue);
     // occupancy: share of budget units earning rent in the month
     const occ = MONTHS.map((_, i) => (inBudget.length ? inBudget.filter((u) => (u.revenue?.[i] ?? 0) > 0.5).length / inBudget.length : 0));
-    const expiring = units.filter((u) => u.expiryMonth !== null);
+    // renewal profile: contracts falling due (overdue first, then each month) and what follows
+    const due: DueEvent[] = units.flatMap((u) => u.due);
+    const slots = [-1, ...MONTHS.map((_, i) => i)];
+    const dueBy = (o: ExpiryOutcome) => slots.map((s) => sum(due.filter((e) => e.outcome === o && e.month === s).map((e) => e.rent)));
+    const moveIns = slots.map((s) => (s < 0 ? null : sum(units.flatMap((u) => u.moveIns).filter((x) => x.month === s).map((x) => x.rent))));
+    const dueTable = slots.map((s) => {
+      const at = due.filter((e) => e.month === s);
+      const of = (o: ExpiryOutcome) => at.filter((e) => e.outcome === o);
+      const nt = of('New tenant');
+      const vac = nt.map((e) => e.vacancyDays).filter((v): v is number => v !== null);
+      return {
+        label: s < 0 ? 'Overdue' : `${MONTHS[s]}-${yy}`,
+        n: at.length,
+        rent: sum(at.map((e) => e.rent)),
+        renew: { n: of('Renew').length, rent: sum(of('Renew').map((e) => e.rent)), next: sum(of('Renew').map((e) => e.nextRent ?? 0)) },
+        newT: { n: nt.length, vac: vac.length ? sum(vac) / vac.length : null, next: sum(nt.map((e) => e.nextRent ?? 0)) },
+        lost: { n: of('Not re-let').length, rent: sum(of('Not re-let').map((e) => e.rent)) },
+        contracted: { n: of('Contracted').length, rent: sum(of('Contracted').map((e) => e.rent)) },
+      };
+    });
+    const decided = due.filter((e) => e.outcome !== 'Contracted');
+    const vacAll = due.map((e) => e.vacancyDays).filter((v): v is number => v !== null);
     const byProp = new Map<number, { budget: number; prior: number }>();
     for (const u of units) {
       const r = byProp.get(u.propertyId) ?? { budget: 0, prior: 0 };
@@ -92,13 +100,13 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
     }
     const props = [...byProp.entries()].map(([id, v]) => ({ id, name: propById.get(id)?.name ?? String(id), ...v, change: v.budget - v.prior }));
     const buCat = data.bus
-      .filter((b) => bu.length === 0 || bu.includes(b))
+      .filter((b) => units.some((u) => u.bu === b))
       .map((b) => ({
         label: b,
         values: CATEGORIES.map((c) => sum(units.filter((u) => u.bu === b && u.category === c).flatMap((u) => u.revenue ?? []))),
       }))
       .filter((r) => sum(r.values) > 0);
-    const expiry = OUTCOMES.map((o) => MONTHS.map((_, i) => sum(expiring.filter((u) => u.expiryOutcome === o && u.expiryMonth === i).map((u) => u.expiryRent))));
+    const expiry = OUTCOMES.map(dueBy);
     // rent per sq ft (current budget units with a known area, camps excluded)
     const sq = units.filter((u) => u.revenue && u.area && u.category !== 'Camps');
     const psfAll = psfBy(sq, () => 'all')[0];
@@ -123,8 +131,14 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
       leased: inBudget.filter((u) => u.leased).length,
       vacancyLoss: sum(units.map((u) => u.vacancyLoss)),
       issues: sum(units.map((u) => u.issues)),
-      expiringCount: expiring.length,
-      expiringRent: sum(expiring.map((u) => u.expiryRent)),
+      dueCount: due.length,
+      dueRent: sum(due.map((e) => e.rent)),
+      // share of the leases the budget decides on (not already contracted) that renew
+      renewalRate: decided.length ? decided.filter((e) => e.outcome === 'Renew').length / decided.length : null,
+      avgVacancy: vacAll.length ? sum(vacAll) / vacAll.length : null,
+      rentLost: sum(due.filter((e) => e.outcome === 'Not re-let').map((e) => e.rent)),
+      dueTable,
+      moveIns,
       top: [...props].sort((a, b) => b.budget - a.budget).slice(0, 10),
       movers: [...props].filter((p) => Math.abs(p.change) > 0.5).sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 10).sort((a, b) => b.change - a.change),
       buCat,
@@ -136,16 +150,11 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
       psfCats,
       psfBands,
     };
-  }, [units, data.bus, bu, propById]);
+  }, [units, data.bus, propById, yy]);
 
   const change = m.priorTotal ? (m.total - m.priorTotal) / m.priorTotal : null;
   const noLeases = data.units.every((u: DashUnit) => !u.leased);
   const monthLabels = MONTHS.map((x) => x.slice(0, 3));
-  const filtered = bu.length + pm.length + cat.length + prop.length > 0;
-  const buN = count((u) => u.bu);
-  const pmN = count((u) => u.pm);
-  const catN = count((u) => u.category);
-  const propN = count((u) => String(u.propertyId));
 
   return (
     <div className="anh-main">
@@ -154,54 +163,10 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           <span className="anh-eyebrow">Dashboard</span>
           <h1>{data.versionName}</h1>
           <p className="page-sub mt-1">
-            {locked ? 'Locked, read only' : 'Open for input'} · AED · vs {data.priorName ?? 'no prior budget'}
+            {locked ? 'Locked, read only' : 'Open for input'} · AED · vs {data.priorName ?? 'no prior budget'} · {m.units} units in view
           </p>
         </div>
       </header>
-
-      {/* one filter row; it scopes every tile and chart below */}
-      <div className="anh-filterbar text-[13px]">
-        <MultiSelect
-          label="Business unit"
-          value={bu}
-          onChange={(v) => {
-            setBu(v);
-            setProp([]);
-          }}
-          options={data.bus.map((b) => ({ value: b, label: b, count: buN.get(b) }))}
-        />
-        <MultiSelect
-          label="Property manager"
-          value={pm}
-          onChange={(v) => {
-            setPm(v);
-            setProp([]);
-          }}
-          options={data.pms.map((p) => ({ value: p, label: p.charAt(0) + p.slice(1).toLowerCase(), count: pmN.get(p) }))}
-        />
-        <MultiSelect label="Category" value={cat} onChange={setCat} options={CATEGORIES.map((c) => ({ value: c, label: c, count: catN.get(c) ?? 0 }))} />
-        <MultiSelect
-          label="Property"
-          width="w-72"
-          value={prop}
-          onChange={setProp}
-          options={propOptions.map((p) => ({ value: String(p.id), label: `${p.name} · ${p.code}`, count: propN.get(String(p.id)) }))}
-        />
-        {filtered && (
-          <button
-            className="btn btn-xs"
-            onClick={() => {
-              setBu([]);
-              setPm([]);
-              setCat([]);
-              setProp([]);
-            }}
-          >
-            Clear filters
-          </button>
-        )}
-        <span className="ml-auto text-xs text-slate-500">{m.units} units in view</span>
-      </div>
 
       {noLeases && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-700">
@@ -235,7 +200,11 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           spark={m.occ}
         />
         <StatTile label="Vacancy loss" value={compact(m.vacancyLoss)} sub={`${pctTxt(m.total ? m.vacancyLoss / m.total : null)} of ${B}`} />
-        <StatTile label={`Leases expiring in ${data.year}`} value={String(m.expiringCount)} sub={`${compact(m.expiringRent)} of annual rent`} />
+        <StatTile
+          label={`Leases due ${data.year}`}
+          value={compact(m.dueRent)}
+          sub={`${m.dueCount} leases · ${pctTxt(m.renewalRate, 0)} renewing${m.avgVacancy === null ? '' : ` · new tenants after ${Math.round(m.avgVacancy)} days`}`}
+        />
         <StatTile label="Open issues" value={String(m.issues)} sub={m.issues ? 'Rows to review in Lease Budget' : 'None'} />
       </section>
 
@@ -309,15 +278,41 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
 
         <ChartCard
           className="xl:col-span-2"
-          title={`Lease expiry profile · ${data.year}`}
-          sub="Annual rent of current leases ending each month, by budgeted outcome"
-          legend={<Legend items={OUTCOMES.map((o) => ({ label: o, color: OUTCOME_COLOR[o] }))} />}
+          title={`Leases due for renewal · ${data.year}`}
+          sub={`Annual rent of leases falling due each month (renewals signed this year that fall due again included) and what the budget assumes next · line: new tenants moving in · Not re-let: ${compact(m.rentLost)} of rent lost`}
+          legend={
+            <Legend
+              items={[
+                ...OUTCOMES.map((o) => ({ label: OUTCOME_LABEL[o], color: OUTCOME_COLOR[o] })),
+                { label: 'New tenants moving in', color: MOVE_IN_COLOR },
+              ]}
+            />
+          }
           table={{
-            head: ['Month', ...OUTCOMES, 'Total'],
-            rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, ...m.expiry.map((s) => Math.round(s[i])), Math.round(sum(m.expiry.map((s) => s[i])))]),
+            head: ['Month', 'Leases due', 'Rent due', 'Renew', 'Renew: new rent', 'New tenant', 'Avg vacancy days', 'New tenant: rent', 'Not re-let', 'Rent lost', 'Renewed in Oracle', 'Moving in'],
+            rows: m.dueTable.map((r, i) => [
+              r.label,
+              r.n,
+              Math.round(r.rent),
+              r.renew.n,
+              Math.round(r.renew.next),
+              r.newT.n,
+              r.newT.vac === null ? '–' : Math.round(r.newT.vac),
+              Math.round(r.newT.next),
+              r.lost.n,
+              Math.round(r.lost.rent),
+              r.contracted.n,
+              m.moveIns[i] === null ? '–' : Math.round(m.moveIns[i]!),
+            ]),
           }}
         >
-          <Columns stacked labels={monthLabels} series={OUTCOMES.map((o, k) => ({ name: o, color: OUTCOME_COLOR[o], values: m.expiry[k] }))} height={200} />
+          <Columns
+            stacked
+            labels={['Overdue', ...monthLabels]}
+            series={OUTCOMES.map((o, k) => ({ name: OUTCOME_LABEL[o], color: OUTCOME_COLOR[o], values: m.expiry[k] }))}
+            lines={[{ name: 'New tenants moving in', color: MOVE_IN_COLOR, values: m.moveIns }]}
+            height={220}
+          />
         </ChartCard>
       </div>
 

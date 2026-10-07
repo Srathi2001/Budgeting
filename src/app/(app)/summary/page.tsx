@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
+import { requireUser, getActiveVersion } from '@/lib/auth/dal';
+import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups, cashFlow, type PropertyRollup } from '@/lib/budget/reports';
 import { MONTHS, sum } from '@/lib/format';
 import { Num } from '@/components/num';
@@ -19,7 +20,9 @@ export default async function SummaryPage(props: PageProps<'/summary'>) {
   const { version } = await getActiveVersion();
   const sp = await props.searchParams;
   const view = (typeof sp.view === 'string' && sp.view in VIEWS ? sp.view : 'revenue') as View;
-  const rolls = await propertyRollups(version!.id, (await visibleProperties(user)).map((p) => p.id));
+  // the shared page filters (BU, PM, category, property)
+  const scope = await filteredScope(user);
+  const rolls = await propertyRollups(version!.id, scope.propertyIds, scope.categories);
   const yy = String(version!.year).slice(2);
 
   return (

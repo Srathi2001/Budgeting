@@ -5,6 +5,8 @@ import { logout } from '@/app/login/actions';
 import { NavLinks, PageCrumb } from './nav-links';
 import { ThemeSwitch } from './theme-switch';
 import { VersionSwitcher } from './version-switcher';
+import { FilterBar, FiltersProvider } from '@/components/filter-bar';
+import { filterUniverse, getFilters } from '@/lib/filters-server';
 
 export default async function AppLayout({ children }: LayoutProps<'/'>) {
   const user = await requireUser();
@@ -55,7 +57,14 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
         <ThemeSwitch initial={theme} />
       </header>
       <main className="min-w-0">
-        {version ? children : <div className="p-8 text-slate-600">No budget versions yet. Run the import script first.</div>}
+        {version ? (
+          <FiltersProvider initial={await getFilters()} universe={await filterUniverse(user)}>
+            <FilterBar />
+            {children}
+          </FiltersProvider>
+        ) : (
+          <div className="p-8 text-slate-600">No budget versions yet. Run the import script first.</div>
+        )}
       </main>
     </div>
   );

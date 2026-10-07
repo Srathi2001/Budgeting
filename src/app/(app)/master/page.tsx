@@ -1,11 +1,15 @@
 import { requireUser, getActiveVersion, visibleProperties, editablePropertyIds } from '@/lib/auth/dal';
 import { loadMasterRows } from '@/lib/budget/master';
+import { categoryOf } from '@/lib/budget/category';
 import { withDefaults } from '@/lib/engine/assumptions';
+import { isFiltered } from '@/lib/filters';
+import { filteredScope } from '@/lib/filters-server';
+import { AdoptPropertyFilter } from '@/components/filter-bar';
 import { MasterGrid } from './master-grid';
 
 export const metadata = { title: 'Lease Budget · Budget' };
 
-/** ?p=all, ?p=12 or ?p=12,14,19 */
+/** ?p=12 or ?p=12,14,19: a link to particular properties (taken over as the shared Property filter) */
 function parseIds(p: string | string[] | undefined): number[] {
   if (typeof p !== 'string' || p === 'all') return [];
   return p
@@ -20,23 +24,34 @@ export default async function MasterPage(props: PageProps<'/master'>) {
   const sp = await props.searchParams;
   const visible = await visibleProperties(user);
   const allowed = new Set(visible.map((p) => p.id));
-  const selected = parseIds(sp.p).filter((id) => allowed.has(id));
-  const propertyIds = selected.length ? selected : visible.map((p) => p.id);
+  const linked = parseIds(sp.p).filter((id) => allowed.has(id));
+
+  // the shared page filters (BU, PM, category, property); a ?p= link wins until it is adopted
+  const scope = await filteredScope(user);
+  const propertyIds = linked.length ? linked : scope.propertyIds;
+  const categories = linked.length ? [] : scope.categories;
   const editable = await editablePropertyIds(user, version!);
-  const rows = await loadMasterRows(version!.id, { propertyIds, editableProperties: editable });
+  const rows = (await loadMasterRows(version!.id, { propertyIds, editableProperties: editable })).filter(
+    (r) => !categories.length || categories.includes(categoryOf(r, r.propertyKind)),
+  );
+  // "properties in view" for adding a unit and for the exports: all of them when nothing is filtered
+  const selected = linked.length ? linked : isFiltered(scope.filters) ? propertyIds : [];
 
   return (
-    <MasterGrid
-      key={`${version!.id}-${selected.join(',') || 'all'}`}
-      versionId={version!.id}
-      year={version!.year}
-      locked={version!.status === 'LOCKED'}
-      staffDiscount={withDefaults(version!.assumptions).staffDiscount}
-      mfPct={withDefaults(version!.assumptions).mfPct}
-      rows={rows}
-      properties={visible.map((p) => ({ id: p.id, code: p.code, name: p.name, editable: editable.has(p.id) }))}
-      selectedProperties={selected}
-      isAdmin={user.role === 'ADMIN'}
-    />
+    <>
+      {linked.length > 0 && <AdoptPropertyFilter ids={linked} path="/master" />}
+      <MasterGrid
+        key={`${version!.id}-${selected.join(',') || 'all'}-${categories.join(',')}`}
+        versionId={version!.id}
+        year={version!.year}
+        locked={version!.status === 'LOCKED'}
+        staffDiscount={withDefaults(version!.assumptions).staffDiscount}
+        mfPct={withDefaults(version!.assumptions).mfPct}
+        rows={rows}
+        properties={visible.map((p) => ({ id: p.id, code: p.code, name: p.name, editable: editable.has(p.id) }))}
+        selectedProperties={selected}
+        isAdmin={user.role === 'ADMIN'}
+      />
+    </>
   );
 }

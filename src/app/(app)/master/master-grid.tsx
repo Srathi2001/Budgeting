@@ -1,7 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
@@ -28,7 +27,6 @@ import { RowForm } from './row-form';
 import { TemplateImport } from './template-import';
 import { OUTCOMES, annualRent, needsVacancyDays, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
-import { MultiSelect } from '@/components/multi-select';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -291,7 +289,6 @@ export function MasterGrid({
   /** only an admin can change Oracle fields and contracted lease years */
   isAdmin: boolean;
 }) {
-  const router = useRouter();
   const apiRef = useRef<GridApi<Row> | null>(null);
   const queue = useRef(new Map<number, RowPatch>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -303,7 +300,6 @@ export function MasterGrid({
   const [onlyIssues, setOnlyIssues] = useState(false);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [, startNav] = useTransition();
 
   const refreshTotals = useCallback(() => {
     const api = apiRef.current;
@@ -570,13 +566,6 @@ export function MasterGrid({
     <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
-        <MultiSelect
-          label="Property"
-          width="w-72"
-          value={selectedProperties.map(String)}
-          options={properties.map((p) => ({ value: String(p.id), label: `${p.code} · ${p.name}${p.editable ? '' : ' (read only)'}` }))}
-          onChange={(v) => startNav(() => router.push(`/master?p=${v.length ? v.join(',') : 'all'}`))}
-        />
         <input className="input w-56" placeholder="Search unit, tenant…" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
         <label className="flex items-center gap-1 text-[13px]">
           <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue by month
