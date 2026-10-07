@@ -1,5 +1,6 @@
 // Other income: GL accounts and periods (shared by the server and the Other Income page).
-// Accounts and the Landlord / ANPM split follow the 2026 budget template (OtherxIncome sheet).
+// Accounts and the Landlord / ANPM split follow the 2026 budget template (OtherxIncome sheet), plus
+// 52311 from the MJN PRIVATE OFFICE ledger.
 
 export type OiSide = 'LL' | 'ANPM';
 
@@ -17,6 +18,7 @@ export const OI_ACCOUNTS: OiAccount[] = [
   { code: '52101', name: 'Profit / loss on sale of assets', side: 'LL', general: true },
   { code: '52201', name: 'Interest on bank deposits', side: 'LL', general: true },
   { code: '52302', name: 'Unclaimed payments written back', side: 'LL', general: true },
+  { code: '52311', name: 'Rental income from joint ownership land', side: null, general: true },
   { code: '52401', name: 'Administration fee - own properties', side: 'ANPM' },
   { code: '52402', name: 'Administration fee - managed properties', side: 'ANPM' },
   { code: '52501', name: 'Cheque return fee - own properties', side: 'ANPM' },

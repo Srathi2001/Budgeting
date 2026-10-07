@@ -2,6 +2,7 @@ import 'server-only';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { categoryOf, type Category } from './category';
+import { OI_ACCOUNT, OI_ACCOUNTS } from './other-income-types';
 
 export interface PropertyRollup {
   propertyId: number;
@@ -128,4 +129,49 @@ export async function propertyRollups(versionId: number, propertyIds?: number[],
 /** Total cash inflow by month: rent cheques + VAT + security deposits received - deposits refunded. */
 export function cashFlow(r: PropertyRollup): number[] {
   return r.revenue.map((_, i) => r.cash[i] + r.vat[i] + r.depositIn[i] - r.depositOut[i]);
+}
+
+/**
+ * Budget-year other income by GL account and month, as on the Other Income tab: the maintenance
+ * service fee of properties from the lease calculation (in the month each contract starts), every
+ * other budget amount spread evenly over 12 months. Property rows of `propertyIds` (with `categories`,
+ * the fee of matching units only); General rows of the business units `generalBus` allows.
+ */
+export async function otherIncomeMonthly(
+  versionId: number,
+  propertyIds: number[],
+  categories: Category[],
+  generalBus: (buCode: string) => boolean,
+): Promise<Map<string, number[]>> {
+  const out = new Map<string, number[]>();
+  const add = (account: string, i: number, v: number) => {
+    const m = out.get(account) ?? z12();
+    m[i] += v;
+    out.set(account, m);
+  };
+
+  const stored = await db
+    .select({ scope: schema.otherIncome.scope, buCode: schema.otherIncome.buCode, propertyId: schema.otherIncome.propertyId, account: schema.otherIncome.account, amount: schema.otherIncome.amount })
+    .from(schema.otherIncome)
+    .where(and(eq(schema.otherIncome.versionId, versionId), eq(schema.otherIncome.period, 'B')));
+  const ids = new Set(propertyIds);
+  for (const r of stored) {
+    const acct = OI_ACCOUNT.get(r.account);
+    if (!acct || !r.amount) continue;
+    if (r.propertyId !== null ? !ids.has(r.propertyId) || acct.calc === 'MF' : !generalBus(r.buCode)) continue;
+    for (let i = 0; i < 12; i++) add(r.account, i, Number(r.amount) / 12);
+  }
+
+  const mfAccount = OI_ACCOUNTS.find((a) => a.calc === 'MF')!.code;
+  if (propertyIds.length) {
+    const lineIds = categories.length ? await linesInCategories(versionId, categories) : null;
+    const mf = await db.execute(sql`
+      select e.ord::int as month, sum(e.v::float)::float as amount
+      from lease_lines l, jsonb_array_elements_text(coalesce(l.calc->'maintenance', '[]'::jsonb)) with ordinality e(v, ord)
+      where l.version_id = ${versionId} and l.property_id = any(${`{${propertyIds.join(',')}}`}::int[])
+        ${lineIds ? sql`and l.id = any(${`{${lineIds.join(',') || '-1'}}`}::int[])` : sql``}
+      group by 1`);
+    for (const r of mf.rows as { month: number; amount: number }[]) if (r.month >= 1 && r.month <= 12 && r.amount) add(mfAccount, r.month - 1, r.amount);
+  }
+  return out;
 }

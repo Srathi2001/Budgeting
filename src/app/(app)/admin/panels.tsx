@@ -22,7 +22,7 @@ import {
 } from './actions';
 import type { RrPreview } from '@/lib/import/revenue-recognition';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
-import type { GlPreview, GlValue } from '@/lib/import/gl-other-income';
+import type { GlLedger, GlPreview, GlValue } from '@/lib/import/gl-other-income';
 import { locationOf } from '@/lib/budget/location';
 import { saveComparative } from '../analysis/actions';
 
@@ -916,12 +916,16 @@ export function RevenueImportPanel({ year, last }: { year: number; last: { at: s
 // ---- GL actuals: Account Analysis Report → Other Income ----------------------------------------
 
 export function GlImportPanel({
+  ledger,
+  companies,
   versionId,
   versionName,
   year,
   locked,
   last,
 }: {
+  ledger: GlLedger;
+  companies: string[];
   versionId: number;
   versionName: string;
   year: number;
@@ -944,7 +948,7 @@ export function GlImportPanel({
     setReading(true);
     try {
       // sent as the raw body: the server reads it as a stream
-      const res = await fetch(`/api/import/gl?v=${versionId}`, { method: 'POST', body: f });
+      const res = await fetch(`/api/import/gl?v=${versionId}&ledger=${encodeURIComponent(ledger)}`, { method: 'POST', body: f });
       const json = await res.json();
       if (json.error) setError(json.error);
       else setPlan(json);
@@ -959,12 +963,14 @@ export function GlImportPanel({
   return (
     <div className="space-y-4">
       <section className="card p-4">
-        <h3 className="text-sm font-semibold">Account Analysis Report</h3>
+        <h3 className="text-sm font-semibold">Account Analysis Report · {ledger}</h3>
         <p className="mt-1 max-w-4xl text-xs text-slate-500">
-          Other income actuals for <b>{versionName}</b>: {label.A2}, {label.A1} and {label.YTD}, from the Oracle Account Analysis Report (ledger
-          MJN HOLDING, Jan-{String(year - 3).slice(2)} to Sep-{String(year - 1).slice(2)}). Accounts 52101–52908 are read by property; company-level
-          lines and properties not in the budget go to the General row of their business unit. An import replaces the GL actuals; Oct–Dec and
-          budget inputs are kept.
+          Other income actuals for <b>{versionName}</b>: {label.A2}, {label.A1} and {label.YTD}, from the Oracle Account Analysis Report (ledger {ledger},
+          companies {companies.join(', ')}, Jan-{String(year - 3).slice(2)} to Sep-{String(year - 1).slice(2)}).{' '}
+          {ledger === 'MJN HOLDING'
+            ? 'Accounts 52xxx are read by property; company-level lines and properties not in the budget go to the General row of their business unit.'
+            : 'Accounts 52xxx go to the General row of each company.'}{' '}
+          An import replaces this ledger&apos;s GL actuals; the other ledger, Oct–Dec and budget inputs are kept.
         </p>
         <div className="mt-3 text-xs text-slate-600">
           Last import {last ? new Date(last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : 'never'}

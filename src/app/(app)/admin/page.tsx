@@ -5,6 +5,7 @@ import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel, RevenueImportPanel } from './panels';
 import { lastActualMonth } from '@/lib/import/revenue-recognition';
+import { GL_LEDGERS, GL_LEDGER_NAMES } from '@/lib/import/gl-other-income';
 
 async function RevenueTab({ year }: { year: number }) {
   const { rows } = await db.execute(sql`
@@ -16,18 +17,29 @@ async function RevenueTab({ year }: { year: number }) {
 }
 
 async function GlTab({ version }: { version: schema.BudgetVersion }) {
+  // the last import of each ledger
   const { rows } = await db.execute(sql`
-    select at, changes->>'file' as file from audit_log
-    where entity = 'gl_import' and version_id = ${version.id} order by at desc limit 1`);
-  const last = rows[0] as { at: string; file: string | null } | undefined;
+    select distinct on (changes->>'ledger') changes->>'ledger' as ledger, at, changes->>'file' as file from audit_log
+    where entity = 'gl_import' and version_id = ${version.id} order by changes->>'ledger', at desc`);
+  const last = new Map((rows as { ledger: string; at: string; file: string | null }[]).map((r) => [r.ledger, r]));
   return (
-    <GlImportPanel
-      versionId={version.id}
-      versionName={version.name}
-      year={version.year}
-      locked={version.status === 'LOCKED'}
-      last={last ? { at: String(last.at), file: last.file } : null}
-    />
+    <div className="space-y-6">
+      {GL_LEDGER_NAMES.map((ledger) => {
+        const l = last.get(ledger);
+        return (
+          <GlImportPanel
+            key={ledger}
+            ledger={ledger}
+            companies={Object.keys(GL_LEDGERS[ledger].companies)}
+            versionId={version.id}
+            versionName={version.name}
+            year={version.year}
+            locked={version.status === 'LOCKED'}
+            last={l ? { at: String(l.at), file: l.file } : null}
+          />
+        );
+      })}
+    </div>
   );
 }
 

@@ -291,7 +291,7 @@ export async function applyGlActuals(versionId: number, values: unknown, preview
     const v = GlValues.parse(values);
     const { applyGlImport } = await import('@/lib/import/gl-other-income');
     await applyGlImport(versionId, v, user.id, { file, preview });
-    return `Imported ${v.length.toLocaleString('en-US')} GL actuals into Other Income`;
+    return `Imported ${v.length.toLocaleString('en-US')} ${preview.ledger} GL actuals into Other Income`;
   });
 }
 

@@ -2,13 +2,14 @@ import Link from 'next/link';
 import { requireUser, getActiveVersion } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups, cashFlow } from '@/lib/budget/reports';
+import { EXPENSE_LINES } from '@/lib/budget/expenses';
 import { sum } from '@/lib/format';
 import { Num, Pct } from '@/components/num';
 
 export const metadata = { title: 'Building P&L · Budget' };
 
 // Cost lines from the Buildingwise P&L sheet. Not budgeted in the tool yet.
-const COST_COLUMNS = ['Maintenance', 'Capex / repl.', 'FM staff', 'Water & elec.', 'Watchmen', 'Insurance', 'Cleaning & sec.', 'Misc OH', 'DREC / land'];
+const COST_COLUMNS = EXPENSE_LINES.map((l) => l.short);
 
 export default async function PnlPage() {
   const user = await requireUser();
