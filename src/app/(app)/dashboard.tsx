@@ -171,6 +171,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
               { name: P, color: MEASURE.prior, values: m.prior, dash: true },
               { name: B, color: MEASURE.budget, values: m.budget },
             ]}
+            diffLabel={`Change vs ${P}`}
           />
         </ChartCard>
 
@@ -186,6 +187,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
               { name: 'Revenue', color: MEASURE.budget, values: m.budget },
               { name: 'Cash inflow', color: MEASURE.cash, values: m.cash },
             ]}
+            diffLabel="Cash − revenue"
           />
         </ChartCard>
 
@@ -203,7 +205,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
           sub="Share of units earning rent in the month"
           table={{ head: ['Month', 'Occupancy %'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, `${(m.occ[i] * 100).toFixed(1)}%`]) }}
         >
-          <LineChart labels={monthLabels} series={[{ name: 'Occupancy', color: MEASURE.budget, values: m.occ.map((v) => v * 100) }]} fmt={(n) => `${Math.round(n)}%`} min={Math.max(0, Math.floor((Math.min(...m.occ) * 100 - 5) / 10) * 10)} />
+          <LineChart labels={monthLabels} series={[{ name: 'Occupancy', color: MEASURE.budget, values: m.occ.map((v) => v * 100) }]} fmt={(n) => `${Math.round(n)}%`} tipFmt={(n) => `${n.toFixed(1)}%`} min={Math.max(0, Math.floor((Math.min(...m.occ) * 100 - 5) / 10) * 10)} />
         </ChartCard>
 
         <ChartCard
@@ -215,6 +217,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
             rows={m.top.map((p) => ({ label: p.name, values: [p.budget], note: p.prior ? pctTxt((p.budget - p.prior) / p.prior) : undefined }))}
             series={[{ name: B, color: MEASURE.budget }]}
             note={(r) => r.note}
+            noteLabel={`vs ${P}`}
           />
         </ChartCard>
 
@@ -260,6 +263,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
             labels={['Overdue', ...monthLabels]}
             series={OUTCOMES.map((o, k) => ({ name: OUTCOME_LABEL[o], color: OUTCOME_COLOR[o], values: m.expiry[k] }))}
             lines={[{ name: 'New tenants moving in', color: MOVE_IN_COLOR, values: m.moveIns }]}
+            totalLabel="Leases due"
             height={220}
           />
         </ChartCard>

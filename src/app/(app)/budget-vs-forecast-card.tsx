@@ -5,7 +5,7 @@
 // page filters.
 
 import { useState } from 'react';
-import { BarList, Columns, Legend, compact } from '@/components/charts';
+import { BarList, Columns, Legend, aed, aedDiff, compact } from '@/components/charts';
 import type { BudgetVsForecast } from '@/lib/budget/budget-vs-forecast';
 import { MONTHS } from '@/lib/format';
 import { MEASURE } from '@/lib/segments';
@@ -78,17 +78,28 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
                     {rows.length} building{rows.length === 1 ? '' : 's'} · largest difference first
                   </span>
                 </div>
+                {/* the bar is the difference; 2026B and 2026F sit on the right */}
+                <div className="mb-0.5 flex justify-end text-[10px] font-bold uppercase tracking-wide text-[var(--ink-muted)]">
+                  <span className="w-40 text-right">
+                    {B} → {F}
+                  </span>
+                </div>
                 <BarList
                   diverging
                   limit={8}
                   color={MEASURE.budget}
                   valueFmt={signed}
+                  noteWidth="w-40"
                   rows={rows.map((p) => ({
                     key: String(p.id),
                     label: p.name,
                     value: p.forecast - p.budget,
-                    note: pct(p.forecast, p.budget),
-                    tip: `${B} ${compact(p.budget)} · ${F} ${compact(p.forecast)} · ${signed(p.forecast - p.budget)} (${pct(p.forecast, p.budget)})`,
+                    note: `${compact(p.budget)} → ${compact(p.forecast)}`,
+                    tip: [
+                      { label: B, value: aed(p.budget) },
+                      { label: F, value: aed(p.forecast) },
+                      { label: 'Difference', value: `${aedDiff(p.forecast - p.budget)} (${pct(p.forecast, p.budget)})` },
+                    ],
                   }))}
                 />
               </div>
@@ -111,6 +122,7 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
                 { name: B, color: MEASURE.prior, values: data.months.budget },
                 { name: F, color: MEASURE.budget, values: data.months.actual.map((a, i) => a ?? data.months.projected[i] ?? 0) },
               ]}
+              diffLabel="Difference"
               height={220}
             />
           </div>

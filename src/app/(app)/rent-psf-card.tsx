@@ -18,7 +18,11 @@ const VIEWS: { key: View; label: string }[] = [
 const psf1 = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 /** let area: 79.7K, 3.37M */
 const sqft = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n)));
-const tipOf = (s: PsfStat) => `AED ${psf1(s.psf)}/sq ft · ${sqft(s.area)} sq ft · ${s.units} unit${s.units === 1 ? '' : 's'}`;
+const tipOf = (s: PsfStat) => [
+  { label: 'Rent', value: `AED ${psf1(s.psf)} / sq ft` },
+  { label: 'Let area', value: `${sqft(s.area)} sq ft` },
+  { label: 'Units', value: String(s.units) },
+];
 
 function Tile({ label, stat, units }: { label: string; stat: PsfStat; units?: boolean }) {
   return (

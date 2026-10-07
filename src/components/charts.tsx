@@ -19,6 +19,20 @@ export function compact(n: number): string {
 }
 const full = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
 
+/** Tooltip amount: short and readable (AED 12.71M, AED 845.2K, AED 950). */
+export function aed(n: number): string {
+  const a = Math.abs(n);
+  const s = a >= 1e6 ? `${(a / 1e6).toFixed(2)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(1)}K` : `${Math.round(a)}`;
+  return `${n < 0 ? '−' : ''}AED ${s}`;
+}
+/** A difference: signed (+AED 1.20M / −AED 6.28M). */
+export const aedDiff = (n: number) => (n > 0 ? `+${aed(n)}` : aed(n));
+
+type TipRow = { color?: string; label: string; value: string };
+/** Tooltip rows: no empty or zero rows, so only what matters at that point is listed. */
+const keep = (rows: (TipRow & { v?: number | null })[]): TipRow[] =>
+  rows.filter((r) => r.v === undefined || (r.v !== null && Math.abs(r.v) >= 0.5)).map((r) => ({ color: r.color, label: r.label, value: r.value }));
+
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [w, setW] = useState(0);
@@ -54,7 +68,7 @@ interface Tip {
   x: number;
   y: number;
   title: string;
-  rows: { color?: string; label: string; value: string }[];
+  rows: TipRow[];
 }
 
 function Tooltip({ tip, width }: { tip: Tip | null; width: number }) {
@@ -191,6 +205,8 @@ export function LineChart({
   series,
   height = 220,
   fmt = compact,
+  tipFmt = aed,
+  diffLabel,
   min,
 }: {
   labels: string[];
@@ -198,6 +214,10 @@ export function LineChart({
   series: { name: string; color: string; values: (number | null)[]; width?: number; dash?: boolean }[];
   height?: number;
   fmt?: (n: number) => string;
+  /** tooltip value format (default: short AED) */
+  tipFmt?: (n: number) => string;
+  /** adds a tooltip line: last series − first series, with this label */
+  diffLabel?: string;
   min?: number;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
@@ -215,7 +235,12 @@ export function LineChart({
           x: x(hover),
           y: PAD.t,
           title: labels[hover],
-          rows: series.map((s) => ({ color: s.color, label: s.name, value: s.values[hover] === null ? '–' : full(s.values[hover]!) })),
+          rows: [
+            ...keep(series.map((s) => ({ color: s.color, label: s.name, value: s.values[hover] === null ? '–' : tipFmt(s.values[hover]!), v: s.values[hover] }))),
+            ...(diffLabel && series.length > 1 && series[0].values[hover] !== null && series[series.length - 1].values[hover] !== null
+              ? [{ label: diffLabel, value: aedDiff(series[series.length - 1].values[hover]! - series[0].values[hover]!) }]
+              : []),
+          ],
         };
   return (
     <div ref={ref} className="relative" style={{ height }}>
@@ -283,7 +308,9 @@ export function Columns({
   stacked = false,
   height = 220,
   fmt = compact,
-  tipFmt = full,
+  tipFmt = aed,
+  totalLabel = 'Total',
+  diffLabel,
 }: {
   labels: string[];
   series: { name: string; color: string; values: number[] }[];
@@ -292,8 +319,12 @@ export function Columns({
   stacked?: boolean;
   height?: number;
   fmt?: (n: number) => string;
-  /** value format in the tooltip (default: whole numbers) */
+  /** value format in the tooltip (default: short AED) */
   tipFmt?: (n: number) => string;
+  /** stacked: the tooltip's total line */
+  totalLabel?: string;
+  /** grouped: adds a tooltip line, last series − first series, with this label */
+  diffLabel?: string;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -314,9 +345,11 @@ export function Columns({
           y: PAD.t,
           title: labels[hover],
           rows: [
-            ...series.map((s) => ({ color: s.color, label: s.name, value: tipFmt(s.values[hover]) })),
-            ...(stacked && series.length > 1 ? [{ label: 'Total', value: tipFmt(totals[hover]) }] : []),
-            ...lines.map((l) => ({ color: l.color, label: l.name, value: l.values[hover] === null ? '–' : tipFmt(l.values[hover]!) })),
+            // stacked: the total first, then only the parts that have a value
+            ...(stacked && series.length > 1 ? [{ label: totalLabel, value: tipFmt(totals[hover]) }] : []),
+            ...keep(series.map((s) => ({ color: s.color, label: s.name, value: tipFmt(s.values[hover]), v: s.values[hover] }))),
+            ...(!stacked && diffLabel && series.length > 1 ? [{ label: diffLabel, value: aedDiff(series[series.length - 1].values[hover] - series[0].values[hover]) }] : []),
+            ...keep(lines.map((l) => ({ color: l.color, label: l.name, value: l.values[hover] === null ? '–' : tipFmt(l.values[hover]!), v: l.values[hover] }))),
           ],
         };
   return (
@@ -390,8 +423,9 @@ export function HBars({
   diverging = false,
   labelWidth = 170,
   fmt = compact,
-  tipFmt = full,
+  tipFmt = aed,
   note,
+  noteLabel = 'Change',
 }: {
   rows: { label: string; values: number[]; note?: string }[];
   series: { name: string; color: string }[];
@@ -399,9 +433,11 @@ export function HBars({
   diverging?: boolean;
   labelWidth?: number;
   fmt?: (n: number) => string;
-  /** value format in the tooltip (default: whole numbers) */
+  /** value format in the tooltip (default: short AED) */
   tipFmt?: (n: number) => string;
   note?: (row: { label: string; values: number[]; note?: string }) => string | undefined;
+  /** what a row's note is, in the tooltip */
+  noteLabel?: string;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -424,10 +460,13 @@ export function HBars({
           title: rows[hover].label,
           rows:
             series.length > 1
-              ? [...series.map((s, k) => ({ color: s.color, label: s.name, value: tipFmt(rows[hover].values[k]) })), { label: 'Total', value: tipFmt(totals[hover]) }]
+              ? [
+                  { label: 'Total', value: tipFmt(totals[hover]) },
+                  ...keep(series.map((s, k) => ({ color: s.color, label: s.name, value: tipFmt(rows[hover].values[k]), v: rows[hover].values[k] }))),
+                ]
               : [
-                  { color: series[0].color, label: series[0].name, value: tipFmt(totals[hover]) },
-                  ...(rows[hover].note ? [{ label: rows[hover].note!, value: '' }] : []),
+                  { color: series[0].color, label: series[0].name, value: diverging ? aedDiff(totals[hover]) : tipFmt(totals[hover]) },
+                  ...(rows[hover].note ? [{ label: noteLabel, value: rows[hover].note! }] : []),
                 ],
         };
   return (
@@ -494,13 +533,17 @@ export function BarList({
   limit,
   diverging = false,
   valueFmt = (n) => String(Math.round(n)),
+  noteWidth = 'w-14',
 }: {
-  rows: { key: string; label: string; value: number; note?: string; tip: string }[];
+  /** `tip`: the tooltip, one labelled line per fact */
+  rows: { key: string; label: string; value: number; note?: string; tip: { label: string; value: string }[] }[];
   color: string;
   limit?: number;
   /** bars either side of a centre rule (variances): position gives the direction, the colour stays one */
   diverging?: boolean;
   valueFmt?: (n: number) => string;
+  /** width class of the note on the right */
+  noteWidth?: string;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [all, setAll] = useState(false);
@@ -520,7 +563,7 @@ export function BarList({
             onPointerEnter={(e) => {
               const box = e.currentTarget.getBoundingClientRect();
               const host = ref.current!.getBoundingClientRect();
-              setTip({ x: Math.min(box.width / 3, w - 220), y: box.bottom - host.top + 6, title: r.label, rows: [{ label: r.tip, value: '' }] });
+              setTip({ x: Math.min(box.width / 3, w - 220), y: box.bottom - host.top + 6, title: r.label, rows: r.tip });
             }}
             onPointerLeave={() => setTip(null)}
           >
@@ -547,7 +590,7 @@ export function BarList({
                 </span>
               </span>
             </span>
-            {r.note !== undefined && <span className="w-14 shrink-0 text-right text-[11px] text-[var(--ink-muted)]">{r.note}</span>}
+            {r.note !== undefined && <span className={`${noteWidth} shrink-0 text-right text-[11px] text-[var(--ink-muted)]`}>{r.note}</span>}
           </li>
         ))}
       </ul>
