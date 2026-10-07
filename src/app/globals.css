@@ -87,16 +87,16 @@
   --seg-move-in: var(--m-actual);
 }
 
-/* Cell states, spread further apart than the design-system defaults (which sit 3-6% apart in
-   lightness and blur together in a dense grid). Three clear steps in both themes:
-   editable = surface, boxed · calculated = light step, italic · fixed (Oracle) = darker step. */
+/* Cell states on the entry tabs (Lease Budget grid and form, Other Income, Comparatives): two fills only.
+   To enter = white box with a full edge · locked = one solid gray, whether fixed from Oracle, calculated
+   or read only (calculated values are told apart by grey italic text, not by another fill). */
 :root {
-  --cell-calc: #ebebeb;
-  --cell-locked: #d2d2d2;
+  --cell-locked: #dcdcdc;
+  --cell-calc: var(--cell-locked);
 }
 [data-theme='dark'] {
-  --cell-calc: #2b2b2b;
-  --cell-locked: #474747;
+  --cell-locked: #3d3d3d;
+  --cell-calc: var(--cell-locked);
 }
 
 :root {
@@ -578,10 +578,11 @@ body {
   border-top: 1px solid var(--line-strong);
 }
 
-/* editable cells: underlined; boxed on hover / while typing */
+/* cells to enter: a white box with a full edge (darker on hover / while typing) */
 .anh-grid td.input,
 .cell-input {
-  box-shadow: inset 0 -1px 0 var(--control-border);
+  background-color: var(--cell-input);
+  box-shadow: inset 0 0 0 1px var(--ink-muted);
 }
 .anh-grid td.input:hover,
 .anh-grid td.input:focus-within,
@@ -590,16 +591,47 @@ body {
 }
 .anh-legend-cells i.input,
 .anh-legend-cells i.dirty {
-  box-shadow: inset 0 -1px 0 var(--control-border);
+  background: var(--cell-input);
+  box-shadow: inset 0 0 0 1px var(--ink-muted);
+}
+.anh-legend-cells i.locked,
+.anh-legend-cells i.calc {
+  background: var(--cell-locked);
+  box-shadow: none;
 }
 .cell-edit {
-  border-color: transparent transparent var(--control-border);
-  background: transparent;
+  border: 1px solid var(--ink-muted);
+  background: var(--cell-input);
 }
 .cell-edit:hover,
 .cell-edit:focus {
   border-color: var(--ink);
   background: var(--cell-input);
+}
+/* Lease Budget grid: every cell that is not an input sits on the locked fill */
+.lease-grid .ag-row:not(.ag-row-pinned) .ag-cell:not(.cell-input) {
+  background-color: var(--cell-locked);
+}
+
+/* Row hover never repaints a total or a cell state: a black total keeps its fill (its white text
+   vanished on the light hover fill), locked cells stay gray, inputs stay white. */
+.tbl tbody tr.tbl-total:hover td {
+  background: var(--cell-total);
+  color: var(--ink-inverse);
+}
+.anh-grid tbody tr.total:hover td {
+  background: var(--cell-total);
+  color: var(--ink-inverse);
+}
+.anh-grid tbody tr:hover td.locked,
+.anh-grid tbody tr:hover td.calc {
+  background: var(--cell-locked);
+}
+.anh-grid tbody tr:hover td.input {
+  background: var(--cell-input);
+}
+.ag-row-pinned.ag-row-hover {
+  --ag-internal-row-overlay-color: transparent;
 }
 
 .cell-fusion {
@@ -612,7 +644,7 @@ body {
   color: var(--ink-2);
   font-style: italic;
 }
-/* underlined, boxed on hover: see "Light tables" above */
+/* boxed: see "cells to enter" above */
 .cell-input {
   background-color: var(--cell-input);
   color: var(--ink);
@@ -620,9 +652,9 @@ body {
 .cell-input:hover {
   background-color: var(--cell-input-hover);
 }
-/* editable, currently showing the calculated value */
+/* editable, still showing the calculated value: an input (white box), the value in grey italic */
 .cell-input.cell-derived {
-  background-color: var(--cell-calc);
+  background-color: var(--cell-input);
   color: var(--ink-2);
 }
 /* a typed override: dark, normal weight (headers and field names carry the bold); calculated is grey italic */

@@ -54,7 +54,8 @@ const theme = themeQuartz.withParams({
   columnBorder: false,
   headerColumnBorder: { color: 'var(--line-soft)' },
   oddRowBackgroundColor: 'var(--surface)',
-  rowHoverColor: 'var(--cell-input-hover)',
+  // a faint darkening, so a hovered row keeps its fills (white inputs, gray locked) readable
+  rowHoverColor: 'color-mix(in srgb, var(--ink) 6%, transparent)',
   selectedRowBackgroundColor: 'var(--header-3)',
   accentColor: 'var(--ink)',
   // pinned total row: cell-total black, ink-inverse, double rule above
@@ -631,7 +632,7 @@ export function MasterGrid({
       )}
 
       <div className="flex min-h-0 flex-1">
-      <div className="min-w-0 flex-1 p-2">
+      <div className="lease-grid min-w-0 flex-1 p-2">
         <AgGridReact<Row>
           theme={theme}
           rowData={visibleRows}
@@ -711,17 +712,15 @@ function Legend() {
     <div className="anh-legend-cells border-b border-slate-200 bg-white px-4 py-2">
       <span>
         <i className="input" />
-        Editable
+        To enter
       </span>
       <span>
         <i className="locked" />
-        Fixed (Oracle import)
+        Locked (Oracle, calculated, read only)
       </span>
       <span>
-        <i className="calc" />
-        <em>Calculated</em>
+        <em>Grey italic: calculated, until a value is typed</em>
       </span>
-      <span className="font-bold text-slate-900">Bold: overridden</span>
       <span className="anh-muted">Click a row to open its form · double-click a cell to edit</span>
     </div>
   );

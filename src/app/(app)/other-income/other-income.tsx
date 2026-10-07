@@ -185,7 +185,7 @@ export function OtherIncome({
     }
     const calc = c === 'F' || (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF' && b.kind === 'P');
     return (
-      <td key={c} className={`anh-num ${calc ? 'calc' : c === 'OD' || c === 'B' ? '' : 'locked'}`}>
+      <td key={c} className={`anh-num ${calc ? 'calc' : 'locked'}`}>
         {fmt(v)}
       </td>
     );
@@ -200,9 +200,14 @@ export function OtherIncome({
   const cols = OI_COLUMNS.length + 4;
   return (
     <div className="space-y-4 p-6">
-      <header>
-        <h1 className="page-title">Other Income</h1>
-        <p className="page-sub">{versionName} · by property and GL account</p>
+      <header className="flex flex-wrap items-end gap-4">
+        <div>
+          <h1 className="page-title">Other Income</h1>
+          <p className="page-sub">{versionName} · by property and GL account</p>
+        </div>
+        <a className="btn ml-auto" href="/api/export/other-income" title="Saved values for the current filters (save typed changes first)">
+          Export to Excel
+        </a>
       </header>
 
       <div className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
@@ -218,15 +223,11 @@ export function OtherIncome({
         <div className="anh-legend-cells" aria-label="Cell legend">
           <span>
             <i className="input" />
-            Editable
+            To enter
           </span>
           <span>
             <i className="locked" />
-            Actual
-          </span>
-          <span>
-            <i className="calc" />
-            Calculated
+            Locked (actual, calculated, read only)
           </span>
           <span>
             <i className="dirty" />
