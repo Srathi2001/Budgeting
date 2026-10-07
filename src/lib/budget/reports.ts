@@ -131,8 +131,18 @@ export function cashFlow(r: PropertyRollup): number[] {
   return r.revenue.map((_, i) => r.cash[i] + r.vat[i] + r.depositIn[i] - r.depositOut[i]);
 }
 
+/** Budget-year other income of one Other Income row (property or General) and account, by month. */
+export interface OiMonthly {
+  scope: string;
+  buCode: string;
+  propertyId: number | null;
+  propertyCode: string | null;
+  account: string;
+  months: number[];
+}
+
 /**
- * Budget-year other income by GL account and month, as on the Other Income tab: the maintenance
+ * Budget-year other income by row, GL account and month, as on the Other Income tab: the maintenance
  * service fee of properties from the lease calculation (in the month each contract starts), every
  * other budget amount spread evenly over 12 months. Property rows of `propertyIds` (with `categories`,
  * the fee of matching units only); General rows of the business units `generalBus` allows.
@@ -142,12 +152,14 @@ export async function otherIncomeMonthly(
   propertyIds: number[],
   categories: Category[],
   generalBus: (buCode: string) => boolean,
-): Promise<Map<string, number[]>> {
-  const out = new Map<string, number[]>();
-  const add = (account: string, i: number, v: number) => {
-    const m = out.get(account) ?? z12();
-    m[i] += v;
-    out.set(account, m);
+): Promise<OiMonthly[]> {
+  const props = new Map((await db.select({ id: schema.properties.id, code: schema.properties.code, buCode: schema.properties.buCode }).from(schema.properties)).map((p) => [p.id, p]));
+  const out = new Map<string, OiMonthly>();
+  const add = (scope: string, buCode: string, propertyId: number | null, account: string, i: number, v: number) => {
+    const k = `${scope}|${account}`;
+    const r = out.get(k) ?? { scope, buCode, propertyId, propertyCode: propertyId === null ? null : (props.get(propertyId)?.code ?? null), account, months: z12() };
+    r.months[i] += v;
+    out.set(k, r);
   };
 
   const stored = await db
@@ -159,19 +171,22 @@ export async function otherIncomeMonthly(
     const acct = OI_ACCOUNT.get(r.account);
     if (!acct || !r.amount) continue;
     if (r.propertyId !== null ? !ids.has(r.propertyId) || acct.calc === 'MF' : !generalBus(r.buCode)) continue;
-    for (let i = 0; i < 12; i++) add(r.account, i, Number(r.amount) / 12);
+    for (let i = 0; i < 12; i++) add(r.scope, r.buCode, r.propertyId, r.account, i, Number(r.amount) / 12);
   }
 
   const mfAccount = OI_ACCOUNTS.find((a) => a.calc === 'MF')!.code;
   if (propertyIds.length) {
     const lineIds = categories.length ? await linesInCategories(versionId, categories) : null;
     const mf = await db.execute(sql`
-      select e.ord::int as month, sum(e.v::float)::float as amount
+      select l.property_id, e.ord::int as month, sum(e.v::float)::float as amount
       from lease_lines l, jsonb_array_elements_text(coalesce(l.calc->'maintenance', '[]'::jsonb)) with ordinality e(v, ord)
       where l.version_id = ${versionId} and l.property_id = any(${`{${propertyIds.join(',')}}`}::int[])
         ${lineIds ? sql`and l.id = any(${`{${lineIds.join(',') || '-1'}}`}::int[])` : sql``}
-      group by 1`);
-    for (const r of mf.rows as { month: number; amount: number }[]) if (r.month >= 1 && r.month <= 12 && r.amount) add(mfAccount, r.month - 1, r.amount);
+      group by 1, 2`);
+    for (const r of mf.rows as { property_id: number; month: number; amount: number }[]) {
+      const p = props.get(r.property_id);
+      if (p && r.month >= 1 && r.month <= 12 && r.amount) add(`P:${p.id}`, p.buCode, p.id, mfAccount, r.month - 1, r.amount);
+    }
   }
-  return out;
+  return [...out.values()];
 }

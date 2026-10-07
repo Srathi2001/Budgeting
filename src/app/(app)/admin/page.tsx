@@ -3,66 +3,117 @@ import { asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
-import { VersionsPanel, AssumptionsPanel, ReraPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel, RevenueImportPanel } from './panels';
+import { VersionsPanel, AssumptionsPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel, RevenueImportPanel } from './panels';
 import { lastActualMonth } from '@/lib/import/revenue-recognition';
 import { GL_LEDGERS, GL_LEDGER_NAMES } from '@/lib/import/gl-other-income';
 
-async function RevenueTab({ year }: { year: number }) {
-  const { rows } = await db.execute(sql`
-    select at, changes->>'file' as file from audit_log
-    where entity = 'revenue_import' order by at desc limit 1`);
-  const last = rows[0] as { at: string; file: string | null } | undefined;
-  const to = await lastActualMonth();
-  return <RevenueImportPanel year={year} last={last ? { at: String(last.at), file: last.file, to } : null} />;
-}
+/** Every Oracle report the tool imports, in one tab: what to run, with which parameters, and where it goes. */
+async function ImportsTab({ version }: { version: schema.BudgetVersion }) {
+  const Y = version.year;
+  const yy = (n: number) => String(n).slice(2);
+  const lastOf = (r: { at: string; file: string | null } | undefined) => (r ? { at: String(r.at), file: r.file } : null);
 
-async function GlTab({ version }: { version: schema.BudgetVersion }) {
-  // the last import of each ledger
-  const { rows } = await db.execute(sql`
-    select distinct on (changes->>'ledger') changes->>'ledger' as ledger, at, changes->>'file' as file from audit_log
-    where entity = 'gl_import' and version_id = ${version.id} order by changes->>'ledger', at desc`);
-  const last = new Map((rows as { ledger: string; at: string; file: string | null }[]).map((r) => [r.ledger, r]));
-  return (
-    <div className="space-y-6">
-      {GL_LEDGER_NAMES.map((ledger) => {
-        const l = last.get(ledger);
-        return (
-          <GlImportPanel
-            key={ledger}
-            ledger={ledger}
-            companies={Object.keys(GL_LEDGERS[ledger].companies)}
-            versionId={version.id}
-            versionName={version.name}
-            year={version.year}
-            locked={version.status === 'LOCKED'}
-            last={l ? { at: String(l.at), file: l.file } : null}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-async function LeaseDataTab({ version }: { version: schema.BudgetVersion }) {
-  const { rows } = await db.execute(sql`
+  const { rows: leaseRows } = await db.execute(sql`
     select count(*)::int as lines,
       count(*) filter (where l.current_end is not null)::int as leased,
       (select json_build_object('at', at, 'file', changes->>'file') from audit_log
         where entity = 'lease_import' and version_id = ${version.id} order by at desc limit 1) as last
     from lease_lines l where l.version_id = ${version.id}`);
-  const s = rows[0] as { lines: number; leased: number; last: { at: string; file: string | null } | null };
+  const s = leaseRows[0] as { lines: number; leased: number; last: { at: string; file: string | null } | null };
+  const { rows: revRows } = await db.execute(sql`
+    select at, changes->>'file' as file from audit_log where entity = 'revenue_import' order by at desc limit 1`);
+  const revLast = revRows[0] as { at: string; file: string | null } | undefined;
+  const revTo = await lastActualMonth();
+  // the last import of each ledger
+  const { rows: glRows } = await db.execute(sql`
+    select distinct on (changes->>'ledger') changes->>'ledger' as ledger, at, changes->>'file' as file from audit_log
+    where entity = 'gl_import' and version_id = ${version.id} order by changes->>'ledger', at desc`);
+  const glLast = new Map((glRows as { ledger: string; at: string; file: string | null }[]).map((r) => [r.ledger, r]));
+
+  const REPORTS = [
+    {
+      id: 'lease',
+      name: 'Tenant and Lease Details Report',
+      where: 'Oracle: Custom Applications → Lease Reports → Reports',
+      params: 'All business units · .xlsx. With it (optional): REHL+MJN+PMC (dd-mm-yyyy) - Unit Dump.xls and Maintenance Fee Report.xls',
+      feeds: 'Lease Budget: units, current leases',
+    },
+    {
+      id: 'revenue',
+      name: 'Revenue Recognition Summary',
+      where: 'Oracle: Property Manager → Revenue Recognition Summary',
+      params: `Accounting periods Jan-${Y - 3} to the last closed month`,
+      feeds: 'Revenue Analysis: rent actuals',
+    },
+    ...GL_LEDGER_NAMES.map((ledger, i) => ({
+      id: `gl-${i + 1}`,
+      name: `Account Analysis Report (not "Account Wise Analysis Report")`,
+      where: 'Oracle: General Ledger',
+      params: `Ledger or Ledger Set ${ledger} · Period From Jan-${yy(Y - 3)} To Sep-${yy(Y - 1)} · Balance Type Actual · Account starts with 52`,
+      feeds: 'Other Income: GL actuals',
+    })),
+  ];
+
   return (
-    <LeaseImportPanel
-      versionId={version.id}
-      versionName={version.name}
-      locked={version.status === 'LOCKED'}
-      stats={{
-        lines: s.lines,
-        leased: s.leased,
-        lastImport: s.last ? new Date(s.last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : null,
-        lastFile: s.last?.file ?? null,
-      }}
-    />
+    <div className="space-y-6">
+      <div className="frame">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th className="w-8">#</th>
+              <th>Oracle report</th>
+              <th>Where</th>
+              <th>Parameters</th>
+              <th>Goes to</th>
+            </tr>
+          </thead>
+          <tbody>
+            {REPORTS.map((r, i) => (
+              <tr key={r.id}>
+                <td className="muted">{i + 1}</td>
+                <td>
+                  <a href={`#${r.id}`} className="font-semibold hover:underline">
+                    {r.name}
+                  </a>
+                </td>
+                <td className="muted">{r.where}</td>
+                <td>{r.params}</td>
+                <td className="muted">{r.feeds}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div id="lease" className="scroll-mt-4">
+        <LeaseImportPanel
+          versionId={version.id}
+          versionName={version.name}
+          locked={version.status === 'LOCKED'}
+          stats={{
+            lines: s.lines,
+            leased: s.leased,
+            lastImport: s.last ? new Date(s.last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : null,
+            lastFile: s.last?.file ?? null,
+          }}
+        />
+      </div>
+      <div id="revenue" className="scroll-mt-4">
+        <RevenueImportPanel year={Y} last={revLast ? { ...lastOf(revLast)!, to: revTo } : null} />
+      </div>
+      {GL_LEDGER_NAMES.map((ledger, i) => (
+        <div key={ledger} id={`gl-${i + 1}`} className="scroll-mt-4">
+          <GlImportPanel
+            ledger={ledger}
+            companies={Object.keys(GL_LEDGERS[ledger].companies)}
+            versionId={version.id}
+            versionName={version.name}
+            year={Y}
+            locked={version.status === 'LOCKED'}
+            last={lastOf(glLast.get(ledger))}
+          />
+        </div>
+      ))}
+    </div>
   );
 }
 import { comparativeLabels, resolveComparatives } from '@/lib/budget/comparatives';
@@ -92,12 +143,9 @@ async function ComparativesTab({ version }: { version: schema.BudgetVersion }) {
 export const metadata = { title: 'Admin · Budget' };
 
 const TABS = [
-  ['fusion', 'Lease data'],
-  ['revenue', 'Revenue Recognition Summary'],
-  ['gl', 'Account Analysis Report'],
+  ['imports', 'Imports'],
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
-  ['rera', 'RERA index'],
   ['comparatives', 'Comparatives'],
   ['properties', 'Properties'],
   ['users', 'Users'],
@@ -109,7 +157,8 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
   const { version, all } = await getActiveVersion();
   const v = version!;
   const sp = await props.searchParams;
-  const tab = (TABS.find(([k]) => k === sp.tab)?.[0] ?? 'fusion') as (typeof TABS)[number][0];
+  // the former import tabs (fusion, revenue, gl) now open Imports
+  const tab = (TABS.find(([k]) => k === sp.tab)?.[0] ?? 'imports') as (typeof TABS)[number][0];
 
   return (
     <div className="space-y-4 p-6">
@@ -132,23 +181,8 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
       {tab === 'assumptions' && (
         <AssumptionsPanel versionId={v.id} versionName={v.name} locked={v.status === 'LOCKED'} assumptions={withDefaults(v.assumptions)} />
       )}
-      {tab === 'rera' && (
-        <ReraPanel
-          versionId={v.id}
-          versionName={v.name}
-          locked={v.status === 'LOCKED'}
-          rows={await db
-            .select()
-            .from(schema.reraIndex)
-            .where(eq(schema.reraIndex.versionId, v.id))
-            .orderBy(asc(schema.reraIndex.propertyCode), asc(schema.reraIndex.bedroom))}
-          properties={await db.select({ code: schema.properties.code, name: schema.properties.name }).from(schema.properties).orderBy(asc(schema.properties.code))}
-        />
-      )}
       {tab === 'comparatives' && <ComparativesTab version={v} />}
-      {tab === 'fusion' && <LeaseDataTab version={v} />}
-      {tab === 'gl' && <GlTab version={v} />}
-      {tab === 'revenue' && <RevenueTab year={v.year} />}
+      {tab === 'imports' && <ImportsTab version={v} />}
       {tab === 'properties' && (
         <PropertiesPanel rows={await db.select().from(schema.properties).orderBy(asc(schema.properties.buCode), asc(schema.properties.code))} />
       )}

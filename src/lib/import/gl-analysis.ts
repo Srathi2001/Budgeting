@@ -14,6 +14,8 @@ export interface GlMonth {
 }
 
 export interface GlScan {
+  /** the report's title row: "Account Analysis Report" (or "Account Wise Analysis Report", a different layout) */
+  title: string | null;
   ledger: string | null;
   periodFrom: string | null;
   periodTo: string | null;
@@ -61,7 +63,7 @@ function cellsOf(row: string): string[] {
  * whose monthly totals are returned (by full account code); all accounts are still reconciled.
  */
 export async function scanAccountAnalysis(source: AsyncIterable<Uint8Array | string>, keep: (account: string) => boolean = () => true): Promise<GlScan> {
-  const scan: GlScan = { ledger: null, periodFrom: null, periodTo: null, descriptions: new Map(), months: [], mismatches: [], accounts: 0, lines: 0 };
+  const scan: GlScan = { title: null, ledger: null, periodFrom: null, periodTo: null, descriptions: new Map(), months: [], mismatches: [], accounts: 0, lines: 0 };
   const agg = new Map<string, GlMonth>();
   let header: string[] = [];
   let account: string | null = null;
@@ -77,6 +79,7 @@ export async function scanAccountAnalysis(source: AsyncIterable<Uint8Array | str
   const onRow = (row: string) => {
     const c = cellsOf(row);
     if (!c.length) return;
+    scan.title ??= c.find((x) => /Analysis Report$/.test(x)) ?? null;
     if (c[0] === 'Period From') {
       scan.periodFrom = c[1] || null;
       scan.periodTo = c[c.indexOf('Period To') + 1] || null;

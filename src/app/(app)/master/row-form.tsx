@@ -99,7 +99,8 @@ const addDays = (iso: string, n: number) => {
 };
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b.slice(0, 10)}T00:00:00Z`) - Date.parse(`${a.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
 
-const ro ='w-full min-h-[30px] cursor-default truncate rounded-md border border-dashed border-slate-200 bg-transparent px-2 py-1 text-slate-600';
+// fixed values: a solid gray box (.field-locked), never an edged white box like an input
+const ro = 'field-locked w-full min-h-[30px] cursor-default truncate rounded-md px-2 py-1';
 const box = (changed: boolean, override?: boolean) => `input w-full ${changed ? 'ring-1 ring-sky-500' : ''} ${override ? 'cell-override' : ''}`;
 
 export function RowForm({
@@ -247,7 +248,7 @@ export function RowForm({
   ].filter(Boolean) as { key: string; title: string; c: NonNullable<Row['r1']>; field: 'currentSchedule' | 'r1Schedule' | 'r2Schedule' | 'r3Schedule'; note?: string }[];
 
   return (
-    <aside aria-label="Row form" className="flex h-full min-h-0 w-1/2 shrink-0 flex-col border-l-2 border-sky-700 bg-slate-50 text-[13px]">
+    <aside aria-label="Row form" className="lease-form flex h-full min-h-0 w-1/2 shrink-0 flex-col border-l-2 border-sky-700 bg-slate-50 text-[13px]">
       {/* header */}
       <div className="flex items-start gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <div className="min-w-0">
@@ -257,6 +258,14 @@ export function RowForm({
           <div className="truncate text-xs text-slate-500">
             {row.propertyName} · {row.buName} · PC {row.coordinator ?? '—'}
             {!canEdit && ' · read only'}
+          </div>
+          <div className="mt-1 flex items-center gap-3 text-[11px] text-slate-600" aria-label="Field legend">
+            <span className="flex items-center gap-1">
+              <i className="swatch input" /> To enter
+            </span>
+            <span className="flex items-center gap-1">
+              <i className="swatch locked" /> Locked
+            </span>
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">

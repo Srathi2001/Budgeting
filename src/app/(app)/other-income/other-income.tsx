@@ -20,7 +20,15 @@ import {
   type OiColumn,
   type OiPeriod,
 } from '@/lib/budget/other-income-types';
+import { GROUP_NAME, classifyOtherIncome, type GroupClass } from '@/lib/budget/group';
 import { saveOtherIncomeCells } from './actions';
+
+/** what is taken out of the total to reach the group's other income */
+const ADJUSTMENTS: { cls: GroupClass; label: string }[] = [
+  { cls: 'outside', label: 'Outside the group · MJNH, MJN Private Office' },
+  { cls: 'owners', label: "Owners' share · PMC properties" },
+  { cls: 'intergroup', label: 'Intergroup eliminated · PMA fee' },
+];
 
 const key = (scope: string, account: string, period: string) => `${scope}|${account}|${period}`;
 const omit = (d: Record<string, string>, k: string) => Object.fromEntries(Object.entries(d).filter(([x]) => x !== k));
@@ -92,6 +100,22 @@ export function OtherIncome({
       }
     return any ? s : null;
   };
+  /** the rows shown, one column, for the amounts in a group class */
+  const classTotal = (c: OiColumn, cls: GroupClass) => {
+    let s = 0;
+    let any = false;
+    for (const b of view)
+      for (const a of OI_ACCOUNTS) {
+        if (classifyOtherIncome(b.scope, b.buCode, a.code) !== cls) continue;
+        const v = oiCell(b, a.code, c);
+        if (v !== null) {
+          s += v;
+          any = true;
+        }
+      }
+    return any ? s : null;
+  };
+  const adjustments = ADJUSTMENTS.filter((adj) => OI_COLUMNS.some((c) => Math.abs(classTotal(c, adj.cls) ?? 0) >= 0.5));
 
   const commit = (b: OiBlock, account: string, period: OiPeriod) => {
     const k = key(b.scope, account, period);
@@ -319,6 +343,34 @@ export function OtherIncome({
                     </td>
                   ))}
                 </tr>
+                {adjustments.length > 0 && (
+                  <>
+                    {adjustments.map((adj) => (
+                      <tr key={adj.cls} className="child">
+                        <td>{adj.label}</td>
+                        <td />
+                        <td />
+                        <td />
+                        {OI_COLUMNS.map((c) => (
+                          <td key={c} className="anh-num calc">
+                            {fmt(-(classTotal(c, adj.cls) ?? 0))}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr className="total">
+                      <td>Group other income · {GROUP_NAME}</td>
+                      <td />
+                      <td />
+                      <td />
+                      {OI_COLUMNS.map((c) => (
+                        <td key={c} className="anh-num">
+                          {fmt(classTotal(c, 'group'))}
+                        </td>
+                      ))}
+                    </tr>
+                  </>
+                )}
               </>
             )}
             {view.length === 0 && (

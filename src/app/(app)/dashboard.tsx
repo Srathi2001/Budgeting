@@ -124,8 +124,8 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
             Lease Budget
           </Link>{' '}
           or import the Tenant and Lease Details Report in{' '}
-          <Link href="/admin?tab=fusion" className="font-semibold underline">
-            Admin → Lease data
+          <Link href="/admin?tab=imports" className="font-semibold underline">
+            Admin → Imports
           </Link>
           .
         </div>

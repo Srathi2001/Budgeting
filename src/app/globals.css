@@ -154,6 +154,35 @@ body {
     border-style: dashed;
   }
 
+  /* Lease Budget row form: where you type is a white box with a dark edge; a fixed value is a solid
+     gray box with no edge, so the two never look alike */
+  .lease-form :is(input, select, textarea).input,
+  .lease-form .cell-edit {
+    background: var(--cell-input);
+    border: 1px solid var(--ink-2);
+  }
+  .lease-form :is(input, select, textarea).input:disabled,
+  .lease-form :is(input, select, textarea).input[readonly],
+  .lease-form .field-locked {
+    background: var(--cell-locked);
+    border: 1px solid var(--cell-locked);
+    color: var(--ink-2);
+  }
+  .lease-form .swatch {
+    display: inline-block;
+    width: 18px;
+    height: 12px;
+    border-radius: 2px;
+    vertical-align: -2px;
+  }
+  .lease-form .swatch.input {
+    background: var(--cell-input);
+    border: 1px solid var(--ink-2);
+  }
+  .lease-form .swatch.locked {
+    background: var(--cell-locked);
+  }
+
   .btn,
   .btn-primary,
   .btn-danger {

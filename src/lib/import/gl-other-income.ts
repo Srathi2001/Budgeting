@@ -39,6 +39,8 @@ export const GL_LEDGERS = {
   },
 } satisfies Record<string, LedgerSetup>;
 export type GlLedger = keyof typeof GL_LEDGERS;
+/** the Oracle report this import reads (not the "Account Wise Analysis Report", which has another layout) */
+export const GL_REPORT = 'Account Analysis Report';
 export const GL_LEDGER_NAMES = Object.keys(GL_LEDGERS) as GlLedger[];
 export const isGlLedger = (s: string | null | undefined): s is GlLedger => !!s && s in GL_LEDGERS;
 
@@ -83,6 +85,18 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) throw new Error('Version not found');
   if (version.status === 'LOCKED') throw new Error('Version is locked');
+  if (scan.title && scan.title !== GL_REPORT) throw new Error(`This is the ${scan.title}: export the ${GL_REPORT} instead (Oracle GL → Account Analysis Report)`);
+  // an import replaces Y-3 to Y-1 Sep, so the report has to cover all of it
+  const Y0 = version.year;
+  const ym = (p: string | null) => {
+    const m = /^([A-Za-z]{3})-(\d{2})$/.exec(p?.trim() ?? '');
+    return m ? (2000 + Number(m[2])) * 100 + ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'].indexOf(m[1].toUpperCase()) + 1 : null;
+  };
+  const from = ym(scan.periodFrom);
+  const to = ym(scan.periodTo);
+  const need = `Jan-${String(Y0 - 3).slice(2)} to Sep-${String(Y0 - 1).slice(2)}`;
+  if (from === null || to === null || from > (Y0 - 3) * 100 + 1 || to < (Y0 - 1) * 100 + 9)
+    throw new Error(`The report covers ${scan.periodFrom ?? '?'} to ${scan.periodTo ?? '?'}: run it for ${need} (an import replaces all three years)`);
   const ledger = scan.ledger?.trim().toUpperCase();
   if (!isGlLedger(ledger)) throw new Error(`Ledger ${scan.ledger ?? '(none)'}: expected ${GL_LEDGER_NAMES.join(' or ')}`);
   if (expected && ledger !== expected) throw new Error(`This is the ${ledger} report, not ${expected}: upload it under ${ledger}`);

@@ -91,43 +91,6 @@ export async function saveAssumptions(versionId: number, input: Assumptions): Pr
   });
 }
 
-// ---- RERA index -----------------------------------------------------------------------------
-
-const ReraSchema = z.object({
-  propertyCode: z.string().trim().min(1).max(20),
-  bedroom: z.string().trim().min(1).max(20),
-  unitType: z.string().trim().max(80).nullable(),
-  min: z.number().min(0),
-  max: z.number().min(0),
-});
-
-export async function upsertRera(versionId: number, id: number | null, input: z.infer<typeof ReraSchema>): Promise<Result> {
-  const user = await requireFinance();
-  return wrap(async () => {
-    const d = ReraSchema.parse({ ...input, propertyCode: input.propertyCode.toUpperCase(), bedroom: input.bedroom.toUpperCase() });
-    if (d.max < d.min) throw new Error('Max must be at least min');
-    await db.transaction(async (tx) => {
-      if (id) await tx.update(schema.reraIndex).set(d).where(eq(schema.reraIndex.id, id));
-      else await tx.insert(schema.reraIndex).values({ ...d, versionId });
-      await recalcLines(tx, versionId);
-    });
-    await audit(user.id, versionId, 'rera_index', id ? 'update' : 'create', d);
-    return 'RERA index saved; units recalculated';
-  });
-}
-
-export async function deleteRera(versionId: number, id: number): Promise<Result> {
-  const user = await requireFinance();
-  return wrap(async () => {
-    await db.transaction(async (tx) => {
-      await tx.delete(schema.reraIndex).where(eq(schema.reraIndex.id, id));
-      await recalcLines(tx, versionId);
-    });
-    await audit(user.id, versionId, 'rera_index', 'delete', { id });
-    return 'Deleted';
-  });
-}
-
 // ---- users ----------------------------------------------------------------------------------
 
 const UserSchema = z.object({
