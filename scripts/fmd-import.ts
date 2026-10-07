@@ -17,7 +17,6 @@ async function main() {
   console.log('by work type:', p.byWorkType);
   console.log(`staff (cost to company + overtime + G&A): AED ${p.staff.toLocaleString('en-US')}`);
   console.log(`facility master: ${parsed.facilities.length} facilities (zones, in service since, gross area, HVAC assets)`);
-  console.log(p.carried ? `draft ${p.draftVersion}: ${p.carried.lines} recurring lines carried (AED ${p.carried.amount.toLocaleString('en-US')})` : `draft ${p.draftVersion ?? '—'}: already started, left as it is`);
   for (const u of p.unmatched) console.log(`not in the budget: ${u.code} ${u.name} (AED ${u.amount.toLocaleString('en-US')})`);
   if (flag === '--apply') console.log('Imported');
 }

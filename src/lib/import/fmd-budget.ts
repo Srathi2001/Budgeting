@@ -1,9 +1,8 @@
 // FMD budget file (FMD_Budget_<year>_….xlsx, Facilities Management Department): the year's FM budget
 // lines (sheet "<year>_Budget_Template"), the facility master (FM zone, in service since, gross area,
-// HVAC assets) and the staff budget (Labor_Allocation). Imported as that year's budget (e.g. 2026B)
-// and to start the next year's draft: last year's recurring lines (contracts M01, inspections M03) and
-// staff figures, which FMD then adjusts. FMD's own entries for the next year are never overwritten.
-import { and, eq, inArray } from 'drizzle-orm';
+// HVAC assets) and the staff budget (Labor_Allocation). Imported as that year's budget (e.g. 2026B), the
+// reference FMD budgets the next year against; the next year itself is entered by FMD in the tool.
+import { eq } from 'drizzle-orm';
 import * as XLSX from 'xlsx';
 import { db, schema } from '@/db';
 import { elementOfGl, isWorkType, type FmKind, type StaffTeam, type WorkType } from '@/lib/budget/fm-types';
@@ -146,15 +145,12 @@ export function parseFmdFile(data: Buffer): FmdFile {
 export interface FmdPreview {
   year: number;
   budgetVersion: string | null;
-  draftVersion: string | null;
   lines: number;
   total: number;
   byWorkType: Record<string, number>;
   facilities: number;
   unmatched: { code: string; name: string; amount: number }[];
   staff: number;
-  /** next year's draft: recurring lines carried (only when FMD has not entered anything yet) */
-  carried: { lines: number; amount: number } | null;
 }
 
 async function plan(file: FmdFile) {
@@ -162,7 +158,6 @@ async function plan(file: FmdFile) {
   const byKey = new Map(props.map((p) => [propertyKey(p.code), p]));
   const versions = await db.select().from(schema.budgetVersions);
   const budgetV = versions.filter((v) => v.year === file.year).sort((a, b) => b.id - a.id)[0] ?? null;
-  const draftV = versions.filter((v) => v.year === file.year + 1 && v.status === 'OPEN').sort((a, b) => b.id - a.id)[0] ?? null;
   const unmatched = new Map<string, { code: string; name: string; amount: number }>();
   const matched: (FmdLine & { propertyId: number })[] = [];
   for (const l of file.lines) {
@@ -176,24 +171,20 @@ async function plan(file: FmdFile) {
     }
     matched.push({ ...l, propertyId: p.id });
   }
-  const draftHas = draftV ? (await db.select({ id: schema.fmLines.id }).from(schema.fmLines).where(eq(schema.fmLines.versionId, draftV.id)).limit(1)).length > 0 : true;
-  const carry = draftHas ? [] : matched.filter((l) => l.workType === 'M01' || l.workType === 'M03');
   const total = (ls: FmdLine[]) => ls.reduce((s, l) => s + Object.values(l.amounts).reduce((x, v) => x + (v ?? 0), 0), 0);
   const byWorkType: Record<string, number> = {};
   for (const l of matched) byWorkType[l.workType] = (byWorkType[l.workType] ?? 0) + total([l]);
   const preview: FmdPreview = {
     year: file.year,
     budgetVersion: budgetV?.name ?? null,
-    draftVersion: draftV?.name ?? null,
     lines: matched.length,
     total: Math.round(total(matched)),
     byWorkType: Object.fromEntries(Object.entries(byWorkType).map(([k, v]) => [k, Math.round(v)])),
     facilities: new Set(matched.map((l) => l.propertyId)).size,
     unmatched: [...unmatched.values()].map((u) => ({ ...u, amount: Math.round(u.amount) })),
     staff: Math.round(file.staff.reduce((s, x) => s + x.ctc + x.overtime, 0)),
-    carried: draftV && !draftHas ? { lines: carry.length, amount: Math.round(total(carry)) } : null,
   };
-  return { preview, matched, carry, byKey, budgetV, draftV };
+  return { preview, matched, byKey, budgetV };
 }
 
 export async function previewFmdImport(file: FmdFile) {
@@ -201,11 +192,11 @@ export async function previewFmdImport(file: FmdFile) {
 }
 
 export async function applyFmdImport(file: FmdFile, userId: number | null, fileName: string | null) {
-  const { preview, matched, carry, byKey, budgetV, draftV } = await plan(file);
+  const { preview, matched, byKey, budgetV } = await plan(file);
   if (!budgetV) throw new Error(`No ${file.year} budget version to import the FM budget into`);
-  const rowsOf = (versionId: number, ls: typeof matched, source: string, onlyTotal: boolean) =>
+  const rowsOf = (versionId: number, ls: typeof matched, source: string) =>
     ls.flatMap((l) =>
-      (onlyTotal ? ([['PLANNED', Object.values(l.amounts).reduce((s, v) => s + (v ?? 0), 0)]] as [FmKind, number][]) : (Object.entries(l.amounts) as [FmKind, number][])).map(([kind, amount]) => ({
+      (Object.entries(l.amounts) as [FmKind, number][]).map(([kind, amount]) => ({
         versionId,
         propertyId: l.propertyId,
         workType: l.workType,
@@ -230,26 +221,10 @@ export async function applyFmdImport(file: FmdFile, userId: number | null, fileN
     }
     // the file's year: its FM budget, replaced
     await tx.delete(schema.fmLines).where(eq(schema.fmLines.versionId, budgetV.id));
-    const budgetRows = rowsOf(budgetV.id, matched, `FMD_${file.year}`, false);
+    const budgetRows = rowsOf(budgetV.id, matched, `FMD_${file.year}`);
     for (let i = 0; i < budgetRows.length; i += 500) await tx.insert(schema.fmLines).values(budgetRows.slice(i, i + 500));
     await tx.delete(schema.fmStaff).where(eq(schema.fmStaff.versionId, budgetV.id));
     if (file.staff.length) await tx.insert(schema.fmStaff).values(file.staff.map((s) => ({ versionId: budgetV.id, ...s, updatedBy: userId })));
-    // next year's draft: started once, from last year's recurring lines and staff
-    if (draftV) {
-      if (carry.length) {
-        const draftRows = rowsOf(draftV.id, carry, 'CARRIED', true);
-        for (let i = 0; i < draftRows.length; i += 500) await tx.insert(schema.fmLines).values(draftRows.slice(i, i + 500));
-      }
-      const hasStaff = (await tx.select().from(schema.fmStaff).where(eq(schema.fmStaff.versionId, draftV.id))).length > 0;
-      if (!hasStaff && file.staff.length) await tx.insert(schema.fmStaff).values(file.staff.map((s) => ({ versionId: draftV.id, ...s, updatedBy: userId })));
-      // every facility gets an FM submission row in the draft
-      const ids = [...new Set([...byKey.values()].filter((p) => p.active).map((p) => p.id))];
-      if (ids.length) {
-        const have = new Set((await tx.select({ p: schema.fmSubmissions.propertyId }).from(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, draftV.id), inArray(schema.fmSubmissions.propertyId, ids)))).map((x) => x.p));
-        const missing = ids.filter((id) => !have.has(id));
-        if (missing.length) await tx.insert(schema.fmSubmissions).values(missing.map((propertyId) => ({ versionId: draftV.id, propertyId })));
-      }
-    }
     await tx.insert(schema.auditLog).values({ userId, versionId: budgetV.id, entity: 'fmd_import', action: 'fm_budget_file', changes: { file: fileName, ...preview } });
   });
   return preview;

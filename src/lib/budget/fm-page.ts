@@ -1,15 +1,17 @@
-// FM Budget page data: the facilities of the selection with their budget against last year's, one
-// facility in detail (facts from the tool, read only; its lines, editable), and the FM staff budget.
+// FM Budget page data. Two tabs: the FM budget template (facilities with last year's budget and
+// actuals; one facility opened in a side form with its facts from the tool and its budgeted costs) and
+// the labour allocation (FM staff by team, spread over the facilities).
 import 'server-only';
 import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { isFinance, isFm, type CurrentUser } from '@/lib/auth/dal';
-import { computeFm } from './fm-calc';
+import type { FmPropertyResult } from './fm-calc';
 import { loadFmBudget } from './fm';
 import { WORK_TYPES, isWorkType, type StaffTeam } from './fm-types';
 import { propertyRollups } from './reports';
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'RETURNED';
+export const STAFF_TEAM_ORDER: StaffTeam[] = ['SUPERVISORY', 'ZONE_1', 'ZONE_2', 'ZONE_3', 'PPM', 'VACANT', 'GA'];
 
 export interface FmFacilityRow {
   id: number;
@@ -18,13 +20,17 @@ export interface FmFacilityRow {
   bu: string;
   zone: string | null;
   status: Status;
-  /** works budget last year */
+  /** works budget last year (null: no budget version for last year) */
   prior: number | null;
   /** last year's actual to date (627xx / 117xx) */
   actual: number;
   /** works budget this version */
   budget: number;
-  staff: number;
+  lines: number;
+  /** FM staff allocated, by team, this version and last year */
+  staff: Partial<Record<StaffTeam, number>>;
+  staffTotal: number;
+  priorStaffTotal: number | null;
 }
 
 export interface FmLineRow {
@@ -60,9 +66,8 @@ export interface FmFacilityDetail {
   revenue: number;
   priorRevenue: number | null;
   assets: Record<string, number> | null;
-  /** by work type (and 'staff'): last year's budget, last year's actual to date, this budget */
+  /** by work type, then FM staff: last year's budget, last year's actual to date, this budget */
   compare: { key: string; label: string; prior: number | null; actual: number | null; budget: number }[];
-  staffByTeam: Partial<Record<StaffTeam, number>>;
   lines: FmLineRow[];
   status: Status;
   note: string | null;
@@ -70,13 +75,22 @@ export interface FmFacilityDetail {
   reason: string | null;
 }
 
+export interface FmStaffRow {
+  team: StaffTeam;
+  ctc: number;
+  overtime: number;
+  /** with the G&A share */
+  cost: number;
+  prior: { ctc: number; overtime: number; cost: number } | null;
+}
+
 export interface FmPageData {
   version: { id: number; name: string; year: number; locked: boolean };
-  priorName: string | null;
+  priorLabel: string | null;
   actualLabel: string;
   facilities: FmFacilityRow[];
   detail: FmFacilityDetail | null;
-  staff: { team: StaffTeam; ctc: number; overtime: number; cost: number }[];
+  staff: FmStaffRow[];
   unallocated: number;
   canEditStaff: boolean;
   finance: boolean;
@@ -84,6 +98,7 @@ export interface FmPageData {
 
 const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const worksOf = (r: FmPropertyResult) => sum(Object.values(r.works));
 
 export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUser, propertyIds: number[], selected: number | null): Promise<FmPageData> {
   const year = version.year;
@@ -94,7 +109,7 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
     .orderBy(desc(schema.budgetVersions.id))
     .limit(1);
   const ids = propertyIds.length ? propertyIds : [-1];
-  const [props, bus, subs, cur, prev, actuals, staffRows] = await Promise.all([
+  const [props, bus, subs, cur, prev, actuals, staffRows, priorStaffRows, lineCounts] = await Promise.all([
     db.select().from(schema.properties).where(inArray(schema.properties.id, ids)).orderBy(schema.properties.buCode, schema.properties.code),
     db.select().from(schema.businessUnits),
     db.select().from(schema.fmSubmissions).where(eq(schema.fmSubmissions.versionId, version.id)),
@@ -105,10 +120,14 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
       .from(schema.fmActuals)
       .where(and(gte(schema.fmActuals.month, `${year - 1}-01`), lte(schema.fmActuals.month, `${year - 1}-12`))),
     db.select().from(schema.fmStaff).where(eq(schema.fmStaff.versionId, version.id)),
+    prior ? db.select().from(schema.fmStaff).where(eq(schema.fmStaff.versionId, prior.id)) : Promise.resolve([]),
+    db.select({ propertyId: schema.fmLines.propertyId }).from(schema.fmLines).where(eq(schema.fmLines.versionId, version.id)),
   ]);
   const subOf = new Map(subs.map((s) => [s.propertyId, s]));
+  const nLines = new Map<number, number>();
+  for (const l of lineCounts) nLines.set(l.propertyId, (nLines.get(l.propertyId) ?? 0) + 1);
   const lastMonth = actuals.reduce((m, a) => (a.month > m ? a.month : m), '');
-  const actualLabel = lastMonth ? `${year - 1} actual Jan–${MON[Number(lastMonth.slice(5)) - 1]}` : `${year - 1} actual`;
+  const actualLabel = lastMonth ? `${year - 1}A Jan–${MON[Number(lastMonth.slice(5)) - 1]}` : `${year - 1}A`;
   const actualBy = new Map<number, Map<string, number>>();
   for (const a of actuals) {
     if (a.propertyId === null) continue;
@@ -117,7 +136,6 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
     m.set(wt, (m.get(wt) ?? 0) + a.amount);
     actualBy.set(a.propertyId, m);
   }
-  const worksOf = (r: ReturnType<typeof computeFm>['byProperty'] extends Map<number, infer T> ? T : never) => sum(Object.values(r.works));
 
   const facilities: FmFacilityRow[] = props
     .filter((p) => p.active)
@@ -134,14 +152,17 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
         prior: prev ? (pr ? worksOf(pr) : 0) : null,
         actual: sum([...(actualBy.get(p.id)?.values() ?? [])]),
         budget: c ? worksOf(c) : 0,
-        staff: c?.staffTotal ?? 0,
+        lines: nLines.get(p.id) ?? 0,
+        staff: c?.staff ?? {},
+        staffTotal: c?.staffTotal ?? 0,
+        priorStaffTotal: prev ? (pr?.staffTotal ?? 0) : null,
       };
     });
 
   const finance = isFinance(user);
   const locked = version.status === 'LOCKED';
   let detail: FmFacilityDetail | null = null;
-  const pick = facilities.find((f) => f.id === selected) ?? facilities[0];
+  const pick = selected ? facilities.find((f) => f.id === selected) : undefined;
   if (pick) {
     const p = props.find((x) => x.id === pick.id)!;
     const [lines, units, leases, rolls, priorRolls] = await Promise.all([
@@ -196,9 +217,8 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
       compare: [
         ...WORK_TYPES.map((w) => ({ key: w.code, label: w.label, prior: prev ? (pr?.works[w.code] ?? 0) : null, actual: act?.get(w.code) ?? 0, budget: c?.works[w.code] ?? 0 })),
         ...(act?.get('other') ? [{ key: 'other', label: 'Booked without a work type', prior: null, actual: act.get('other')!, budget: 0 }] : []),
-        { key: 'staff', label: 'FM staff (allocated)', prior: prev ? (pr?.staffTotal ?? 0) : null, actual: null, budget: c?.staffTotal ?? 0 },
+        { key: 'staff', label: 'FM staff (labour allocation)', prior: prev ? (pr?.staffTotal ?? 0) : null, actual: null, budget: c?.staffTotal ?? 0 },
       ],
-      staffByTeam: c?.staff ?? {},
       lines: lines.map((l) => ({
         id: l.id,
         workType: l.workType,
@@ -220,14 +240,20 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
   }
 
   const raw = new Map(staffRows.map((s) => [s.team, s]));
-  const teams: StaffTeam[] = ['SUPERVISORY', 'ZONE_1', 'ZONE_2', 'ZONE_3', 'PPM', 'VACANT', 'GA'];
+  const rawPrior = new Map(priorStaffRows.map((s) => [s.team, s]));
   return {
     version: { id: version.id, name: version.name, year, locked },
-    priorName: prior?.name ?? null,
+    priorLabel: prior ? `${year - 1}B` : null,
     actualLabel,
     facilities,
     detail,
-    staff: teams.map((t) => ({ team: t, ctc: raw.get(t)?.ctc ?? 0, overtime: raw.get(t)?.overtime ?? 0, cost: t === 'GA' ? 0 : (cur.result.teamCost[t] ?? 0) })),
+    staff: STAFF_TEAM_ORDER.map((t) => ({
+      team: t,
+      ctc: raw.get(t)?.ctc ?? 0,
+      overtime: raw.get(t)?.overtime ?? 0,
+      cost: t === 'GA' ? 0 : (cur.result.teamCost[t] ?? 0),
+      prior: prev ? { ctc: rawPrior.get(t)?.ctc ?? 0, overtime: rawPrior.get(t)?.overtime ?? 0, cost: t === 'GA' ? 0 : (prev.result.teamCost[t] ?? 0) } : null,
+    })),
     unallocated: cur.result.unallocated,
     canEditStaff: !locked && (finance || isFm(user)),
     finance,
