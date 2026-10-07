@@ -12,6 +12,8 @@ export interface BvfProperty {
   bu: string;
   budget: number;
   forecast: number;
+  /** this version's budget (the year after) */
+  next: number;
 }
 
 export interface BudgetVsForecast {
@@ -24,7 +26,10 @@ export interface BudgetVsForecast {
   forecast: number;
   forecastActual: number;
   forecastProjected: number;
-  bus: { code: string; name: string; budget: number; forecast: number }[];
+  /** this version's budget for the same properties */
+  next: number;
+  nextLabel: string;
+  bus: { code: string; name: string; budget: number; forecast: number; next: number }[];
   properties: BvfProperty[];
   months: { budget: number[]; actual: (number | null)[]; projected: (number | null)[] };
   /** properties in view left out for want of Oracle actuals */
@@ -75,11 +80,14 @@ export async function loadBudgetVsForecast(
 
   // projection after the cut-off: the current version's leases run through year Y
   const projected = new Map<number, number[]>();
+  const next = new Map<number, number>();
   const lines = await db
     .select({ p: schema.leaseLines.propertyId, calc: schema.leaseLines.calc })
     .from(schema.leaseLines)
     .where(and(eq(schema.leaseLines.versionId, version.id), inArray(schema.leaseLines.propertyId, ids)));
   for (const l of lines) {
+    // this version's own budget year, for "2026B → 2026F → 2027B"
+    next.set(l.p, (next.get(l.p) ?? 0) + ((l.calc as StoredCalc | null)?.totals.revenue ?? 0));
     const pr = (l.calc as StoredCalc | null)?.priorRevenue;
     if (!pr) continue;
     const a = projected.get(l.p) ?? z12();
@@ -93,7 +101,7 @@ export async function loadBudgetVsForecast(
     const bud = budget.get(p.id) ?? z12();
     const act = actual.get(p.id)!;
     const proj = projected.get(p.id) ?? z12();
-    return { id: p.id, name: p.name, bu: p.buCode, budget: sum(bud), forecast: sum(act.slice(0, cutoff)) + sum(proj.slice(cutoff)), act, proj, bud };
+    return { id: p.id, name: p.name, bu: p.buCode, budget: sum(bud), forecast: sum(act.slice(0, cutoff)) + sum(proj.slice(cutoff)), next: next.get(p.id) ?? 0, act, proj, bud };
   });
   const months = {
     budget: z12().map((_, i) => sum(rows.map((r) => r.bud[i]))),
@@ -103,7 +111,7 @@ export async function loadBudgetVsForecast(
   const buNames = new Map(properties.map((p) => [p.buCode, p.buName]));
   const bus = [...new Set(rows.map((r) => r.bu))].sort().map((code) => {
     const rs = rows.filter((r) => r.bu === code);
-    return { code, name: buNames.get(code) ?? code, budget: sum(rs.map((r) => r.budget)), forecast: sum(rs.map((r) => r.forecast)) };
+    return { code, name: buNames.get(code) ?? code, budget: sum(rs.map((r) => r.budget)), forecast: sum(rs.map((r) => r.forecast)), next: sum(rs.map((r) => r.next)) };
   });
   const forecastActual = sum(months.actual.map((v) => v ?? 0));
   const forecastProjected = sum(months.projected.map((v) => v ?? 0));
@@ -115,8 +123,10 @@ export async function loadBudgetVsForecast(
     forecast: forecastActual + forecastProjected,
     forecastActual,
     forecastProjected,
+    next: sum(rows.map((r) => r.next)),
+    nextLabel: `${version.year}B`,
     bus,
-    properties: rows.map(({ id, name, bu, budget: b, forecast: f }) => ({ id, name, bu, budget: b, forecast: f })),
+    properties: rows.map(({ id, name, bu, budget: b, forecast: f, next: n }) => ({ id, name, bu, budget: b, forecast: f, next: n })),
     months,
     excluded: properties.length - covered.length,
   };

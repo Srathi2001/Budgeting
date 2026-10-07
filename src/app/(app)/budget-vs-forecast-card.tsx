@@ -33,6 +33,7 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
   const [view, setView] = useState<View>('building');
   const B = `${data.year}B`;
   const F = `${data.year}F`;
+  const N = data.nextLabel;
   const m = (i: number) => MONTHS[i - 1];
   const lastLabel = data.lastActualMonth >= 12 ? `actual Jan–Dec` : `actual Jan–${m(data.lastActualMonth)} + projected ${m(data.lastActualMonth + 1)}–Dec`;
 
@@ -60,6 +61,7 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
           <Tile label={B} value={compact(data.budget)} sub={`${data.properties.length} properties`} />
           <Tile label={F} value={compact(data.forecast)} sub={`actual ${compact(data.forecastActual)} · projected ${compact(data.forecastProjected)}`} />
           <Tile label={`${F} − ${B}`} value={signed(data.forecast - data.budget)} sub={pct(data.forecast, data.budget)} />
+          <Tile label={N} value={compact(data.next)} sub={`${pct(data.next, data.forecast)} vs ${F}`} />
           {data.bus.map((b) => (
             <Tile key={b.code} label={`${b.code} ${b.name}`} value={signed(b.forecast - b.budget)} sub={`${pct(b.forecast, b.budget)} · ${B} ${compact(b.budget)}`} />
           ))}
@@ -80,8 +82,8 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
                 </div>
                 {/* the bar is the difference; 2026B and 2026F sit on the right */}
                 <div className="mb-0.5 flex justify-end text-[10px] font-bold uppercase tracking-wide text-[var(--ink-muted)]">
-                  <span className="w-40 text-right">
-                    {B} → {F}
+                  <span className="w-56 text-right">
+                    {B} → {F} → {N}
                   </span>
                 </div>
                 <BarList
@@ -89,16 +91,17 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
                   limit={8}
                   color={MEASURE.budget}
                   valueFmt={signed}
-                  noteWidth="w-40"
+                  noteWidth="w-56"
                   rows={rows.map((p) => ({
                     key: String(p.id),
                     label: p.name,
                     value: p.forecast - p.budget,
-                    note: `${compact(p.budget)} → ${compact(p.forecast)}`,
+                    note: `${compact(p.budget)} → ${compact(p.forecast)} → ${compact(p.next)}`,
                     tip: [
                       { label: B, value: aed(p.budget) },
                       { label: F, value: aed(p.forecast) },
-                      { label: 'Difference', value: `${aedDiff(p.forecast - p.budget)} (${pct(p.forecast, p.budget)})` },
+                      { label: `${F} − ${B}`, value: `${aedDiff(p.forecast - p.budget)} (${pct(p.forecast, p.budget)})` },
+                      { label: N, value: `${aed(p.next)} (${pct(p.next, p.forecast)} vs ${F})` },
                     ],
                   }))}
                 />
