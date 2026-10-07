@@ -19,7 +19,7 @@ function Section({ title, tone, note, children }: { title: string; tone: keyof t
   return (
     <section className="border border-slate-200 bg-white" style={{ borderLeft: `3px solid ${TONE[tone]}` }}>
       <header className="flex items-baseline gap-2 border-b border-slate-200 px-3 py-1.5">
-        <h3 className="text-[13px] font-semibold text-slate-900">{title}</h3>
+        <h3 className="text-[13px] font-bold text-slate-900">{title}</h3>
         {note && <span className="text-[11px] text-slate-500">{note}</span>}
       </header>
       <div className="p-3">{children}</div>
@@ -32,7 +32,7 @@ const Grid = ({ children }: { children: ReactNode }) => <div className="grid gri
 function Field({ label, hint, locked, wide, children }: { label: string; hint?: string; locked?: string | false; wide?: boolean; children: ReactNode }) {
   return (
     <label className={`flex min-w-0 flex-col gap-0.5 ${wide ? 'col-span-full' : ''}`}>
-      <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500" title={locked || undefined}>
+      <span className="flex items-center gap-1 text-[11px] font-bold text-slate-900" title={locked || undefined}>
         {label}
         {locked && (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-label="locked">
@@ -66,11 +66,11 @@ function ReraEditor({ row, canEdit, onSave }: { row: Row; canEdit: boolean; onSa
   return (
     <div className="flex flex-wrap items-end gap-3">
       <label className="flex flex-col gap-0.5">
-        <span className="text-[11px] font-medium text-slate-500">Low (annual rent)</span>
+        <span className="text-[11px] font-bold text-slate-900">Low (annual rent)</span>
         <input className="input w-36 text-right tabular-nums" inputMode="decimal" value={min} onChange={(e) => setMin(e.target.value)} placeholder="blank" />
       </label>
       <label className="flex flex-col gap-0.5">
-        <span className="text-[11px] font-medium text-slate-500">High (annual rent)</span>
+        <span className="text-[11px] font-bold text-slate-900">High (annual rent)</span>
         <input className="input w-36 text-right tabular-nums" inputMode="decimal" value={max} onChange={(e) => setMax(e.target.value)} placeholder="blank" />
       </label>
       <button
@@ -91,6 +91,13 @@ function ReraEditor({ row, canEdit, onSave }: { row: Row; canEdit: boolean; onSa
     </div>
   );
 }
+
+const addDays = (iso: string, n: number) => {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b.slice(0, 10)}T00:00:00Z`) - Date.parse(`${a.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
 
 const ro ='w-full min-h-[30px] cursor-default truncate rounded-md border border-dashed border-slate-200 bg-transparent px-2 py-1 text-slate-600';
 const box = (changed: boolean, override?: boolean) => `input w-full ${changed ? 'ring-1 ring-sky-500' : ''} ${override ? 'cell-override' : ''}`;
@@ -150,6 +157,23 @@ export function RowForm({
   const camp = row.propertyKind === 'CAMP';
   const rateUnit = camp ? 'AED per bed per month' : row.rc === 'R' ? 'annual rent' : 'AED per sq ft per year';
   const mfDefault = defaultMfRenewal({ rc: row.rc, renew1: val('renew1'), noRenewal: val('noRenewal'), mfCurrent: row.mfCurrent, vacant: row.vacant });
+
+  // 1st renewal / new tenant dates as they will be after saving, so a change shows before Save
+  // (same rules as the engine: renew → day after the lease ends; new tenant → after the vacancy days)
+  const r1Preview = ((): { start: string | null; end: string | null } => {
+    const saved = { start: row.r1?.start ?? null, end: row.r1?.end ?? null };
+    if (contractedLock || timing.kind === 'vacant' || !row.currentEnd) return saved;
+    if (outcome === 'Not re-let') return { start: null, end: null };
+    const vac = val('vacancyDays');
+    const start = outcome === 'New tenant' ? (vac === null ? null : addDays(row.currentEnd, vac + 1)) : (val('r1Start') ?? addDays(row.currentEnd, 1));
+    if (!start) return { start: null, end: null };
+    // keep the contract length the engine used; a year when there was none
+    const term = saved.start && saved.end ? daysBetween(saved.start, saved.end) : 364;
+    return { start, end: val('r1End') ?? addDays(start, term) };
+  })();
+  const r1Moved = r1Preview.start !== (row.r1?.start ?? null) || r1Preview.end !== (row.r1?.end ?? null);
+  // a new tenant after a current lease starts after the vacancy days: the start is not typed
+  const newTenantAfterLease = outcome === 'New tenant' && timing.kind !== 'vacant' && !contractedLock && !!row.currentEnd;
 
   const confirmLeave = (go?: () => void) => () => {
     if (!go) return;
@@ -214,7 +238,7 @@ export function RowForm({
     ends: `Ends on ${dmy(row.currentEnd)}: choose the outcome.`,
   }[timing.kind];
 
-  const renewals = ([1, 2, 3] as const).filter((i) => row[`r${i}`] || val(`r${i}Start`) || val(`r${i}Rent`));
+  const renewals = ([1, 2, 3] as const).filter((i) => row[`r${i}`] || val(`r${i}Start`) || val(`r${i}Rent`) || (i === 1 && r1Preview.start));
   const schedules = [
     row.current && { key: 'current', title: 'Current lease', c: row.current, field: 'currentSchedule' as const, note: 'Not in the Oracle report: enter the actual cheques here' },
     row.r1 && { key: 'r1', title: outcome === 'Renew' ? '1st renewal' : '1st renewal · new tenant', c: row.r1, field: 'r1Schedule' as const },
@@ -449,7 +473,9 @@ export function RowForm({
                     <Field label="Vacancy days" hint="Required · empty days after the lease ends">
                       {num('vacancyDays', decisionOpen, { int: true })}
                     </Field>
-                    <Field label="New tenant from">{show(row.r1?.start ? dmy(row.r1.start) : null)}</Field>
+                    <Field label="New tenant from" hint={r1Moved ? 'From the vacancy days · saved with the form' : undefined}>
+                      {show(r1Preview.start ? dmy(r1Preview.start) : null)}
+                    </Field>
                   </>
                 )}
               </>
@@ -457,12 +483,12 @@ export function RowForm({
             {outcome !== 'Not re-let' && (
               <Field label={outcome === 'Renew' ? 'MF on renewal' : 'MF on new tenant'} hint={`${pct(mfPct)} of the rent · other income in the start month`}>
                 {canEdit && !owner ? (
+                  // three choices only; a line nobody has set shows its default (renewal: as the current lease, new tenant: Yes)
                   <select
-                    className={box(changed('mfRenewal'), val('mfRenewal') !== null)}
-                    value={val('mfRenewal') ?? ''}
-                    onChange={(e) => set('mfRenewal', (e.target.value || null) as MfChoice | null)}
+                    className={box(changed('mfRenewal'))}
+                    value={val('mfRenewal') ?? mfDefault}
+                    onChange={(e) => set('mfRenewal', e.target.value as MfChoice)}
                   >
-                    <option value="">Default: {MF_LABEL[mfDefault]}</option>
                     {MF_CHOICES.map((c) => (
                       <option key={c} value={c}>
                         {MF_LABEL[c]}
@@ -492,7 +518,7 @@ export function RowForm({
         </Section>
 
         {renewals.length > 0 && (
-          <Section title="Renewals" tone="input" note="Grey = calculated · bold = overridden (× reverts)">
+          <Section title="Renewals" tone="input" note="Grey italic = calculated · dark = overridden (× reverts)">
             <div className="space-y-3">
               {renewals.map((i) => {
                 const locked = i <= row.contracted;
@@ -501,7 +527,7 @@ export function RowForm({
                 const renewKey = `r${i}Renew` as 'r2Renew' | 'r3Renew';
                 return (
                   <div key={i}>
-                    <div className="mb-1 text-xs font-semibold text-slate-700">
+                    <div className="mb-1 text-xs font-bold text-slate-900">
                       {['1st', '2nd', '3rd'][i - 1]} renewal
                       {i <= row.contracted && <span className="ml-2 font-normal text-teal-600">contracted (Oracle)</span>}
                       {i === 1 && outcome === 'New tenant' && <span className="ml-2 font-normal text-slate-500">new tenant</span>}
@@ -524,11 +550,13 @@ export function RowForm({
                           )}
                         </Field>
                       )}
-                      <Field label="Start" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false}>
-                        {date(`r${i}Start`, open, { placeholder: d?.start ?? null, override: true })}
+                      <Field label="Start" locked={locked ? 'Fixed: contracted lease year (Oracle)' : i === 1 && newTenantAfterLease ? 'From the vacancy days' : false}>
+                        {i === 1 && newTenantAfterLease
+                          ? show(r1Preview.start ? dmy(r1Preview.start) : null)
+                          : date(`r${i}Start`, open, { placeholder: (i === 1 ? r1Preview.start : d?.start) ?? null, override: true })}
                       </Field>
                       <Field label="End" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false}>
-                        {date(`r${i}End`, open, { placeholder: d?.end ?? null, override: true })}
+                        {date(`r${i}End`, open, { placeholder: (i === 1 ? r1Preview.end : d?.end) ?? null, override: true })}
                       </Field>
                       <Field label="Rent" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false} hint={d && row.area ? `${fmt(d.rent / row.area, 2)} per sq ft` : undefined}>
                         {num(`r${i}Rent`, open, { placeholder: d ? fmt(d.rent) : '', override: true })}

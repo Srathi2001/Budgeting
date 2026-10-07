@@ -149,7 +149,7 @@ function overrideCol(
     headerName,
     headerClass: 'hdr-input',
     editable: (p) => editable(p) && !(p.data && lockedFor?.(p.data)),
-    headerTooltip: 'Blank = calculated (grey). Type a value to override (bold). Delete to revert.',
+    headerTooltip: 'Blank = calculated (grey). Type a value to override (dark). Delete to revert.',
     valueGetter: (p: ValueGetterParams<Row>) => {
       if (!p.data) return null;
       const o = p.data[field];
@@ -492,17 +492,17 @@ export function MasterGrid({
           },
           {
             ...overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Renewal Start', (r) => r.contracted >= 1 || needsVacancyDays(r)),
-            headerTooltip: '1st renewal / new tenant start. Blank = calculated (grey); type to override (bold). More in the row form.',
+            headerTooltip: '1st renewal / new tenant start. Blank = calculated (grey); type to override (dark). More in the row form.',
           },
           {
             ...overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Renewal Rent', (r) => r.contracted >= 1),
-            headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (bold). More in the row form.',
+            headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (dark). More in the row form.',
           },
           {
             colId: 'mfRenewal',
             headerName: 'MF on Renewal',
             headerClass: 'hdr-input',
-            headerTooltip: `Maintenance fee on the renewal / new tenant: ${Math.round(mfPct * 100)}% of the rent, other income in the month the contract starts. Blank = default (grey): renewal follows the current lease, new tenant Yes.`,
+            headerTooltip: `Maintenance fee on the renewal / new tenant: ${Math.round(mfPct * 100)}% of the rent, other income in the month the contract starts. Yes / No / Waived off; until chosen, the default shows in grey: renewal follows the current lease, new tenant Yes.`,
             editable: (p) => editable(p) && !!p.data && outcomeOf(p.data) !== 'Not re-let',
             cellDataType: false,
             valueGetter: (p) => (!p.data || p.node?.isRowPinned() ? null : MF_LABEL[p.data.mfRenewal ?? defaultMfRenewal(p.data)]),
@@ -512,7 +512,8 @@ export function MasterGrid({
               return true;
             },
             cellEditor: 'agSelectCellEditor',
-            cellEditorParams: { values: ['', ...Object.values(MF_LABEL)] },
+            // three choices only: Yes / No / Waived off
+            cellEditorParams: { values: Object.values(MF_LABEL) },
             cellClass: (p) => {
               if (!p.data || p.node.isRowPinned()) return '';
               const state = p.data.mfRenewal ? 'cell-override' : 'cell-derived';
