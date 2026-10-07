@@ -10,6 +10,7 @@ import { CATEGORY_COLOR, MEASURE, MOVE_IN_COLOR, OUTCOME_COLOR } from '@/lib/seg
 import { useFilters } from '@/components/filter-bar';
 import { unitPasses } from '@/lib/filters';
 import { RentPsfCard } from './rent-psf-card';
+import { BudgetVsForecastCard } from './budget-vs-forecast-card';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
@@ -264,6 +265,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         </ChartCard>
       </div>
 
+      {data.budgetVsForecast && <BudgetVsForecastCard data={data.budgetVsForecast} />}
       <RentPsfCard data={data.rentPsf} />
     </div>
   );

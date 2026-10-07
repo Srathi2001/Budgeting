@@ -11,6 +11,7 @@ import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
 import { locationOf } from './location';
 import { buildRentPsf, type PsfLine, type RentPsf } from './rent-psf';
+import { loadBudgetVsForecast, type BudgetVsForecast } from './budget-vs-forecast';
 
 /** What follows a contract that falls due (a year already contracted in Oracle counts as Renew). */
 export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let';
@@ -68,6 +69,8 @@ export interface DashboardData {
   pms: string[];
   /** rent per sq ft card, for the shared page filters (computed here, not in the browser) */
   rentPsf: RentPsf;
+  /** last year's budget vs its forecast (actuals + projection), for the shared page filters */
+  budgetVsForecast: BudgetVsForecast | null;
 }
 
 const annual = (c: Contract) => (c.end >= c.start ? (c.rent * 365) / (c.end - c.start + 1) : 0);
@@ -193,6 +196,15 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
   }
 
   const list = [...units.values()];
+  // budget vs forecast is per property (Oracle actuals have no unit detail): the category filter
+  // keeps the properties with units in it
+  const cats = new Map<number, Set<Category>>();
+  for (const d of list) cats.set(d.propertyId, (cats.get(d.propertyId) ?? new Set()).add(d.category));
+  const pass = (sel: string[], v: string) => sel.length === 0 || sel.includes(v);
+  const bvfProps = props
+    .filter(({ p }) => pass(filters.bu, p.buCode) && pass(filters.pm, p.coordinator ?? '—') && pass(filters.prop, String(p.id)))
+    .filter(({ p }) => !filters.cat.length || [...(cats.get(p.id) ?? [])].some((c) => filters.cat.includes(c)))
+    .map(({ p, bu }) => ({ id: p.id, name: p.name, buCode: p.buCode, buName: bu }));
   return {
     year: version.year,
     versionName: version.name,
@@ -202,5 +214,6 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     bus: [...new Set(props.map((x) => x.bu))].sort(),
     pms: [...new Set(props.map((x) => x.p.coordinator ?? '—'))].sort(),
     rentPsf: buildRentPsf(psfLines, filters),
+    budgetVsForecast: await loadBudgetVsForecast(version, prior, bvfProps),
   };
 }

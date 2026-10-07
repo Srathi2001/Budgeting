@@ -114,11 +114,16 @@ export function FilterBar() {
         onChange={(v) => set({ prop: v })}
         options={propOptions.map((p) => ({ value: String(p.id), label: `${p.name} · ${p.code}` }))}
       />
-      {isFiltered(f) && (
-        <button className="btn btn-xs" onClick={() => setFilters(NO_FILTERS)}>
-          Clear filters
-        </button>
-      )}
+      {/* always there, beside the filters; nothing to reset = disabled */}
+      <button
+        type="button"
+        className="btn btn-xs"
+        disabled={!isFiltered(f)}
+        title={isFiltered(f) ? 'Back to all business units, managers, categories and properties' : 'No filters set'}
+        onClick={() => setFilters(NO_FILTERS)}
+      >
+        Reset filters
+      </button>
       <span className="ml-auto text-xs text-slate-500">
         {inView} of {universe.length} properties
       </span>

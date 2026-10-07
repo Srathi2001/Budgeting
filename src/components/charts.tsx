@@ -492,17 +492,22 @@ export function BarList({
   rows,
   color,
   limit,
+  diverging = false,
   valueFmt = (n) => String(Math.round(n)),
 }: {
   rows: { key: string; label: string; value: number; note?: string; tip: string }[];
   color: string;
   limit?: number;
+  /** bars either side of a centre rule (variances): position gives the direction, the colour stays one */
+  diverging?: boolean;
   valueFmt?: (n: number) => string;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [all, setAll] = useState(false);
   const [tip, setTip] = useState<Tip | null>(null);
-  const max = Math.max(...rows.map((r) => r.value), 0) * 1.05 || 1;
+  const max = Math.max(...rows.map((r) => (diverging ? Math.abs(r.value) : r.value)), 0) * 1.05 || 1;
+  // share of the track: from 0 (left edge) or from the centre when diverging
+  const span = (v: number) => (diverging ? (Math.abs(v) / max) * 50 : (v / max) * 100);
   const shown = limit && !all ? rows.slice(0, limit) : rows;
   if (!rows.length) return <div className="py-6 text-center text-xs text-slate-500">No data for this selection</div>;
   return (
@@ -522,11 +527,22 @@ export function BarList({
             <span className="min-w-0 basis-full truncate text-[var(--ink-2)] @md:basis-48 @md:shrink-0" title={r.label}>
               {r.label}
             </span>
-            {/* the track keeps room for the value label right of the longest bar */}
-            <span className="relative flex min-w-0 flex-1 items-center pr-10" aria-label={`${r.label}: ${valueFmt(r.value)}`}>
+            {/* the track keeps room for the value label beyond the longest bar (both sides when diverging) */}
+            <span className={`relative flex min-w-0 flex-1 items-center pr-12 ${diverging ? 'pl-12' : ''}`} aria-label={`${r.label}: ${valueFmt(r.value)}`}>
               <span className="relative block h-3.5 w-full">
-                <span className="absolute inset-y-0 left-0 block" style={{ width: `${(r.value / max) * 100}%`, background: color }} />
-                <span className="absolute top-1/2 -translate-y-1/2 pl-1.5 text-[11px] font-semibold text-[var(--ink)]" style={{ left: `${(r.value / max) * 100}%` }}>
+                {diverging && <span className="absolute inset-y-[-3px] left-1/2 block w-px bg-[var(--line-strong)]" />}
+                {diverging ? (
+                  <span
+                    className="absolute inset-y-0 block"
+                    style={{ width: `${span(r.value)}%`, background: color, ...(r.value < 0 ? { right: '50%' } : { left: '50%' }) }}
+                  />
+                ) : (
+                  <span className="absolute inset-y-0 left-0 block" style={{ width: `${span(r.value)}%`, background: color }} />
+                )}
+                <span
+                  className={`absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-semibold text-[var(--ink)] ${diverging && r.value < 0 ? 'pr-1.5' : 'pl-1.5'}`}
+                  style={diverging && r.value < 0 ? { right: `${50 + span(r.value)}%` } : { left: `${diverging ? 50 + span(r.value) : span(r.value)}%` }}
+                >
                   {valueFmt(r.value)}
                 </span>
               </span>
