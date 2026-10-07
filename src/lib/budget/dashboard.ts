@@ -1,13 +1,16 @@
 // Unit-level data behind the dashboard. Filters (BU, PM, category, property) are applied in the
-// browser, so every chart and tile re-renders against the same slice.
+// browser, so every chart and tile re-renders against the same slice; the rent per sq ft card is
+// computed here for the shared filters (the dashboard refreshes when they change).
 import 'server-only';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { parseDay } from '@/lib/engine/dates';
 import type { Contract } from '@/lib/engine/lease';
+import type { Filters } from '@/lib/filters';
 import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
 import { locationOf } from './location';
+import { buildRentPsf, type PsfLine, type RentPsf } from './rent-psf';
 
 /** What follows a contract that falls due (a year already contracted in Oracle counts as Renew). */
 export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let';
@@ -45,13 +48,6 @@ export interface DashUnit {
   due: DueEvent[];
   /** new tenants moving in during the budget year after a lease: month index and annual rent */
   moveIns: { month: number; rent: number }[];
-  /** sq ft; null when unknown */
-  area: number | null;
-  /** current contract rent, annualised (rent ÷ contract days × 365); 0 without a current lease */
-  passing: number;
-  /** unit type as per Oracle (e.g. "2 Bed Room- Apartment"), else the budget's */
-  type: string;
-  location: string;
 }
 
 export interface DashProperty {
@@ -70,6 +66,8 @@ export interface DashboardData {
   properties: DashProperty[];
   bus: string[];
   pms: string[];
+  /** rent per sq ft card, for the shared page filters (computed here, not in the browser) */
+  rentPsf: RentPsf;
 }
 
 const annual = (c: Contract) => (c.end >= c.start ? (c.rent * 365) / (c.end - c.start + 1) : 0);
@@ -112,7 +110,7 @@ function dueEvents(d: DashUnit, l: schema.LeaseLine, contracts: Contract[], year
   if (cur && r1?.newTenant && monthOf(r1.start).getUTCFullYear() === year) d.moveIns.push({ month: monthOf(r1.start).getUTCMonth(), rent: annual(r1) });
 }
 
-export async function loadDashboardData(version: schema.BudgetVersion, propertyIds: number[]): Promise<DashboardData> {
+export async function loadDashboardData(version: schema.BudgetVersion, propertyIds: number[], filters: Filters): Promise<DashboardData> {
   const ids = propertyIds.length ? propertyIds : [-1];
   const [prior] = await db
     .select()
@@ -155,13 +153,10 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
       issues: 0,
       due: [],
       moveIns: [],
-      area: u.area && u.area > 0 ? u.area : null,
-      passing: 0,
-      type: (u.resiCommercial ?? u.unitType ?? '—').trim(),
-      location: locationOf(pp.p),
     };
   };
 
+  const psfLines: PsfLine[] = [];
   for (const { l, u } of await load(version.id)) {
     const c = l.calc as StoredCalc | null;
     const d = make(u, l.propertyId);
@@ -170,10 +165,23 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     d.leased = !!l.currentEnd;
     d.vacancyLoss = c?.vacancyLoss ?? 0;
     d.issues = c?.warnings.length ?? 0;
-    const cur = c?.contracts.find((k) => k.kind === 'CURRENT');
-    d.passing = cur && cur.end >= cur.start ? (cur.rent * 365) / (cur.end - cur.start + 1) : 0;
     if (c && l.staffOwner !== 'OWNER') dueEvents(d, l, c.contracts, version.year, yearStart, today);
     units.set(u.id, d);
+    // rent per sq ft: passing rent = the current contract, annualised (rent ÷ contract days × 365)
+    const cur = c?.contracts.find((k) => k.kind === 'CURRENT');
+    const pp = propById.get(l.propertyId)!;
+    psfLines.push({
+      propertyId: l.propertyId,
+      propertyName: pp.p.name,
+      buCode: pp.p.buCode,
+      pm: d.pm,
+      category: d.category,
+      area: u.area && u.area > 0 ? u.area : 0,
+      passing: l.vacant || !l.currentEnd || !cur ? 0 : annual(cur),
+      leaseNumber: l.leaseNumber,
+      unitType: (u.resiCommercial ?? u.unitType ?? '—').trim(),
+      location: locationOf(pp.p),
+    });
   }
   if (prior) {
     for (const { l, u } of await load(prior.id)) {
@@ -193,5 +201,6 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     properties: props.map(({ p, bu }) => ({ id: p.id, code: p.code, name: p.name, bu, pm: p.coordinator ?? '—' })),
     bus: [...new Set(props.map((x) => x.bu))].sort(),
     pms: [...new Set(props.map((x) => x.p.coordinator ?? '—'))].sort(),
+    rentPsf: buildRentPsf(psfLines, filters),
   };
 }

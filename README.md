@@ -73,7 +73,7 @@ Cheque schedules aren't in the report: current leases default to equal cheques u
 * top 10 properties
 * biggest movers
 * lease expiry profile by outcome (renew / new tenant / not re-let)
-* rent per sq ft by building, by location, by unit type, and by unit size and category. Passing rent (current contract, annualised) ÷ let sq ft, area-weighted; camps are left out because they're priced per bed. Location comes from Admin → Properties, or from the property name when left blank.
+* rent per sq ft: one card with a summary per use group (Retail & showroom, Office & commercial, Residential, Warehouses & sheds, Whole-building leases) and three views: by building (per use group), by Oracle unit type, by location. Passing rent (current contract, annualised) ÷ let sq ft, area-weighted; leased units with an area only; camps are left out because they're priced per bed. Whole-building leases are properties whose leased lines all share one lease number, plus Mirdiff Shopping Mall, MJN Al Warqaa School and Al Rafa Building (Plaza 2). Location comes from Admin → Properties, or from the property name when left blank. Computed on the server (`src/lib/budget/rent-psf.ts`) for the page filters.
 
 ## Calculation logic
 

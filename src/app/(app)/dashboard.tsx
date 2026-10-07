@@ -9,39 +9,13 @@ import { ChartCard, Columns, HBars, Legend, LineChart, StatTile, compact } from 
 import { CATEGORY_COLOR, MEASURE, MOVE_IN_COLOR, OUTCOME_COLOR } from '@/lib/segments';
 import { useFilters } from '@/components/filter-bar';
 import { unitPasses } from '@/lib/filters';
+import { RentPsfCard } from './rent-psf-card';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
 const add12 = (acc: number[], v: number[] | null) => (v ? acc.map((x, i) => x + v[i]) : acc);
 const pctTxt = (n: number | null, d = 1) => (n === null || !Number.isFinite(n) ? '–' : `${(n * 100).toFixed(d)}%`);
 
-// ---- rent per sq ft: area-weighted (total annual rent ÷ total let sq ft); camps are priced per bed, so left out
-const SIZE_BANDS: [number, number, string][] = [
-  [0, 500, '< 500'],
-  [500, 1000, '500–1k'],
-  [1000, 2000, '1k–2k'],
-  [2000, 5000, '2k–5k'],
-  [5000, 10000, '5k–10k'],
-  [10000, 50000, '10k–50k'],
-  [50000, Infinity, '50k +'],
-];
-const psf1 = (n: number) => (Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '–');
-const aedPsf = (n: number) => `AED ${psf1(n)}`;
-type PsfAgg = { units: number; area: number; letArea: number; rent: number };
-function psfBy(units: DashUnit[], key: (u: DashUnit) => string) {
-  const m = new Map<string, PsfAgg>();
-  for (const u of units) {
-    const a = m.get(key(u)) ?? { units: 0, area: 0, letArea: 0, rent: 0 };
-    a.units++;
-    a.area += u.area!;
-    if (u.passing > 0) {
-      a.letArea += u.area!;
-      a.rent += u.passing;
-    }
-    m.set(key(u), a);
-  }
-  return [...m].map(([label, a]) => ({ label, ...a, psf: a.letArea > 0 ? a.rent / a.letArea : NaN })).filter((r) => r.letArea > 0);
-}
 // stack order (registry order); multi-year leases already contracted in Oracle count as Renew
 const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
 const OUTCOME_LABEL: Record<ExpiryOutcome, string> = { Renew: 'Renew', 'New tenant': 'New tenant', 'Not re-let': 'Not re-let' };
@@ -100,18 +74,6 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
       }))
       .filter((r) => sum(r.values) > 0);
     const expiry = OUTCOMES.map(dueBy);
-    // rent per sq ft (current budget units with a known area, camps excluded)
-    const sq = units.filter((u) => u.revenue && u.area && u.category !== 'Camps');
-    const psfAll = psfBy(sq, () => 'all')[0];
-    const psfProp = psfBy(sq, (u) => propById.get(u.propertyId)?.name ?? String(u.propertyId)).sort((a, b) => b.psf - a.psf);
-    const psfLoc = psfBy(sq, (u) => u.location).sort((a, b) => b.psf - a.psf);
-    const psfType = psfBy(sq, (u) => u.type).sort((a, b) => b.letArea - a.letArea).slice(0, 15).sort((a, b) => b.psf - a.psf);
-    const psfCats = CATEGORIES.filter((c) => c !== 'Camps' && sq.some((u) => u.category === c && u.passing > 0));
-    const psfBands = SIZE_BANDS.map(([lo, hi, label]) => {
-      const inBand = sq.filter((u) => u.area! >= lo && u.area! < hi);
-      const byCat = new Map(psfBy(inBand, (u) => u.category).map((r) => [r.label, r]));
-      return { label, byCat, all: psfBy(inBand, () => 'all')[0] };
-    }).filter((b) => b.all);
     return {
       budget,
       prior,
@@ -136,12 +98,6 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
       movers: [...props].filter((p) => Math.abs(p.change) > 0.5).sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 10).sort((a, b) => b.change - a.change),
       buCat,
       expiry,
-      psfAll,
-      psfProp,
-      psfLoc,
-      psfType,
-      psfCats,
-      psfBands,
     };
   }, [units, data.bus, propById, yy]);
 
@@ -308,78 +264,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         </ChartCard>
       </div>
 
-      <div className="flex flex-wrap items-baseline gap-x-3 pt-2">
-        <h2 className="text-base font-semibold text-slate-900">Rent per sq ft</h2>
-        <span className="text-xs text-slate-500">
-          Passing rent (current contract, annualised) ÷ let sq ft, area-weighted · camps excluded (priced per bed)
-          {m.psfAll && <> · portfolio in view: <b className="text-slate-700">{aedPsf(m.psfAll.psf)}</b> on {compact(m.psfAll.letArea)} sq ft let</>}
-        </span>
-      </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        <ChartCard
-          title="By building"
-          sub="AED per sq ft per year, highest first · label: let area"
-          table={{ head: ['Property', 'AED / sq ft', 'Let sq ft', 'Total sq ft', 'Units'], rows: m.psfProp.map((r) => [r.label, psf1(r.psf), Math.round(r.letArea), Math.round(r.area), r.units]) }}
-        >
-          <HBars
-            labelWidth={190}
-            rows={m.psfProp.map((r) => ({ label: r.label, values: [r.psf], note: `${compact(r.letArea)} sq ft` }))}
-            series={[{ name: 'AED / sq ft', color: MEASURE.budget }]}
-            fmt={psf1}
-            tipFmt={aedPsf}
-            note={(r) => r.note}
-          />
-        </ChartCard>
-
-        <div className="space-y-4">
-          <ChartCard
-            title="By location"
-            sub="AED per sq ft per year by community (Admin → Properties sets the location)"
-            table={{ head: ['Location', 'AED / sq ft', 'Let sq ft', 'Total sq ft', 'Units'], rows: m.psfLoc.map((r) => [r.label, psf1(r.psf), Math.round(r.letArea), Math.round(r.area), r.units]) }}
-          >
-            <HBars
-              labelWidth={150}
-              rows={m.psfLoc.map((r) => ({ label: r.label, values: [r.psf], note: `${compact(r.letArea)} sq ft` }))}
-              series={[{ name: 'AED / sq ft', color: MEASURE.budget }]}
-              fmt={psf1}
-              tipFmt={aedPsf}
-              note={(r) => r.note}
-            />
-          </ChartCard>
-
-          <ChartCard
-            title="By unit type"
-            sub="Oracle unit type · the 15 types with the most let area"
-            table={{ head: ['Unit type', 'AED / sq ft', 'Let sq ft', 'Total sq ft', 'Units'], rows: m.psfType.map((r) => [r.label, psf1(r.psf), Math.round(r.letArea), Math.round(r.area), r.units]) }}
-          >
-            <HBars
-              labelWidth={170}
-              rows={m.psfType.map((r) => ({ label: r.label, values: [r.psf], note: `${r.units} units` }))}
-              series={[{ name: 'AED / sq ft', color: MEASURE.budget }]}
-              fmt={psf1}
-              tipFmt={aedPsf}
-              note={(r) => r.note}
-            />
-          </ChartCard>
-
-          <ChartCard
-            title="By unit size and category"
-            sub="AED per sq ft per year for each size band (sq ft)"
-            legend={<Legend items={m.psfCats.map((c) => ({ label: c, color: CATEGORY_COLOR[c] }))} />}
-            table={{
-              head: ['Size (sq ft)', ...m.psfCats, 'All', 'Let sq ft'],
-              rows: m.psfBands.map((b) => [b.label, ...m.psfCats.map((c) => psf1(b.byCat.get(c)?.psf ?? NaN)), psf1(b.all.psf), Math.round(b.all.letArea)]),
-            }}
-          >
-            <Columns
-              labels={m.psfBands.map((b) => b.label)}
-              series={m.psfCats.map((c) => ({ name: c, color: CATEGORY_COLOR[c], values: m.psfBands.map((b) => b.byCat.get(c)?.psf ?? 0) }))}
-              fmt={(n) => String(Math.round(n))}
-              tipFmt={aedPsf}
-            />
-          </ChartCard>
-        </div>
-      </div>
+      <RentPsfCard data={data.rentPsf} />
     </div>
   );
 }

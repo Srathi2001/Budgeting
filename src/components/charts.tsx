@@ -481,6 +481,70 @@ export function HBars({
   );
 }
 
+// ---- ranked bar list (HTML, wraps on narrow cards) -------------------------------------------------
+
+/**
+ * One bar per row on its own scale (0 to max × 1.05), single colour, value at the bar end and a
+ * note on the right. Rows are HTML, so on a narrow card the bar drops below the name. Shows the
+ * first `limit` rows with a "Show all" toggle.
+ */
+export function BarList({
+  rows,
+  color,
+  limit,
+  valueFmt = (n) => String(Math.round(n)),
+}: {
+  rows: { key: string; label: string; value: number; note?: string; tip: string }[];
+  color: string;
+  limit?: number;
+  valueFmt?: (n: number) => string;
+}) {
+  const [ref, w] = useWidth<HTMLDivElement>();
+  const [all, setAll] = useState(false);
+  const [tip, setTip] = useState<Tip | null>(null);
+  const max = Math.max(...rows.map((r) => r.value), 0) * 1.05 || 1;
+  const shown = limit && !all ? rows.slice(0, limit) : rows;
+  if (!rows.length) return <div className="py-6 text-center text-xs text-slate-500">No data for this selection</div>;
+  return (
+    <div ref={ref} className="relative @container">
+      <ul className="space-y-1">
+        {shown.map((r) => (
+          <li
+            key={r.key}
+            className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-0.5 text-[12px] tabular-nums"
+            onPointerEnter={(e) => {
+              const box = e.currentTarget.getBoundingClientRect();
+              const host = ref.current!.getBoundingClientRect();
+              setTip({ x: Math.min(box.width / 3, w - 220), y: box.bottom - host.top + 6, title: r.label, rows: [{ label: r.tip, value: '' }] });
+            }}
+            onPointerLeave={() => setTip(null)}
+          >
+            <span className="min-w-0 basis-full truncate text-[var(--ink-2)] @md:basis-48 @md:shrink-0" title={r.label}>
+              {r.label}
+            </span>
+            {/* the track keeps room for the value label right of the longest bar */}
+            <span className="relative flex min-w-0 flex-1 items-center pr-10" aria-label={`${r.label}: ${valueFmt(r.value)}`}>
+              <span className="relative block h-3.5 w-full">
+                <span className="absolute inset-y-0 left-0 block" style={{ width: `${(r.value / max) * 100}%`, background: color }} />
+                <span className="absolute top-1/2 -translate-y-1/2 pl-1.5 text-[11px] font-semibold text-[var(--ink)]" style={{ left: `${(r.value / max) * 100}%` }}>
+                  {valueFmt(r.value)}
+                </span>
+              </span>
+            </span>
+            {r.note !== undefined && <span className="w-14 shrink-0 text-right text-[11px] text-[var(--ink-muted)]">{r.note}</span>}
+          </li>
+        ))}
+      </ul>
+      {limit !== undefined && rows.length > limit && (
+        <button type="button" className="mt-1 text-xs text-[var(--ink-2)] underline" onClick={() => setAll((a) => !a)}>
+          {all ? 'Show fewer' : `Show all ${rows.length}`}
+        </button>
+      )}
+      <Tooltip tip={tip} width={w} />
+    </div>
+  );
+}
+
 // ---- KPI tile (.anh-kpi) --------------------------------------------------------------------------
 
 export function StatTile({
