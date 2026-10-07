@@ -174,7 +174,7 @@ export function OtherIncome({
     return [...m.values()];
   }, [view]);
 
-  const cols = OI_COLUMNS.length + 3;
+  const cols = OI_COLUMNS.length + 4;
   return (
     <div className="space-y-4 p-6">
       <header>
@@ -220,7 +220,7 @@ export function OtherIncome({
         <table className="anh-grid">
           <thead>
             <tr className="h2">
-              <th colSpan={3} />
+              <th colSpan={4} />
               <th colSpan={3} style={{ textAlign: 'center' }}>
                 Actual
               </th>
@@ -231,6 +231,7 @@ export function OtherIncome({
             </tr>
             <tr className="h1">
               <th>Account</th>
+              <th>BU</th>
               <th>GL</th>
               <th>LL / ANPM</th>
               {OI_COLUMNS.map((c) => (
@@ -255,6 +256,7 @@ export function OtherIncome({
                     {accountsOf(b).map((a) => (
                       <tr key={a.code} className="child">
                         <td>{a.name}</td>
+                        <td title={b.buName}>{b.buCode}</td>
                         <td>
                           <span className="anh-code">{a.code}</span>
                         </td>
@@ -264,6 +266,7 @@ export function OtherIncome({
                     ))}
                     <tr className="subtotal">
                       <td>Total {b.kind === 'G' ? 'General' : b.code}</td>
+                      <td>{b.buCode}</td>
                       <td />
                       <td />
                       {OI_COLUMNS.map((c) => (
@@ -278,6 +281,7 @@ export function OtherIncome({
                   <td>
                     Total {group[0].buCode} {group[0].buName}
                   </td>
+                  <td>{group[0].buCode}</td>
                   <td />
                   <td />
                   {OI_COLUMNS.map((c) => (
@@ -296,6 +300,7 @@ export function OtherIncome({
                 {OI_ACCOUNTS.filter((a) => OI_COLUMNS.some((c) => total(view, c, a.code) !== null)).map((a) => (
                   <tr key={a.code} className="child">
                     <td>{a.name}</td>
+                    <td>{bu.length === 1 ? bu[0].split(' ')[0] : 'All'}</td>
                     <td>
                       <span className="anh-code">{a.code}</span>
                     </td>
@@ -309,6 +314,7 @@ export function OtherIncome({
                 ))}
                 <tr className="total">
                   <td>Total other income</td>
+                  <td />
                   <td />
                   <td />
                   {OI_COLUMNS.map((c) => (
