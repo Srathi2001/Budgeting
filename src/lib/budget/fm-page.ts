@@ -97,6 +97,48 @@ export interface FmPageData {
 }
 
 const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
+
+/** why the user can't change a facility's FM budget (null: they can); the save path checks the same */
+export function fmEditReason(locked: boolean, user: CurrentUser, status: Status): string | null {
+  if (locked) return 'This budget version is locked';
+  if (isFinance(user)) return null;
+  if (!isFm(user)) return 'The FM budget is entered by facilities management';
+  if (status === 'SUBMITTED' || status === 'APPROVED') return `This facility is ${status.toLowerCase()}; ask Finance to return it for changes`;
+  return null;
+}
+
+/** The facilities with their lines and whether the user may change them: the Excel template and its upload. */
+export async function loadFmTemplate(version: schema.BudgetVersion, user: CurrentUser, propertyIds: number[]) {
+  const page = await loadFmPage(version, user, propertyIds, null);
+  const ids = page.facilities.map((f) => f.id);
+  const lines = ids.length
+    ? await db
+        .select()
+        .from(schema.fmLines)
+        .where(and(eq(schema.fmLines.versionId, version.id), inArray(schema.fmLines.propertyId, ids)))
+        .orderBy(schema.fmLines.workType, schema.fmLines.element, schema.fmLines.id)
+    : [];
+  const facilities = page.facilities.map((f) => {
+    const reason = fmEditReason(page.version.locked, user, f.status);
+    return {
+      id: f.id,
+      code: f.code,
+      name: f.name,
+      bu: f.bu,
+      zone: f.zone,
+      prior: f.prior,
+      actual: f.actual,
+      budget: f.budget,
+      status: f.status,
+      editable: reason === null,
+      reason,
+      lines: lines
+        .filter((l) => l.propertyId === f.id)
+        .map((l) => ({ id: l.id, workType: l.workType, element: l.element, subElement: l.subElement, description: l.description, businessNeed: l.businessNeed, kind: l.kind, amount: l.amount, month: l.month, remarks: l.remarks, source: l.source })),
+    };
+  });
+  return { page, facilities };
+}
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const worksOf = (r: FmPropertyResult) => sum(Object.values(r.works));
 
@@ -191,10 +233,7 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
     const act = actualBy.get(p.id);
     const sub = subOf.get(p.id);
     const status = sub?.status ?? 'DRAFT';
-    let reason: string | null = null;
-    if (locked) reason = 'This budget version is locked';
-    else if (!finance && !isFm(user)) reason = 'The FM budget is entered by facilities management';
-    else if (!finance && (status === 'SUBMITTED' || status === 'APPROVED')) reason = `This facility is ${status.toLowerCase()}; ask Finance to return it for changes`;
+    const reason = fmEditReason(locked, user, status);
     const inYear = (d: string | null) => !!d && d >= `${year}-01-01` && d <= `${year}-12-31`;
     detail = {
       id: p.id,

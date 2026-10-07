@@ -11,6 +11,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, FM_KIND_LABEL, WORK_TYPE, WORK_TYPES, elementLabel, glOf, type FmKind, type WorkType } from '@/lib/budget/fm-types';
 import type { FmFacilityDetail, FmLineRow, FmPageData } from '@/lib/budget/fm-page';
 import { fmTransition, saveFmLines } from './actions';
+import { FmImport } from './fm-import';
 
 type Msg = { error?: string; ok?: string } | null;
 const zoneLabel = (z: string | null) => z?.replace('ZONE_', 'Zone ') ?? '';
@@ -20,6 +21,7 @@ export function FmTemplate({ data }: { data: FmPageData }) {
   const { facilities, detail, version } = data;
   const open = (id: number | null) => router.push(id ? `/fm?f=${id}` : '/fm', { scroll: false });
   const at = detail ? facilities.findIndex((f) => f.id === detail.id) : -1;
+  const [importing, setImporting] = useState(false);
   const T = {
     prior: data.priorLabel ? sum(facilities.map((f) => f.prior ?? 0)) : null,
     actual: sum(facilities.map((f) => f.actual)),
@@ -27,7 +29,19 @@ export function FmTemplate({ data }: { data: FmPageData }) {
     lines: sum(facilities.map((f) => f.lines)),
   };
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2">
+        <a className="btn" href="/api/export/fm-template" title="Instructions, the facilities in view and their budgeted costs, with blank rows for new costs">
+          Download template
+        </a>
+        {data.canEditStaff && (
+          <button className="btn" onClick={() => setImporting((v) => !v)}>
+            Import Excel
+          </button>
+        )}
+      </div>
+      {importing && <FmImport versionId={version.id} onClose={() => setImporting(false)} />}
+      <div className="flex min-h-0 flex-1">
       <div className="min-w-0 flex-1 overflow-auto p-4">
         <table className="anh-grid">
           <thead>
@@ -84,6 +98,7 @@ export function FmTemplate({ data }: { data: FmPageData }) {
           onNext={at >= 0 && at < facilities.length - 1 ? () => open(facilities[at + 1].id) : undefined}
         />
       )}
+      </div>
     </div>
   );
 }

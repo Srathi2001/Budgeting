@@ -11,7 +11,7 @@ export async function proxy(request: NextRequest) {
   }
   // facilities management works in the FM budget only (lease, tenant and revenue screens are not theirs)
   const path = request.nextUrl.pathname;
-  if (session.role === 'FM' && path !== '/fm' && !path.startsWith('/fm/')) {
+  if (session.role === 'FM' && path !== '/fm' && !path.startsWith('/fm/') && path !== '/api/export/fm-template') {
     if (path.startsWith('/api/')) return new NextResponse('Forbidden', { status: 403 });
     return NextResponse.redirect(new URL('/fm', request.url));
   }
