@@ -26,7 +26,8 @@ const money = (name: string) => numeric(name, { precision: 16, scale: 2, mode: '
 const decimal = (name: string) => numeric(name, { precision: 12, scale: 6, mode: 'number' });
 const day = (name: string) => date(name, { mode: 'string' });
 
-export const roleEnum = pgEnum('role', ['ADMIN', 'FINANCE', 'PM']);
+// FM: the Facilities Management department (enters the FM cost budget only)
+export const roleEnum = pgEnum('role', ['ADMIN', 'FINANCE', 'PM', 'FM']);
 export const versionStatusEnum = pgEnum('version_status', ['OPEN', 'LOCKED']);
 export const submissionStatusEnum = pgEnum('submission_status', ['DRAFT', 'SUBMITTED', 'APPROVED', 'RETURNED']);
 export const propertyKindEnum = pgEnum('property_kind', ['BUILDING', 'CAMP', 'MALL']);
@@ -58,6 +59,14 @@ export const properties = pgTable('properties', {
   /** Community (Al Qusais, Mirdiff, …); null = derived from the property name */
   location: text('location'),
   active: boolean('active').notNull().default(true),
+  // Facilities Management master data (FMD budget file): fixed in the FM budget
+  fmZone: text('fm_zone'),
+  /** in service since (facility age) */
+  fmActiveSince: day('fm_active_since'),
+  /** gross building area, sq ft (FMD) */
+  fmGrossArea: money('fm_gross_area'),
+  /** HVAC assets by type (Chiller, CU, FCU, AHU, …) */
+  fmAssets: jsonb('fm_assets').$type<Record<string, number>>(),
 });
 
 export const units = pgTable(
@@ -294,6 +303,78 @@ export const submissions = pgTable(
     updatedBy: integer('updated_by'),
   },
   (t) => [primaryKey({ columns: [t.versionId, t.propertyId] })],
+);
+
+/**
+ * Facilities Management budget: one line per facility × work type (M01–M04 maintain, R01–R04
+ * renewal) × building element (GL 627xx; 117xx for capex). Entered by FMD; the 2026 lines come
+ * from the FMD budget file. `month`: R lines in the month planned; null = spread over 12 months.
+ */
+export const fmLines = pgTable(
+  'fm_lines',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    workType: text('work_type').notNull(), // M01 … R04
+    element: text('element').notNull(), // building element, 2 digits (07); GL account = glOf(workType, element): 62707 / 11707
+    subElement: text('sub_element'),
+    description: text('description'),
+    businessNeed: text('business_need'), // Statutory / Functional / Business-Critical / Optional
+    kind: text('kind').notNull().default('PLANNED'), // PLANNED / PROVISIONAL / COMMITTED
+    amount: money('amount').notNull().default(0),
+    month: integer('month'),
+    remarks: text('remarks'),
+    /** FMD_2026: from the FMD file · CARRIED: last year's recurring line · FM: entered */
+    source: text('source').notNull().default('FM'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [index('fm_lines_version_idx').on(t.versionId, t.propertyId)],
+);
+
+/** FM staff budget by team (cost to company + overtime); the G&A share is the team 'GA' (amount only). */
+export const fmStaff = pgTable(
+  'fm_staff',
+  {
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    team: text('team').notNull(), // SUPERVISORY / ZONE_1 / ZONE_2 / ZONE_3 / PPM / VACANT / GA
+    ctc: money('ctc').notNull().default(0),
+    overtime: money('overtime').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.team] })],
+);
+
+/** FM budget approval per facility: FMD submits, Finance approves or returns (same statuses as revenue). */
+export const fmSubmissions = pgTable(
+  'fm_submissions',
+  {
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    status: submissionStatusEnum('status').notNull().default('DRAFT'),
+    note: text('note'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.propertyId] })],
+);
+
+/** FM cost actuals from the GL (MJN HOLDING Account Analysis Report) by month: 627xx debit − credit, 117xx debits (see gl-fm.ts). */
+export const fmActuals = pgTable(
+  'fm_actuals',
+  {
+    id: serial('id').primaryKey(),
+    propertyId: integer('property_id').references(() => properties.id),
+    /** company of the GL line (501, 502, 503, 521, 522) */
+    company: text('company').notNull(),
+    workType: text('work_type').notNull(), // M01 … R04, or 000 when the GL line has none
+    element: text('element').notNull(),
+    month: text('month').notNull(), // YYYY-MM
+    amount: money('amount').notNull(),
+  },
+  (t) => [uniqueIndex('fm_actuals_uq').on(t.company, t.propertyId, t.workType, t.element, t.month)],
 );
 
 export const auditLog = pgTable(

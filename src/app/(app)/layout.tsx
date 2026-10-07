@@ -29,7 +29,7 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
             versions={all.map((v) => ({ id: v.id, name: v.name, status: v.status }))}
           />
         </div>
-        <NavLinks finance={finance} />
+        <NavLinks finance={finance} fm={user.role === 'FM'} />
         <div className="mt-auto border-t border-slate-200 px-4 py-3 text-[13px]">
           <div className="font-semibold">{user.name}</div>
           <div className="anh-muted text-xs">

@@ -96,7 +96,7 @@ export async function saveAssumptions(versionId: number, input: Assumptions): Pr
 const UserSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   name: z.string().trim().min(1).max(100),
-  role: z.enum(['ADMIN', 'FINANCE', 'PM']),
+  role: z.enum(['ADMIN', 'FINANCE', 'PM', 'FM']),
   coordinator: z.string().trim().toUpperCase().max(40).nullable(),
   password: z.string().min(8).max(200).nullable(),
   active: z.boolean(),
@@ -247,14 +247,48 @@ const GlValues = z
   )
   .max(50000);
 
-/** Writes the actuals the upload preview returned (the file is read by /api/import/gl). */
-export async function applyGlActuals(versionId: number, values: unknown, preview: GlPreview, file: string | null): Promise<Result> {
+const FmActualRows = z
+  .array(
+    z.object({
+      company: z.string().regex(/^\d{3}$/),
+      propertyId: z.number().int().nullable(),
+      workType: z.string().max(10),
+      element: z.string().regex(/^\d{2}$/),
+      month: z.string().regex(/^\d{4}-\d{2}$/),
+      amount: z.number().finite(),
+    }),
+  )
+  .max(100000);
+const FmActualsPreviewSchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}$/),
+  rows: z.number(),
+  byYear: z.array(z.object({ year: z.string(), maintenance: z.number(), capex: z.number() })),
+  unmatched: z.array(z.object({ segment: z.string(), amount: z.number() })),
+  noWorkType: z.number(),
+});
+
+/** Writes the actuals the upload preview returned (the file is read by /api/import/gl): other income, and FM costs from MJN HOLDING. */
+export async function applyGlActuals(
+  versionId: number,
+  values: unknown,
+  preview: GlPreview,
+  file: string | null,
+  fm: { rows: unknown; preview: unknown } | null = null,
+): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
     const v = GlValues.parse(values);
     const { applyGlImport } = await import('@/lib/import/gl-other-income');
     await applyGlImport(versionId, v, user.id, { file, preview });
-    return `Imported ${v.length.toLocaleString('en-US')} ${preview.ledger} GL actuals into Other Income`;
+    let fmMsg = '';
+    if (fm) {
+      const rows = FmActualRows.parse(fm.rows);
+      const { applyFmActuals } = await import('@/lib/import/gl-fm');
+      await applyFmActuals(rows, FmActualsPreviewSchema.parse(fm.preview), user.id, file);
+      fmMsg = ` and ${rows.length.toLocaleString('en-US')} FM cost actuals`;
+    }
+    return `Imported ${v.length.toLocaleString('en-US')} ${preview.ledger} GL actuals into Other Income${fmMsg}`;
   });
 }
 

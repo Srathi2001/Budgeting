@@ -21,6 +21,7 @@ import {
 import type { RrPreview } from '@/lib/import/revenue-recognition';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
 import type { GlLedger, GlPreview, GlValue } from '@/lib/import/gl-other-income';
+import type { FmActual, FmActualsPreview } from '@/lib/import/gl-fm';
 import { locationOf } from '@/lib/budget/location';
 import { saveComparative } from '../analysis/actions';
 
@@ -298,7 +299,7 @@ export function PropertiesPanel({ rows }: { rows: PropRow[] }) {
 
 // ---- users ------------------------------------------------------------------------------------
 
-type UserRow = { id: number; email: string; name: string; role: 'ADMIN' | 'FINANCE' | 'PM'; coordinator: string | null; active: boolean };
+type UserRow = { id: number; email: string; name: string; role: 'ADMIN' | 'FINANCE' | 'PM' | 'FM'; coordinator: string | null; active: boolean };
 
 export function UsersPanel({ rows, isAdmin }: { rows: UserRow[]; isAdmin: boolean }) {
   const { pending, run, Msg } = useAction();
@@ -321,6 +322,7 @@ export function UsersPanel({ rows, isAdmin }: { rows: UserRow[]; isAdmin: boolea
         {isAdmin && <option>ADMIN</option>}
         <option>FINANCE</option>
         <option>PM</option>
+        <option value="FM">FM (facilities management)</option>
       </select>
       <input name="coordinator" defaultValue={u?.coordinator ?? ''} placeholder="PC code (PMs)" className="input" />
       <input name="password" type="password" placeholder={u ? 'New password (optional)' : 'Password'} className="input" autoComplete="new-password" />
@@ -795,7 +797,7 @@ export function GlImportPanel({
   last: { at: string; file: string | null } | null;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [plan, setPlan] = useState<{ values: GlValue[]; preview: GlPreview } | null>(null);
+  const [plan, setPlan] = useState<{ values: GlValue[]; preview: GlPreview; fm: { rows: FmActual[]; preview: FmActualsPreview } | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const apply = useAction();
@@ -850,7 +852,7 @@ export function GlImportPanel({
               onClick={() =>
                 plan &&
                 apply.run(async () => {
-                  const r = await applyGlActuals(versionId, plan.values, plan.preview, file?.name ?? null);
+                  const r = await applyGlActuals(versionId, plan.values, plan.preview, file?.name ?? null, plan.fm);
                   if (!r.error) setPlan(null);
                   return r;
                 })
@@ -905,6 +907,40 @@ export function GlImportPanel({
             row={(x) => [x.bu, x.company, x.segment, x.name, fmt(x.A2), fmt(x.A1), fmt(x.YTD)]}
           />
           <ListBlock title="Not imported" hint="" items={p.skipped} cols={['What', 'Why']} row={(x) => [x.what, x.detail]} />
+          {plan?.fm && (
+            <>
+              <div className="pt-2 text-sm font-semibold">
+                FM cost actuals <span className="font-normal">· {plan.fm.preview.from} to {plan.fm.preview.to}, replaced for these months</span>
+              </div>
+              <div className="frame max-w-xl">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Year</th>
+                      <th className="num">Maintenance 627xx</th>
+                      <th className="num">Capex 117xx</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plan.fm.preview.byYear.map((y) => (
+                      <tr key={y.year}>
+                        <td>{y.year}</td>
+                        <td className="num tabular-nums">{fmt(y.maintenance)}</td>
+                        <td className="num tabular-nums">{fmt(y.capex)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ListBlock
+                title="FM costs on buildings not in the budget"
+                hint="kept at company level"
+                items={plan.fm.preview.unmatched}
+                cols={['Property code', 'AED']}
+                row={(x) => [x.segment, fmt(x.amount)]}
+              />
+            </>
+          )}
         </div>
       )}
     </div>

@@ -9,6 +9,12 @@ export async function proxy(request: NextRequest) {
     if (request.nextUrl.pathname !== '/') url.searchParams.set('next', request.nextUrl.pathname);
     return NextResponse.redirect(url);
   }
+  // facilities management works in the FM budget only (lease, tenant and revenue screens are not theirs)
+  const path = request.nextUrl.pathname;
+  if (session.role === 'FM' && path !== '/fm' && !path.startsWith('/fm/')) {
+    if (path.startsWith('/api/')) return new NextResponse('Forbidden', { status: 403 });
+    return NextResponse.redirect(new URL('/fm', request.url));
+  }
   return NextResponse.next();
 }
 

@@ -5,7 +5,7 @@ const MAX_AGE_SECONDS = 60 * 60 * 12;
 
 export interface SessionPayload {
   uid: number;
-  role: 'ADMIN' | 'FINANCE' | 'PM';
+  role: 'ADMIN' | 'FINANCE' | 'PM' | 'FM';
   coordinator: string | null;
   name: string;
 }

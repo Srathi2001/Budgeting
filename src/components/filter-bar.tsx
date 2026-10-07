@@ -28,6 +28,7 @@ const FILTERED_TABS: Record<string, boolean> = {
   '/master': true,
   '/other-income': false,
   '/submissions': true,
+  '/fm': true,
 };
 
 export function FiltersProvider({ initial, universe, children }: { initial: Filters; universe: FilterProperty[]; children: ReactNode }) {

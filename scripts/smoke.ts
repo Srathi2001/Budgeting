@@ -1,4 +1,4 @@
-// Smoke test against a running server: creates sessions for a finance user and a PM,
+// Smoke test against a running server: creates sessions for a finance user, a PM and facilities management,
 // then fetches every page and export and reports status codes.
 //   npx tsx scripts/smoke.ts [baseUrl]
 import 'dotenv/config';
@@ -18,10 +18,10 @@ async function signIn(email: string): Promise<string> {
 }
 
 async function main() {
-  for (const email of ['finance@budget.local', 'ruchi@budget.local']) {
+  for (const email of ['finance@budget.local', 'ruchi@budget.local', 'fmd@budget.local']) {
     const cookie = await signIn(email);
     console.log(`\n${email}`);
-    for (const path of ['/', '/master', '/master?p=1', '/summary', '/summary?view=cash', '/analysis', '/pnl', '/other-income', '/summary?view=flow', '/submissions', '/admin', '/admin?tab=fusion', '/admin?tab=gl', '/admin?tab=revenue', '/admin?tab=versions', '/admin?tab=assumptions', '/admin?tab=rera', '/admin?tab=comparatives', '/admin?tab=users', '/admin?tab=properties', '/api/export/comparatives', '/api/export/master', '/api/export/analysis', '/api/export/pnl', '/api/export/template']) {
+    for (const path of ['/', '/master', '/master?p=1', '/summary', '/summary?view=cash', '/analysis', '/pnl', '/other-income', '/fm', '/summary?view=flow', '/submissions', '/admin', '/admin?tab=fusion', '/admin?tab=gl', '/admin?tab=revenue', '/admin?tab=versions', '/admin?tab=assumptions', '/admin?tab=rera', '/admin?tab=comparatives', '/admin?tab=users', '/admin?tab=properties', '/api/export/comparatives', '/api/export/master', '/api/export/analysis', '/api/export/pnl', '/api/export/template']) {
       const t = Date.now();
       const res = await fetch(`${base}${path}`, { headers: { cookie }, redirect: 'manual' });
       const body = await res.arrayBuffer();

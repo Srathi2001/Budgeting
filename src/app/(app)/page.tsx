@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
 import { loadDashboardData } from '@/lib/budget/dashboard';
 import { getFilters } from '@/lib/filters-server';
@@ -5,6 +6,7 @@ import { Dashboard } from './dashboard';
 
 export default async function DashboardPage() {
   const user = await requireUser();
+  if (user.role === 'FM') redirect('/fm');
   const { version } = await getActiveVersion();
   const props = await visibleProperties(user);
   const data = await loadDashboardData(version!, props.map((p) => p.id), await getFilters());

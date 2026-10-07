@@ -6,7 +6,7 @@ import type { Filters } from '@/lib/filters';
 import type { Category } from './category';
 import { otherIncomeMonthly, type PropertyRollup } from './reports';
 import { OI_ACCOUNTS } from './other-income-types';
-import { EXPENSE_LINES, expenseMonthly } from './expenses';
+import { EXPENSE_LINES, budgetedExpenseLines, propertyExpenses } from './expenses';
 import { ENTITIES, GROUP_NAME, type GroupClass } from './group';
 import { PMA_EXPENSE, groupAtoms, sumAtoms, type Atom } from './group-report';
 import { MONTHS, sum } from '@/lib/format';
@@ -38,29 +38,33 @@ export async function summaryData(
   const f = scope.filters;
   const general = isFinance(user) && !f.pm.length && !f.cat.length && !f.prop.length;
   const oi = await otherIncomeMonthly(versionId, scope.propertyIds, scope.categories, (bu) => general && (!f.bu.length || f.bu.includes(bu)));
-  return { atoms: groupAtoms(rolls, oi), expenses: await expenseMonthly() };
+  const costs = await propertyExpenses(versionId, scope.propertyIds);
+  return { atoms: groupAtoms(rolls, oi, costs), expenses: await budgetedExpenseLines(versionId) };
 }
 
 /** the parts both monthly statements share (the group's: entities outside it are left out) */
-function parts(all: Atom[], expenses: Map<string, number[] | null>) {
+function parts(all: Atom[], expenses: Set<string>) {
   const atoms = all.filter((a) => a.cls !== 'outside');
   const S = (match: (a: Atom) => boolean, cls?: GroupClass[]) => sumAtoms(atoms, (a) => match(a) && (!cls || cls.includes(a.cls)));
   const line = (l: string) => (a: Atom) => a.line === l;
   const oiLines: StatementLine[] = OI_ACCOUNTS.map((a) => ({ label: a.name, code: a.code, vals: S(line(`oi:${a.code}`)), kind: 'item' as const })).filter((l) => any(l.vals!));
   const pma = S(line(`exp:${PMA_EXPENSE.key}`));
   const expLines: StatementLine[] = [
-    ...EXPENSE_LINES.map((l) => ({ label: l.label, vals: expenses.get(l.key) ?? null, kind: 'item' as const })),
+    ...EXPENSE_LINES.map((l) => ({ label: l.label, vals: expenses.has(l.key) ? S(line(`exp:${l.key}`)) : null, kind: 'item' as const })),
     ...(any(pma) ? [{ label: PMA_EXPENSE.label, vals: pma, kind: 'item' as const }] : []),
   ];
   return { S, line, oiLines, oiTotal: addUp(oiLines.map((l) => l.vals)) ?? z12(), expLines, expTotal: addUp(expLines.map((l) => l.vals)) };
 }
 
-export function incomeStatement(all: Atom[], expenses: Map<string, number[] | null>): StatementLine[] {
+export function incomeStatement(all: Atom[], expenses: Set<string>): StatementLine[] {
   const { S, line, oiLines, oiTotal, expLines, expTotal } = parts(all, expenses);
   const rent = S(line('rent'));
   const income = MONTHS.map((_, i) => rent[i] + oiTotal[i]);
   const net = MONTHS.map((_, i) => income[i] - (expTotal?.[i] ?? 0));
-  const owners = S((a) => a.line === 'rent' || isOi(a), ['owners']);
+  // PMC buildings: their income less their costs is the owners'
+  const ownersIncome = S((a) => a.line === 'rent' || isOi(a), ['owners']);
+  const ownersCost = S(isExp, ['owners']);
+  const owners = MONTHS.map((_, i) => ownersIncome[i] - ownersCost[i]);
   const elimIncome = S(isOi, ['intergroup']);
   const elimCost = S(isExp, ['intergroup']);
   const adjusted = any(owners) || any(elimIncome) || any(elimCost);
@@ -86,7 +90,7 @@ export function incomeStatement(all: Atom[], expenses: Map<string, number[] | nu
   ];
 }
 
-export function cashStatement(all: Atom[], expenses: Map<string, number[] | null>): StatementLine[] {
+export function cashStatement(all: Atom[], expenses: Set<string>): StatementLine[] {
   const { S, line, expLines } = parts(all, expenses);
   const cashIn: StatementLine[] = [
     { label: 'Rent cheques (ex VAT)', vals: S(line('cash:rent')), kind: 'item' },
@@ -103,7 +107,7 @@ export function cashStatement(all: Atom[], expenses: Map<string, number[] | null
   const net = MONTHS.map((_, i) => tin[i] + tout[i]);
   const inLines = ['cash:rent', 'cash:vat', 'cash:oi', 'cash:depositIn'];
   const ownersIn = S((a) => inLines.includes(a.line), ['owners']);
-  const ownersOut = S(line('cash:depositOut'), ['owners']);
+  const ownersOut = S((a) => a.line === 'cash:depositOut' || a.line.startsWith('cash:exp:'), ['owners']);
   const owners = MONTHS.map((_, i) => ownersIn[i] - ownersOut[i]);
   const elimIn = S(line('cash:oi'), ['intergroup']);
   const elimOut = S((a) => a.line.startsWith('cash:exp:'), ['intergroup']);
@@ -139,7 +143,7 @@ export interface GroupPnl {
 }
 
 /** The budget year by entity, as the budget's PnLxREHLxANPM: standalone, adjustments, the group, then entities outside it. */
-export function groupPnl(atoms: Atom[], expenses: Map<string, number[] | null>): GroupPnl {
+export function groupPnl(atoms: Atom[], expenses: Set<string>): GroupPnl {
   const inside = ENTITIES.filter((e) => !e.outside);
   const outside = ENTITIES.filter((e) => e.outside && atoms.some((a) => a.entity === e.key && Math.abs(sum(a.months)) >= 0.5));
   const total = (match: (a: Atom) => boolean, ok: (a: Atom) => boolean) => sum(atoms.filter((a) => match(a) && ok(a)).map((a) => sum(a.months)));
@@ -153,13 +157,8 @@ export function groupPnl(atoms: Atom[], expenses: Map<string, number[] | null>):
   const n = inside.length + 4 + outside.length;
   const isRent = (a: Atom) => a.line === 'rent';
   const oiAccounts = OI_ACCOUNTS.filter((acc) => atoms.some((a) => a.line === `oi:${acc.code}` && Math.abs(sum(a.months)) >= 0.5));
-  const placeholders = EXPENSE_LINES.map((l) => ({ l, v: expenses.get(l.key) ?? null }));
-  const placeholderTotal = sum(placeholders.map((p) => (p.v ? sum(p.v) : 0)));
   const income = cells((a) => isRent(a) || isOi(a));
-  const cost = cells(isExp, placeholderTotal);
-  // a not-yet-split expense: only a standalone / group figure once budgeted
-  const placeholderCells = (v: number[] | null): (number | null)[] =>
-    v ? [...inside.map(() => null), sum(v), 0, 0, sum(v), ...outside.map(() => null)] : Array.from({ length: n }, () => null);
+  const cost = cells(isExp);
   const empty = Array.from({ length: n }, () => null);
   return {
     inside: inside.map(({ key, label }) => ({ key, label })),
@@ -171,7 +170,8 @@ export function groupPnl(atoms: Atom[], expenses: Map<string, number[] | null>):
       { label: 'Total other income', kind: 'sub', vals: cells(isOi) },
       { label: 'Total income', kind: 'sub', vals: income },
       { label: 'Expenses', kind: 'group', vals: empty },
-      ...placeholders.map(({ l, v }) => ({ label: l.label, kind: 'item' as const, vals: placeholderCells(v) })),
+      // lines not budgeted yet stay empty
+      ...EXPENSE_LINES.map((l) => ({ label: l.label, kind: 'item' as const, vals: expenses.has(l.key) ? cells((a) => a.line === `exp:${l.key}`) : empty })),
       ...(atoms.some((a) => a.line === `exp:${PMA_EXPENSE.key}`)
         ? [{ label: PMA_EXPENSE.label, kind: 'item' as const, vals: cells((a) => a.line === `exp:${PMA_EXPENSE.key}`) }]
         : []),

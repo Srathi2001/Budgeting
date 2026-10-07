@@ -11,6 +11,7 @@ const ICON = {
   analysis: 'M2 14V8M6 14V4M10 14V9M14 14V2',
   income: 'M8 2v12M2 8h12',
   pnl: 'M3 14V2h7v12M10 6h3v8M1 14h14M5 5h2M5 8h2M5 11h2',
+  fm: 'M10 2a4 4 0 0 0-3.8 5.2L2 11.4V14h2.6l4.2-4.2A4 4 0 1 0 10 2z',
   submissions: 'M3 8l3 3 7-7',
   admin: 'M2 4h12M2 8h12M2 12h12M5 2.5v3M11 6.5v3M7 10.5v3',
 };
@@ -24,12 +25,13 @@ const BUDGET = [
   { href: '/master', label: 'Lease Budget', icon: ICON.lease },
   { href: '/other-income', label: 'Other Income', icon: ICON.income },
 ];
+const COSTS = [{ href: '/fm', label: 'FM Budget', icon: ICON.fm }];
 const GOVERNANCE = [{ href: '/submissions', label: 'Submissions', icon: ICON.submissions }];
 const ADMIN = { href: '/admin', label: 'Admin', icon: ICON.admin };
 
 const isActive = (href: string, path: string) => (href === '/' ? path === '/' : path.startsWith(href));
 
-export function NavLinks({ finance }: { finance: boolean }) {
+export function NavLinks({ finance, fm }: { finance: boolean; fm: boolean }) {
   const path = usePathname();
   const link = (l: (typeof BUDGET)[number]) => (
     <Link key={l.href} href={l.href} aria-current={isActive(l.href, path) ? 'page' : undefined}>
@@ -39,9 +41,13 @@ export function NavLinks({ finance }: { finance: boolean }) {
       {l.label}
     </Link>
   );
+  // facilities management works in the FM budget only
+  if (fm) return <nav className="anh-nav">{COSTS.map(link)}</nav>;
   return (
     <nav className="anh-nav">
       {BUDGET.map(link)}
+      <span className="anh-eyebrow">Costs</span>
+      {COSTS.map(link)}
       <span className="anh-eyebrow">Governance</span>
       {(finance ? [...GOVERNANCE, ADMIN] : GOVERNANCE).map(link)}
     </nav>
@@ -51,6 +57,6 @@ export function NavLinks({ finance }: { finance: boolean }) {
 /** Last crumb in the top bar: the current page. */
 export function PageCrumb() {
   const path = usePathname();
-  const page = [...BUDGET, ...GOVERNANCE, ADMIN].find((l) => isActive(l.href, path));
+  const page = [...BUDGET, ...COSTS, ...GOVERNANCE, ADMIN].find((l) => isActive(l.href, path));
   return page ? <b>{page.label}</b> : null;
 }

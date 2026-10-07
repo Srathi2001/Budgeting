@@ -7,7 +7,7 @@ import { db, schema } from '@/db';
 import { SESSION_COOKIE, verifySession } from './session';
 import { isFinance, type Actor } from './permissions';
 
-export { isFinance, visibleProperties, editablePropertyIds, canEditProperty, type EditCheck } from './permissions';
+export { isFinance, isFm, visibleProperties, editablePropertyIds, canEditProperty, canEditFm, type EditCheck } from './permissions';
 
 export const VERSION_COOKIE = 'vid';
 
@@ -44,11 +44,19 @@ export async function requireFinance(): Promise<CurrentUser> {
   return user;
 }
 
-/** The version the user is working on: cookie choice, else the newest open version, else the newest. */
+/**
+ * The version the user is working on: cookie choice, else the newest open version, else the newest.
+ * Imported baselines (the 2026 workbook) aren't offered: they only supply the prior-year budget
+ * (Dashboard, Revenue Analysis, FM 2026B), which those screens read directly.
+ */
 export const getActiveVersion = cache(async () => {
   const store = await cookies();
   const wanted = Number(store.get(VERSION_COOKIE)?.value);
-  const all = await db.select().from(schema.budgetVersions).orderBy(desc(schema.budgetVersions.year), desc(schema.budgetVersions.id));
+  const all = await db
+    .select()
+    .from(schema.budgetVersions)
+    .where(eq(schema.budgetVersions.isBaseline, false))
+    .orderBy(desc(schema.budgetVersions.year), desc(schema.budgetVersions.id));
   const version = all.find((v) => v.id === wanted) ?? all.find((v) => v.status === 'OPEN') ?? all[0] ?? null;
   return { version, all };
 });

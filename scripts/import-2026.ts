@@ -217,6 +217,7 @@ async function main() {
   await db.insert(t.users).values([
     { email: 'admin@budget.local', name: 'Administrator', passwordHash: hash, role: 'ADMIN' },
     { email: 'finance@budget.local', name: 'Finance', passwordHash: hash, role: 'FINANCE' },
+    { email: 'fmd@budget.local', name: 'Facilities Management', passwordHash: hash, role: 'FM' },
     ...coordinators.map((c) => ({
       email: `${c.toLowerCase()}@budget.local`,
       name: c.charAt(0) + c.slice(1).toLowerCase(),
@@ -225,7 +226,7 @@ async function main() {
       coordinator: c,
     })),
   ]);
-  console.log(`  users: admin, finance, ${coordinators.map((c) => c.toLowerCase()).join(', ')} @budget.local / password "${password}"`);
+  console.log(`  users: admin, finance, fmd, ${coordinators.map((c) => c.toLowerCase()).join(', ')} @budget.local / password "${password}"`);
 
   // ---- roll forward to 2027 -----------------------------------------------------------------
   console.log('Rolling forward to 2027…');

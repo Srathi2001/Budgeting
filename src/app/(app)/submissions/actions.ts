@@ -26,6 +26,7 @@ export async function transition(
   if (!version || version.status === 'LOCKED') return { error: 'Version is locked' };
   const [prop] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
   if (!prop) return { error: 'Property not found' };
+  if (user.role === 'FM') return { error: 'Facilities management submits the FM budget only' };
   if (t.finance && !isFinance(user)) return { error: 'Only Finance can do this' };
   if (!t.finance && !isFinance(user) && prop.coordinator !== user.coordinator) return { error: 'Not your property' };
 

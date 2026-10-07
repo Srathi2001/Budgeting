@@ -1,9 +1,10 @@
 // Integration check of the save path against the database (run after the import):
 // edits, overrides, permissions, validation, locked versions, audit trail. Restores data at the end.
 import 'dotenv/config';
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../src/db';
 import { applyLineChanges } from '../src/lib/budget/save';
+import { fmTransitionAs, saveFmLinesAs } from '../src/lib/budget/fm-save';
 import { recalcLines } from '../src/lib/budget/calc';
 import { saveOtherIncome } from '../src/lib/budget/other-income';
 
@@ -142,6 +143,53 @@ async function main() {
   const [lockedLine] = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, locked.id)).limit(1);
   res = await applyLineChanges(fin, locked.id, [{ lineId: lockedLine.id, patch: { notes: 'X' } }]);
   check('locked version is read only, even for Finance', /locked/.test(res.errors[0]?.message ?? ''));
+
+  // 5. FM budget: FMD enters lines until it submits; what came from the tool stays as it is
+  const [fmUser] = await db.select().from(schema.users).where(eq(schema.users.email, 'fmd@budget.local'));
+  if (fmUser) {
+    // a facility with lines carried from last year
+    const [withCarried] = await db.select().from(schema.fmLines).where(and(eq(schema.fmLines.versionId, open.id), eq(schema.fmLines.source, 'CARRIED'))).limit(1);
+    const fid = withCarried?.propertyId ?? original.propertyId;
+    const fmWhere = and(eq(schema.fmLines.versionId, open.id), eq(schema.fmLines.propertyId, fid));
+    const keep = await db.select().from(schema.fmLines).where(fmWhere);
+    const [subBefore] = await db.select().from(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, open.id), eq(schema.fmSubmissions.propertyId, fid)));
+    const line = { id: null, workType: 'R01', element: '12', subElement: 'Chiller', description: 'TEST compressor replacement', businessNeed: 'Functional', kind: 'PLANNED', amount: 50000, month: 3, remarks: null };
+    const asRows = (ls: typeof keep) => ls.map((l) => ({ id: l.id, workType: l.workType, element: l.element, subElement: l.subElement, description: l.description, businessNeed: l.businessNeed, kind: l.kind, amount: l.amount, month: l.month, remarks: l.remarks }));
+    let fr = await saveFmLinesAs(fmUser, open.id, fid, { lines: [...asRows(keep), line], deleted: [] });
+    check('FMD adds an FM line', !fr.error && /1 added/.test(fr.ok ?? ''), fr.error ?? fr.ok);
+    const added = (await db.select().from(schema.fmLines).where(fmWhere)).find((l) => l.description === 'TEST compressor replacement');
+    check('renewal line keeps its month, source Entered', added?.month === 3 && added.source === 'FM');
+    fr = await saveFmLinesAs(pm, open.id, fid, { lines: [], deleted: [] });
+    check('PM cannot enter the FM budget', !!fr.error, fr.error);
+    fr = await saveFmLinesAs(fmUser, open.id, fid, { lines: [{ ...line, amount: -1 }], deleted: [] });
+    check('negative FM amount rejected', !!fr.error, fr.error);
+    const carried = keep.find((l) => l.source !== 'FM');
+    if (carried) {
+      fr = await saveFmLinesAs(fmUser, open.id, fid, { lines: [{ ...asRows([carried])[0], description: 'CHANGED', workType: 'M02', amount: carried.amount + 1 }], deleted: [] });
+      const [after] = await db.select().from(schema.fmLines).where(eq(schema.fmLines.id, carried.id));
+      check('carried line: amount changes, the work stays as it is', after.amount === carried.amount + 1 && after.description === carried.description && after.workType === carried.workType);
+      fr = await saveFmLinesAs(fmUser, open.id, fid, { lines: [], deleted: [carried.id] });
+      check('carried line cannot be removed', /cannot be removed/.test(fr.error ?? ''), fr.error);
+    }
+    fr = await saveFmLinesAs(fmUser, open.id, fid, { lines: [], deleted: [] });
+    check('FM cannot edit lease budget inputs', (await applyLineChanges(fmUser, open.id, [{ lineId: original.id, patch: { notes: 'X' } }])).errors.length === 1);
+    fr = await fmTransitionAs(fmUser, open.id, fid, 'submit', 'test');
+    check('FMD submits a facility', !fr.error, fr.error);
+    fr = await saveFmLinesAs(fmUser, open.id, fid, { lines: [line], deleted: [] });
+    check('FMD cannot edit a submitted facility', /submitted/.test(fr.error ?? ''), fr.error);
+    fr = await fmTransitionAs(fmUser, open.id, fid, 'approve', null);
+    check('only Finance approves', /Only Finance/.test(fr.error ?? ''), fr.error);
+    fr = await fmTransitionAs(fin, open.id, fid, 'approve', null);
+    check('Finance approves', !fr.error, fr.error);
+    fr = await saveFmLinesAs(fin, locked.id, fid, { lines: [], deleted: [] });
+    check('locked version FM budget is read only', /locked/.test(fr.error ?? ''), fr.error);
+    // restore
+    await db.delete(schema.fmLines).where(fmWhere);
+    if (keep.length) await db.insert(schema.fmLines).values(keep);
+    await db.delete(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, open.id), eq(schema.fmSubmissions.propertyId, fid)));
+    if (subBefore) await db.insert(schema.fmSubmissions).values(subBefore);
+    await db.delete(schema.auditLog).where(and(eq(schema.auditLog.propertyId, fid), inArray(schema.auditLog.entity, ['fm_lines', 'fm_submission'])));
+  } else console.log('SKIP  FM checks: no fmd@budget.local user');
 
   // restore
   await db

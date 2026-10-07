@@ -1,6 +1,7 @@
 import { getCurrentUser, getActiveVersion } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups, cashFlow } from '@/lib/budget/reports';
+import { EXPENSE_LINES, budgetedExpenseLines, propertyExpenseTotals } from '@/lib/budget/expenses';
 import { xlsxResponse, r2 } from '@/lib/export/xlsx';
 import { MONTHS, sum } from '@/lib/format';
 
@@ -12,12 +13,28 @@ export async function GET() {
   // the export follows the page filters (BU, PM, category, property)
   const scope = await filteredScope(user);
   const rolls = await propertyRollups(version.id, scope.propertyIds, scope.categories);
+  const budgeted = await budgetedExpenseLines(version.id);
+  const costs = await propertyExpenseTotals(version.id, scope.propertyIds);
 
   const pnl = [
-    ['S.N.', 'BU', 'Units', 'CODE', 'PROPERTY NAME', 'Rental revenue', 'Total expenses', 'Gross profit', 'Cash inflow'],
+    ['S.N.', 'BU', 'Units', 'CODE', 'PROPERTY NAME', 'Rental revenue', ...EXPENSE_LINES.map((l) => l.label), 'Total expenses', 'Gross profit', 'Cash inflow'],
     ...rolls.map((r, i) => {
       const rent = sum(r.revenue);
-      return [i + 1, r.buName, r.kind === 'CAMP' ? 'Camps' : r.units, r.code, r.name, r2(rent), null, r2(rent), r2(sum(cashFlow(r)))];
+      const c = costs.get(r.propertyId) ?? {};
+      const exp = sum(Object.values(c));
+      return [
+        i + 1,
+        r.buName,
+        r.kind === 'CAMP' ? 'Camps' : r.units,
+        r.code,
+        r.name,
+        r2(rent),
+        // lines not budgeted yet stay blank
+        ...EXPENSE_LINES.map((l) => (budgeted.has(l.key) ? r2(c[l.key] ?? 0) : null)),
+        r2(exp),
+        r2(rent - exp),
+        r2(sum(cashFlow(r))),
+      ];
     }),
   ];
   const monthly = (get: (r: (typeof rolls)[number]) => number[]) => [

@@ -8,16 +8,20 @@ export function isFinance(user: Actor) {
   return user.role === 'ADMIN' || user.role === 'FINANCE';
 }
 
-/** Properties the user may see. PMs see their own (coordinator), finance sees all. */
+export function isFm(user: Actor) {
+  return user.role === 'FM';
+}
+
+/** Properties the user may see. PMs see their own (coordinator); finance and FM (facilities management) see all. */
 export async function visibleProperties(user: Actor) {
   const p = schema.properties;
   const rows = await db.select().from(p).where(eq(p.active, true)).orderBy(p.buCode, p.code);
-  return isFinance(user) ? rows : rows.filter((r) => r.coordinator === user.coordinator);
+  return isFinance(user) || isFm(user) ? rows : rows.filter((r) => r.coordinator === user.coordinator);
 }
 
-/** All property ids the user may edit in a version. */
+/** All property ids the user may edit in a version (lease and revenue inputs; FM edits only the FM budget). */
 export async function editablePropertyIds(user: Actor, version: schema.BudgetVersion): Promise<Set<number>> {
-  if (version.status === 'LOCKED') return new Set();
+  if (version.status === 'LOCKED' || isFm(user)) return new Set();
   const visible = await visibleProperties(user);
   if (isFinance(user)) return new Set(visible.map((p) => p.id));
   const subs = await db.select().from(schema.submissions).where(eq(schema.submissions.versionId, version.id));
@@ -27,12 +31,27 @@ export async function editablePropertyIds(user: Actor, version: schema.BudgetVer
 
 export type EditCheck = { ok: true } | { ok: false; reason: string };
 
+/** Can the user change the FM budget of this facility? FM until it is submitted, Finance always (open versions). */
+export async function canEditFm(user: Actor, versionId: number, propertyId: number): Promise<EditCheck> {
+  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  if (!version) return { ok: false, reason: 'Version not found' };
+  if (version.status === 'LOCKED') return { ok: false, reason: 'This budget version is locked' };
+  if (isFinance(user)) return { ok: true };
+  if (!isFm(user)) return { ok: false, reason: 'The FM budget is entered by facilities management' };
+  const [sub] = await db.select().from(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, versionId), eq(schema.fmSubmissions.propertyId, propertyId)));
+  if (sub && (sub.status === 'SUBMITTED' || sub.status === 'APPROVED')) {
+    return { ok: false, reason: `This facility is ${sub.status.toLowerCase()}; ask Finance to return it for changes` };
+  }
+  return { ok: true };
+}
+
 /** Can the user change budget inputs of this property in this version? */
 export async function canEditProperty(user: Actor, versionId: number, propertyId: number): Promise<EditCheck> {
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) return { ok: false, reason: 'Version not found' };
   if (version.status === 'LOCKED') return { ok: false, reason: 'This budget version is locked' };
   if (isFinance(user)) return { ok: true };
+  if (isFm(user)) return { ok: false, reason: 'Facilities management enters the FM budget only' };
   const [prop] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
   if (!prop || prop.coordinator !== user.coordinator) return { ok: false, reason: 'Not your property' };
   const [sub] = await db

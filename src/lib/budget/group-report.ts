@@ -3,6 +3,7 @@
 // 12 monthly values (positive; the line says whether it is income, cost, cash in or cash out).
 import 'server-only';
 import type { PropertyRollup, OiMonthly } from './reports';
+import type { PropertyExpense } from './expenses';
 import { INTERGROUP, classifyOtherIncome, classifyRent, isMall, type EntityKey, type GroupClass } from './group';
 
 export interface Atom {
@@ -18,8 +19,14 @@ export const PMA_EXPENSE = { key: 'pma', label: 'PMA fee to ANPM' };
 
 const entityOf = (buCode: string, propertyCode: string | null): EntityKey => (isMall(propertyCode) ? 'MALL' : (buCode as EntityKey));
 
-export function groupAtoms(rolls: PropertyRollup[], oi: OiMonthly[]): Atom[] {
+export function groupAtoms(rolls: PropertyRollup[], oi: OiMonthly[], costs: PropertyExpense[] = []): Atom[] {
   const atoms: Atom[] = [];
+  // building costs count for the group as the building's rent does (PMC buildings: the owners')
+  for (const c of costs) {
+    const entity = entityOf(c.buCode, c.code);
+    const cls = classifyRent(c.buCode);
+    atoms.push({ line: `exp:${c.line}`, entity, cls, months: c.months }, { line: `cash:exp:${c.line}`, entity, cls, months: c.months });
+  }
   for (const r of rolls) {
     const entity = entityOf(r.buCode, r.code);
     const cls = classifyRent(r.buCode);
