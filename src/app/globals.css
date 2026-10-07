@@ -504,6 +504,10 @@ body {
    ------------------------------------------------------------------------------------------- */
 :root,
 [data-theme] {
+  /* text is one colour (white in Carbon, black in Paper), normal or bold: no grey text anywhere
+     (user, 2026-10-07). The secondary and muted inks, and the Tailwind grays mapped to them, follow. */
+  --ink-2: var(--ink);
+  --ink-muted: var(--ink);
   --line-soft: color-mix(in srgb, var(--line) 45%, var(--surface));
   /* headers: no dark fill; bold dark text on the surface, one rule underneath (cell text stays normal weight) */
   --th-bg: var(--surface);
