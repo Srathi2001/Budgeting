@@ -9,8 +9,8 @@ import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
 import { locationOf } from './location';
 
-/** What follows a contract that falls due: the Lease Budget decision, or a year already contracted in Oracle. */
-export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let' | 'Contracted';
+/** What follows a contract that falls due (a year already contracted in Oracle counts as Renew). */
+export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let';
 
 /** A contract (current lease or a renewal) falling due: in the budget year, or already overdue. */
 export interface DueEvent {
@@ -77,8 +77,8 @@ const monthOf = (day: number) => new Date(day * 86_400_000);
 
 /**
  * Contracts of a line that fall due in the budget year, or are already overdue, and what follows:
- * after the current lease, the PM's decision (renew / new tenant after the vacancy days / not re-let)
- * unless Oracle has the next year contracted; after a renewal, a further renewal unless marked No.
+ * after the current lease, the PM's decision (renew / new tenant after the vacancy days / not re-let);
+ * after a renewal, a further renewal unless marked No. A year already contracted in Oracle is a renewal.
  */
 function dueEvents(d: DashUnit, l: schema.LeaseLine, contracts: Contract[], year: number, yearStart: number, today: number) {
   const order: Contract['kind'][] = ['CURRENT', 'RENEWAL1', 'RENEWAL2', 'RENEWAL3'];
@@ -95,7 +95,7 @@ function dueEvents(d: DashUnit, l: schema.LeaseLine, contracts: Contract[], year
     // from the decisions, not from whether the next contract falls inside the year (one ending on
     // 31 Dec renews into the next year)
     let outcome: ExpiryOutcome;
-    if (i + 1 <= l.contracted) outcome = 'Contracted';
+    if (i + 1 <= l.contracted) outcome = 'Renew';
     else if (kind === 'CURRENT') outcome = l.noRenewal ? 'Not re-let' : l.renew1 ? 'Renew' : 'New tenant';
     else outcome = (i === 1 ? l.r2Renew : i === 2 ? l.r3Renew : null) === false ? 'Not re-let' : 'Renew';
     d.due.push({

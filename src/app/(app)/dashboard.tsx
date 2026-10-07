@@ -42,14 +42,9 @@ function psfBy(units: DashUnit[], key: (u: DashUnit) => string) {
   }
   return [...m].map(([label, a]) => ({ label, ...a, psf: a.letArea > 0 ? a.rent / a.letArea : NaN })).filter((r) => r.letArea > 0);
 }
-// stack order: already contracted at the base, then the budget decisions (validated palette order)
-const OUTCOMES: ExpiryOutcome[] = ['Contracted', 'Renew', 'New tenant', 'Not re-let'];
-const OUTCOME_LABEL: Record<ExpiryOutcome, string> = {
-  Contracted: 'Renewed in Oracle',
-  Renew: 'Renew',
-  'New tenant': 'New tenant',
-  'Not re-let': 'Not re-let',
-};
+// stack order (registry order); multi-year leases already contracted in Oracle count as Renew
+const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
+const OUTCOME_LABEL: Record<ExpiryOutcome, string> = { Renew: 'Renew', 'New tenant': 'New tenant', 'Not re-let': 'Not re-let' };
 
 export function Dashboard({ data, locked }: { data: DashboardData; locked: boolean }) {
   // the shared page filters (Business unit, Property manager, Category, Property)
@@ -86,10 +81,8 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         renew: { n: of('Renew').length, rent: sum(of('Renew').map((e) => e.rent)), next: sum(of('Renew').map((e) => e.nextRent ?? 0)) },
         newT: { n: nt.length, vac: vac.length ? sum(vac) / vac.length : null, next: sum(nt.map((e) => e.nextRent ?? 0)) },
         lost: { n: of('Not re-let').length, rent: sum(of('Not re-let').map((e) => e.rent)) },
-        contracted: { n: of('Contracted').length, rent: sum(of('Contracted').map((e) => e.rent)) },
       };
     });
-    const decided = due.filter((e) => e.outcome !== 'Contracted');
     const vacAll = due.map((e) => e.vacancyDays).filter((v): v is number => v !== null);
     const byProp = new Map<number, { budget: number; prior: number }>();
     for (const u of units) {
@@ -133,8 +126,8 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
       issues: sum(units.map((u) => u.issues)),
       dueCount: due.length,
       dueRent: sum(due.map((e) => e.rent)),
-      // share of the leases the budget decides on (not already contracted) that renew
-      renewalRate: decided.length ? decided.filter((e) => e.outcome === 'Renew').length / decided.length : null,
+      // share of the leases falling due that renew
+      renewalRate: due.length ? due.filter((e) => e.outcome === 'Renew').length / due.length : null,
       avgVacancy: vacAll.length ? sum(vacAll) / vacAll.length : null,
       rentLost: sum(due.filter((e) => e.outcome === 'Not re-let').map((e) => e.rent)),
       dueTable,
@@ -289,7 +282,7 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
             />
           }
           table={{
-            head: ['Month', 'Leases due', 'Rent due', 'Renew', 'Renew: new rent', 'New tenant', 'Avg vacancy days', 'New tenant: rent', 'Not re-let', 'Rent lost', 'Renewed in Oracle', 'Moving in'],
+            head: ['Month', 'Leases due', 'Rent due', 'Renew', 'Renew: new rent', 'New tenant', 'Avg vacancy days', 'New tenant: rent', 'Not re-let', 'Rent lost', 'Moving in'],
             rows: m.dueTable.map((r, i) => [
               r.label,
               r.n,
@@ -301,7 +294,6 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
               Math.round(r.newT.next),
               r.lost.n,
               Math.round(r.lost.rent),
-              r.contracted.n,
               m.moveIns[i] === null ? '–' : Math.round(m.moveIns[i]!),
             ]),
           }}
