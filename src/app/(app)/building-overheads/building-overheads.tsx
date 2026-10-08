@@ -10,6 +10,7 @@ import { useFilters } from '@/components/filter-bar';
 import { propertyPasses } from '@/lib/filters';
 import { BOH_ACCOUNT, BOH_ACCOUNTS, BOH_LINES, BOH_LINE_LABEL, paidInOneMonth, type BohBlock, type BohChange, type BohRow } from '@/lib/budget/boh-types';
 import { saveBuildingOverheadCells } from './actions';
+import { TemplateButtons } from '@/components/template-buttons';
 
 const key = (propertyId: number, account: string) => `${propertyId}|${account}`;
 const omit = (d: Record<string, string>, k: string) => Object.fromEntries(Object.entries(d).filter(([x]) => x !== k));
@@ -236,6 +237,9 @@ export function BuildingOverheads({
             {versionName} · by building and GL account · actuals from the GL (Account Analysis Report) · property managers enter contracts and running costs, Finance
             enters utilities, insurance, watchmen, civil defence, consultancy and service charges
           </p>
+        </div>
+        <div className="ml-auto flex gap-2">
+          <TemplateButtons kind="building-overheads" versionId={versionId} canImport={!locked} />
         </div>
       </header>
 

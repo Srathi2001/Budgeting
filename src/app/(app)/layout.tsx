@@ -6,6 +6,7 @@ import { NavLinks, PageCrumb } from './nav-links';
 import { ThemeSwitch } from './theme-switch';
 import { VersionSwitcher } from './version-switcher';
 import { FilterBar, FiltersProvider } from '@/components/filter-bar';
+import { ExportTables } from '@/components/export-tables';
 import { filterUniverse, getFilters } from '@/lib/filters-server';
 
 export default async function AppLayout({ children }: LayoutProps<'/'>) {
@@ -54,6 +55,7 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
           <PageCrumb />
         </div>
         <span className="flex-1" />
+        <ExportTables />
         <ThemeSwitch initial={theme} />
       </header>
       <main className="min-w-0">

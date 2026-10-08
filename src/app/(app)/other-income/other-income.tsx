@@ -22,6 +22,7 @@ import {
 } from '@/lib/budget/other-income-types';
 import { GROUP_NAME, classifyOtherIncome, type GroupClass } from '@/lib/budget/group';
 import { saveOtherIncomeCells } from './actions';
+import { TemplateButtons } from '@/components/template-buttons';
 
 /** what is taken out of the total to reach the group's other income */
 const ADJUSTMENTS: { cls: GroupClass; label: string }[] = [
@@ -205,9 +206,12 @@ export function OtherIncome({
           <h1 className="page-title">Other Income</h1>
           <p className="page-sub">{versionName} · by property and GL account</p>
         </div>
-        <a className="btn ml-auto" href="/api/export/other-income" title="Saved values for the current filters (save typed changes first)">
-          Export to Excel
-        </a>
+        <div className="ml-auto flex gap-2">
+          <TemplateButtons kind="other-income" versionId={versionId} canImport={!locked} />
+          <a className="btn" href="/api/export/other-income" title="Saved values for the current filters (save typed changes first)">
+            Export to Excel
+          </a>
+        </div>
       </header>
 
       <div className="card flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">

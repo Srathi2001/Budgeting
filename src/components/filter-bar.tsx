@@ -127,7 +127,19 @@ export function FilterBar() {
       >
         Reset filters
       </button>
-      <span className="ml-auto text-xs text-slate-500">
+      <span
+        className="ml-auto text-xs text-slate-500"
+        // read by Export tables: what the exported tables were filtered on
+        data-filter-summary={[
+          f.bu.length ? `Business unit ${f.bu.join(', ')}` : '',
+          f.pm.length ? `Property manager ${f.pm.join(', ')}` : '',
+          f.cat.length ? `Category ${f.cat.join(', ')}` : '',
+          f.prop.length ? `Property ${universe.filter((p) => f.prop.includes(String(p.id))).map((p) => p.code).join(', ')}` : '',
+          `${inView} of ${universe.length} properties`,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      >
         {inView} of {universe.length} properties
       </span>
     </div>

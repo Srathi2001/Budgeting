@@ -1,5 +1,6 @@
 // Integration check of the save path against the database (run after the import):
 // edits, overrides, permissions, validation, locked versions, audit trail. Restores data at the end.
+import './allow-server-only';
 import 'dotenv/config';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../src/db';

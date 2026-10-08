@@ -9,6 +9,7 @@ import { fmt, sum } from '@/lib/format';
 import { STAFF_TEAMS } from '@/lib/budget/fm-types';
 import type { FmPageData } from '@/lib/budget/fm-page';
 import { saveFmStaff } from './actions';
+import { TemplateButtons } from '@/components/template-buttons';
 
 const parse = (s: string) => {
   const n = Number(s.replace(/[,\s]/g, ''));
@@ -53,6 +54,7 @@ export function FmLabour({ data }: { data: FmPageData }) {
             </button>
           )}
           {msg && <span className={`text-sm ${msg.error ? 'text-red-600' : ''}`}>{msg.error ?? msg.ok}</span>}
+          <TemplateButtons kind="fm-labour" versionId={version.id} canImport={edit} />
           <div className="anh-legend-cells ml-auto" aria-label="Cell legend">
             <span>
               <i className="input" />

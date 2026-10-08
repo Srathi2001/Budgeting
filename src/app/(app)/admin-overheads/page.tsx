@@ -4,6 +4,7 @@ import { loadAdminOverheads } from '@/lib/budget/admin';
 import { ITEM_KINDS, isItemKind } from '@/lib/budget/admin-items';
 import { AdminOverheads } from './admin-overheads';
 import { AdminSchedule } from './admin-schedule';
+import { TemplateButtons } from '@/components/template-buttons';
 
 export const metadata = { title: 'Admin Overheads · Budget' };
 
@@ -33,6 +34,7 @@ export default async function AdminOverheadsPage({ searchParams }: PageProps<'/a
           ))}
         </nav>
         <span className="ml-auto text-xs">AED</span>
+        {tab === 'overview' && <TemplateButtons kind="admin-overheads" versionId={version!.id} canImport={!locked} />}
       </div>
       {tab === 'overview' ? (
         <div className="min-h-0 flex-1 overflow-auto">
