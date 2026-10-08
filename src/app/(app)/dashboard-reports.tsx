@@ -6,11 +6,11 @@
 import { BarList, ChartCard, Columns, Legend, compact } from '@/components/charts';
 import { OI_TYPES, type DashboardReports } from '@/lib/budget/dashboard-reports-types';
 import { MEASURE, OI_TYPE_COLOR, buColor } from '@/lib/segments';
-import { fmt } from '@/lib/format';
+import { fmt, pct as pctOf, pctSigned } from '@/lib/format';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
-const pct = (n: number | null) => (n === null || !Number.isFinite(n) ? '–' : `${n < 0 ? '−' : '+'}${Math.abs(n * 100).toFixed(1)}%`);
-const share = (part: number, whole: number) => (whole ? `${((part / whole) * 100).toFixed(0)}%` : '–');
+const pct = (n: number | null) => (n === null || !Number.isFinite(n) ? '–' : pctSigned(n));
+const share = (part: number, whole: number) => (whole ? pctOf(part / whole) : '–');
 const r0 = (n: number | null) => (n === null ? '–' : Math.round(n));
 
 const OI_COLOR = OI_TYPE_COLOR;

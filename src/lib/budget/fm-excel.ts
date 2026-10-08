@@ -6,6 +6,7 @@
 // input columns are compared with the tool and every change goes through the same save path as the
 // form (permissions, submitted facilities, validation).
 import ExcelJS from 'exceljs';
+import { XL } from '@/lib/format';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, FM_KIND_LABEL, WORK_TYPE, WORK_TYPES, elementLabel, glOf, isWorkType, type FmKind } from './fm-types';
 import type { FmLineRow } from './fm-page';
 
@@ -132,7 +133,7 @@ export async function buildFmTemplate(
     const r = fs.addRow([f.code, f.name, f.bu, f.zone?.replace('ZONE_', 'Zone ') ?? '', ...(ctx.priorLabel ? [f.prior ?? 0] : []), f.actual, f.budget, f.status === 'SUBMITTED' ? 'In review' : f.status.charAt(0) + f.status.slice(1).toLowerCase()]);
     r.eachCell((c, n) => {
       c.border = BOX;
-      if (n > 4 && typeof c.value === 'number') c.numFmt = '#,##0';
+      if (n > 4 && typeof c.value === 'number') c.numFmt = XL.amount;
     });
   }
   await fs.protect(PASSWORD, { selectLockedCells: true, selectUnlockedCells: true, autoFilter: true });
@@ -181,7 +182,7 @@ export async function buildFmTemplate(
       cell.protection = { locked: !o };
       cell.fill = o ? FILL.input : FILL.fixed;
       cell.border = BOX;
-      if (c.key === 'amount') cell.numFmt = '#,##0';
+      if (c.key === 'amount') cell.numFmt = XL.amount;
       if (o && c.list) cell.dataValidation = { type: 'list', allowBlank: true, formulae: [range[c.list]], showErrorMessage: c.list !== 'facilities', error: 'Choose from the list' };
       if (o && c.key === 'amount') cell.dataValidation = { type: 'decimal', operator: 'greaterThanOrEqual', allowBlank: true, formulae: [0], showErrorMessage: true, error: 'Amount: a number of 0 or more' };
     });

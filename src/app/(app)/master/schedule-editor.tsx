@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { DerivedContract, ScheduleItem } from '@/lib/budget/master-types';
-import { fmt } from '@/lib/format';
+import { fmt, fmtDate } from '@/lib/format';
 
 const SOURCE: Record<DerivedContract['scheduleSource'], { label: string; cls: string }> = {
   ACTUAL: { label: 'Actual', cls: '' },
@@ -10,10 +10,7 @@ const SOURCE: Record<DerivedContract['scheduleSource'], { label: string; cls: st
   EQUAL: { label: 'Equal cheques', cls: 'anh-tag--locked' },
 };
 
-const dmy = (iso: string) => {
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${y}`;
-};
+const dmy = (iso: string) => fmtDate(iso);
 
 /** Equal cheques, first on the start date, then every 370 / n days (same rule as the engine). */
 function spread(start: string, rent: number, n: number): ScheduleItem[] {

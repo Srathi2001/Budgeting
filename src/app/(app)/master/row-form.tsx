@@ -5,7 +5,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { MF_CHOICES, MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, type RowPatch } from '@/lib/budget/master-types';
-import { fmt, MONTHS, pct } from '@/lib/format';
+import { count, fmt, MONTHS, pct } from '@/lib/format';
 import { ScheduleEditor } from './schedule-editor';
 import { OUTCOMES, annualRent, dmy, leaseTiming, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 
@@ -210,7 +210,7 @@ export function RowForm({
         }}
       />
     ) : (
-      <div className={`${ro} text-right tabular-nums`}>{val(k) === null || val(k) === undefined ? opts.placeholder || '—' : fmt(val(k) as number)}</div>
+      <div className={`${ro} text-right tabular-nums`}>{val(k) === null || val(k) === undefined ? opts.placeholder || '—' : opts.int || k === 'area' ? count(val(k) as number) : fmt(val(k) as number)}</div>
     );
   const date = (k: keyof Row, enabled: boolean, opts: { placeholder?: string | null; override?: boolean } = {}) =>
     enabled ? (

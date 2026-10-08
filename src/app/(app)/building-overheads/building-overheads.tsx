@@ -5,7 +5,7 @@
 // they are paid. Nothing is pre-filled: last year's actuals and run-rate stand next to the input.
 
 import { Fragment, useMemo, useState, useTransition } from 'react';
-import { fmt, MONTHS } from '@/lib/format';
+import { fmt, MONTHS, pct as pctOf } from '@/lib/format';
 import { useFilters } from '@/components/filter-bar';
 import { propertyPasses } from '@/lib/filters';
 import { BOH_ACCOUNT, BOH_ACCOUNTS, BOH_CALC_NOTE, BOH_LINES, BOH_LINE_LABEL, paidInOneMonth, type BohBlock, type BohChange, type BohRow } from '@/lib/budget/boh-types';
@@ -235,7 +235,7 @@ export function BuildingOverheads({
           </td>
         ))}
         <td />
-        <td className="anh-num">{pct(b, f) === null ? '' : `${(pct(b, f)! * 100).toFixed(1)}%`}</td>
+        <td className="anh-num">{pct(b, f) === null ? '' : pctOf(pct(b, f))}</td>
       </>
     );
   };
@@ -341,7 +341,7 @@ export function BuildingOverheads({
                             <td className="anh-num calc">{fmt(r.f)}</td>
                             {amountCell(b, r)}
                             {dueCell(b, r)}
-                            <td className="anh-num calc">{p === null ? '' : `${(p * 100).toFixed(1)}%`}</td>
+                            <td className="anh-num calc">{p === null ? '' : pctOf(p)}</td>
                           </tr>
                         );
                       })}

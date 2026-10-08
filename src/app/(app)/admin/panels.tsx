@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import type { Assumptions } from '@/lib/engine/assumptions';
-import { fmt } from '@/lib/format';
+import { count, fmt, fmtDateTime } from '@/lib/format';
 import { StatusBadge } from '@/components/status-badge';
 import {
   setVersionStatus,
@@ -499,7 +499,7 @@ function ListBlock<T>({ title, hint, items, cols, row }: { title: string; hint: 
   return (
     <details className="card p-3">
       <summary className="cursor-pointer text-sm font-semibold">
-        {title} <span className="font-normal text-slate-500">({fmt(items.length)})</span>
+        {title} <span className="font-normal text-slate-500">({count(items.length)})</span>
         <span className="ml-2 text-xs font-normal text-slate-500">{hint}</span>
       </summary>
       <div className="frame mt-2 max-h-80 overflow-auto">
@@ -522,7 +522,7 @@ function ListBlock<T>({ title, hint, items, cols, row }: { title: string; hint: 
           </tbody>
         </table>
       </div>
-      {items.length > 500 && <div className="mt-1 text-xs text-slate-500">First 500 of {fmt(items.length)} shown.</div>}
+      {items.length > 500 && <div className="mt-1 text-xs text-slate-500">First 500 of {count(items.length)} shown.</div>}
     </details>
   );
 }
@@ -564,7 +564,7 @@ export function LeaseImportPanel({
   const counts = (m: Record<string, number>) =>
     Object.entries(m)
       .sort((a, b) => b[1] - a[1])
-      .map(([k, n]) => `${k} ${fmt(n)}`)
+      .map(([k, n]) => `${k} ${count(n)}`)
       .join(' · ');
 
   const p = preview;
@@ -582,7 +582,7 @@ export function LeaseImportPanel({
           their unit. Personal data in the report (phone, email, passport, Emirates ID) is not read.
         </p>
         <div className="mt-3 text-xs text-slate-600">
-          {stats.leased.toLocaleString('en-US')} of {stats.lines.toLocaleString('en-US')} lines have a current lease · last import {stats.lastImport ?? 'never'}
+          {count(stats.leased)} of {count(stats.lines)} lines have a current lease · last import {stats.lastImport ?? 'never'}
           {stats.lastFile && <> ({stats.lastFile})</>}
         </div>
         {locked ? (
@@ -629,26 +629,26 @@ export function LeaseImportPanel({
             Preview <span className="font-normal text-slate-500">· contracts as of {p.asOf} · nothing saved yet</span>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Tile label="Report" value={`${fmt(p.report.units)} units`} sub={`${fmt(p.report.leases)} leases · ${fmt(p.report.available)} available · ${fmt(p.report.rows)} rows`} />
+            <Tile label="Report" value={`${count(p.report.units)} units`} sub={`${count(p.report.leases)} leases · ${count(p.report.available)} available · ${count(p.report.rows)} rows`} />
             <Tile
               label="Budget lines after import"
-              value={`${fmt(p.result.lines)} lines`}
-              sub={`${fmt(p.result.leasedLines)} leased (${fmt(p.result.multiUnitLines)} on several units) · ${fmt(p.result.vacantLines)} available`}
+              value={`${count(p.result.lines)} lines`}
+              sub={`${count(p.result.leasedLines)} leased (${count(p.result.multiUnitLines)} on several units) · ${count(p.result.vacantLines)} available`}
             />
             <Tile label="Current annual rent" value={`AED ${fmt(p.result.currentRent)}`} sub="current contract year, all lines" />
-            <Tile label="Contracted later years" value={`${fmt(p.result.contractedLines)} lines`} sub="set as fixed renewals" />
+            <Tile label="Contracted later years" value={`${count(p.result.contractedLines)} lines`} sub="set as fixed renewals" />
             {p.dump && (
               <Tile
                 label="Unit Dump"
-                value={`${fmt(p.dump.matched)} lines matched`}
-                sub={`${fmt(p.dump.unmatched)} not in the dump · ${counts(p.dump.status)}`}
+                value={`${count(p.dump.matched)} lines matched`}
+                sub={`${count(p.dump.unmatched)} not in the dump · ${counts(p.dump.status)}`}
               />
             )}
             {p.mf && (
               <Tile
                 label="Maintenance fee"
-                value={`${fmt(p.mf.matched)} leases matched`}
-                sub={`${fmt(p.mf.unmatched)} leased lines not in the report · ${counts(p.mf.status)} · AED ${fmt(p.mf.amount)}, outstanding ${fmt(p.mf.outstanding)}`}
+                value={`${count(p.mf.matched)} leases matched`}
+                sub={`${count(p.mf.unmatched)} leased lines not in the report · ${counts(p.mf.status)} · AED ${fmt(p.mf.amount)}, outstanding ${fmt(p.mf.outstanding)}`}
               />
             )}
           </div>
@@ -665,14 +665,14 @@ export function LeaseImportPanel({
                 {p.result.byBu.map((b) => (
                   <tr key={b.bu}>
                     <td>{b.bu}</td>
-                    <td className="num tabular-nums">{fmt(b.leases)}</td>
+                    <td className="num tabular-nums">{count(b.leases)}</td>
                     <td className="num tabular-nums">{fmt(b.rent)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="text-xs text-slate-500">{fmt(p.kept)} lines keep their unit code and budget inputs.</div>
+          <div className="text-xs text-slate-500">{count(p.kept)} lines keep their unit code and budget inputs.</div>
           <ListBlock
             title="Lines removed"
             hint="not in the report, or now part of a lease covering several units; budget inputs on them are dropped"
@@ -732,7 +732,7 @@ export function RevenueImportPanel({ year, last }: { year: number; last: { at: s
           reference only. An import replaces the revenue actuals of the properties in the file.
         </p>
         <div className="mt-3 text-xs text-slate-600">
-          Last import {last ? new Date(last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : 'never'}
+          Last import {last ? fmtDateTime(last.at) : 'never'}
           {last?.file && <> ({last.file})</>}
           {last?.to && <> · actuals to {last.to}</>}
         </div>
@@ -844,7 +844,7 @@ export function GlImportPanel({
           An import replaces this ledger&apos;s GL actuals; the other ledger, Oct–Dec and budget inputs are kept.
         </p>
         <div className="mt-3 text-xs text-slate-600">
-          Last import {last ? new Date(last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : 'never'}
+          Last import {last ? fmtDateTime(last.at) : 'never'}
           {last?.file && <> ({last.file})</>}
         </div>
         {locked ? (
@@ -879,7 +879,7 @@ export function GlImportPanel({
             Preview <span className="font-normal text-slate-500">· nothing saved yet</span>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Tile label="Report" value={p.ledger ?? '—'} sub={`${p.periodFrom} – ${p.periodTo} · ${fmt(p.accounts)} accounts · ${fmt(p.lines)} lines · all reconciled`} />
+            <Tile label="Report" value={p.ledger ?? '—'} sub={`${p.periodFrom} – ${p.periodTo} · ${count(p.accounts)} accounts · ${count(p.lines)} lines · all reconciled`} />
             <Tile label={label.A2} value={`AED ${fmt(p.totals.A2)}`} />
             <Tile label={label.A1} value={`AED ${fmt(p.totals.A1)}`} />
             <Tile label={label.YTD} value={`AED ${fmt(p.totals.YTD)}`} sub={`${p.properties} properties`} />

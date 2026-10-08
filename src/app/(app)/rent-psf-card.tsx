@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { BarList } from '@/components/charts';
+import { count, fmt, short } from '@/lib/format';
 import type { PsfStat, RentPsf } from '@/lib/budget/rent-psf';
 import { MEASURE } from '@/lib/segments';
 
@@ -15,9 +16,9 @@ const VIEWS: { key: View; label: string }[] = [
   { key: 'location', label: 'By location' },
 ];
 
-const psf1 = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const psf1 = (n: number) => fmt(n);
 /** let area: 79.7K, 3.37M */
-const sqft = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n)));
+const sqft = (n: number) => (n >= 1e3 ? short(n) : count(Math.round(n)));
 const tipOf = (s: PsfStat) => [
   { label: 'Rent', value: `AED ${psf1(s.psf)} / sq ft` },
   { label: 'Let area', value: `${sqft(s.area)} sq ft` },
@@ -33,7 +34,7 @@ function Tile({ label, stat, units }: { label: string; stat: PsfStat; units?: bo
         <span className="ml-1 text-[11px] font-normal text-[var(--ink-muted)]">/ sq ft</span>
       </div>
       <div className="text-[11px] tabular-nums text-[var(--ink-muted)]">
-        {(stat.area / 1e6).toFixed(2)}M sq ft{units ? ` · ${stat.units} units` : ''}
+        {short(stat.area)} sq ft{units ? ` · ${stat.units} units` : ''}
       </div>
     </div>
   );

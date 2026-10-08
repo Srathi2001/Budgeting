@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { BarList, Columns, Legend, aed, aedDiff, compact } from '@/components/charts';
 import type { BudgetVsForecast } from '@/lib/budget/budget-vs-forecast';
-import { MONTHS } from '@/lib/format';
+import { MONTHS, pctSigned } from '@/lib/format';
 import { MEASURE } from '@/lib/segments';
 
 type View = 'building' | 'month';
@@ -17,7 +17,7 @@ const VIEWS: { key: View; label: string }[] = [
 ];
 
 const signed = (n: number) => `${n < 0 ? '−' : '+'}${compact(Math.abs(n))}`;
-const pct = (f: number, b: number) => (b ? `${f - b < 0 ? '−' : '+'}${Math.abs(((f - b) / b) * 100).toFixed(1)}%` : '–');
+const pct = (f: number, b: number) => (b ? pctSigned((f - b) / b) : '–');
 
 function Tile({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (

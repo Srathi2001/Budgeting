@@ -5,6 +5,7 @@
 // where the user may change them in the tool. On upload only the input columns are read, and every
 // change goes through the same save path as the grid (permissions, fixed fields, validation).
 import ExcelJS from 'exceljs';
+import { XL } from '@/lib/format';
 import { MF_LABEL, type MasterRow, type MfChoice, type RowPatch } from './master-types';
 import { annualRent, needsVacancyDays, outcomeOf, outcomePatch, OUTCOMES, type Outcome } from '@/app/(app)/master/row-logic';
 
@@ -179,7 +180,7 @@ const FILL = {
   head: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F1F1F' } } as ExcelJS.Fill,
 };
 const THIN = { style: 'thin', color: { argb: 'FFBFBFBF' } } as ExcelJS.Border;
-const numFmt: Record<Kind, string | undefined> = { text: '@', int: '0', money: '#,##0', pct: '0.0%', date: 'dd-mmm-yyyy' };
+const numFmt: Record<Kind, string | undefined> = { text: '@', int: XL.count, money: XL.amount, pct: XL.pct, date: XL.date };
 
 export async function buildTemplate(rows: MasterRow[], ctx: { versionName: string; year: number; user: string; scope: string }): Promise<Buffer> {
   const cols = templateColumns(ctx.year);

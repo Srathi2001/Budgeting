@@ -6,6 +6,7 @@
 // Optional blank rows at the bottom take new rows, identified by their identity columns. On upload the
 // input cells are compared with the tool and the differences go through the page's own save path.
 import ExcelJS from 'exceljs';
+import { XL } from '@/lib/format';
 
 export type CellKind = 'text' | 'money' | 'number' | 'int' | 'pct' | 'month';
 export type CellValue = string | number | null;
@@ -60,7 +61,7 @@ const FILL = {
 };
 const THIN = { style: 'thin', color: { argb: 'FFBFBFBF' } } as ExcelJS.Border;
 const BOX = { top: THIN, bottom: THIN, left: THIN, right: THIN };
-const FMT: Record<CellKind, string | undefined> = { text: undefined, money: '#,##0', number: '#,##0.##', int: '0', pct: '0.0%', month: undefined };
+const FMT: Record<CellKind, string | undefined> = { text: undefined, money: XL.amount, number: '#,##0.##', int: XL.count, pct: XL.pct, month: undefined };
 
 const show = (kind: CellKind, v: CellValue) => (kind === 'month' && typeof v === 'number' ? MONTHS[v - 1] : v);
 

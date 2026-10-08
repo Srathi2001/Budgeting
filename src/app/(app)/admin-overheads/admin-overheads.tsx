@@ -6,7 +6,7 @@
 
 import { Fragment, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
-import { fmt, MONTHS } from '@/lib/format';
+import { fmt, MONTHS, pct as pctOf } from '@/lib/format';
 import {
   ADMIN_ACCOUNT,
   ADMIN_ACCOUNTS,
@@ -38,7 +38,7 @@ function parse(s: string, kind: Kind): number | null | 'bad' {
 }
 const show = (v: number | null, kind: Kind) => (v === null ? '' : kind === 'pct' ? `${Math.round(v * 10000) / 100}%` : kind === 'int' ? String(v) : fmt(v));
 const sum = (a: (number | null)[]) => (a.some((v) => v !== null) ? a.reduce<number>((s, v) => s + (v ?? 0), 0) : null);
-const pct = (b: number | null, f: number | null) => (b === null || !f ? '' : `${(((b - f) / Math.abs(f)) * 100).toFixed(1)}%`);
+const pct = (b: number | null, f: number | null) => (b === null || !f ? '' : pctOf((b - f) / Math.abs(f)));
 
 /** A typed cell: shows the value, commits on blur / Enter, Escape cancels. */
 function Cell({ value, kind, placeholder, label, disabled, onCommit }: { value: number | null; kind: Kind; placeholder?: string; label: string; disabled: boolean; onCommit: (v: number | null) => Promise<boolean> }) {

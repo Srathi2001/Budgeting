@@ -21,7 +21,7 @@ import {
   type ValueSetterParams,
 } from 'ag-grid-community';
 import { MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, type RowPatch } from '@/lib/budget/master-types';
-import { fmt, MONTHS, pct } from '@/lib/format';
+import { count, fmt, fmtDate, MONTHS, parseDate, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine, saveRera } from './actions';
 import { RowForm } from './row-form';
 import { TemplateImport } from './template-import';
@@ -72,25 +72,8 @@ type P = { id: number; code: string; name: string; editable: boolean };
 
 // ---------- value helpers ----------------------------------------------------------------------
 
-const ymdToDmy = (v: unknown) => {
-  if (typeof v !== 'string' || !v) return '';
-  const [y, m, d] = v.slice(0, 10).split('-');
-  return `${d}/${m}/${y}`;
-};
+const ymdToDmy = (v: unknown) => (typeof v === 'string' ? fmtDate(v) : '');
 
-/** Accepts dd/mm/yyyy, d-m-yyyy or yyyy-mm-dd; returns yyyy-mm-dd or null. */
-function parseDate(v: unknown): string | null {
-  if (v === null || v === undefined || v === '') return null;
-  const s = String(v).trim();
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
-  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-  m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(s);
-  if (m) {
-    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-  }
-  return null;
-}
 
 function parseNum(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
@@ -105,6 +88,8 @@ const editable = (p: EditableCallbackParams<Row>) => !!p.data?.editable && !p.no
 const inputClass = (p: CellClassParams<Row>) => (p.data?.editable && !p.node.isRowPinned() ? 'cell-input' : '');
 const money = (p: ValueFormatterParams) => fmt(p.value as number | null);
 const money2 = (p: ValueFormatterParams) => fmt(p.value as number | null, 2);
+/** whole numbers (days, cheques, rooms, area) */
+const whole = (p: ValueFormatterParams) => count(p.value as number | null);
 
 /** Field from Oracle (the lease report import): fixed for everyone; the next import refreshes it. */
 function oracleCol(
@@ -181,7 +166,7 @@ function inputCol(field: keyof Row, headerName: string, kind: 'text' | 'money' |
       return {
         ...base,
         type: 'rightAligned',
-        valueFormatter: money,
+        valueFormatter: kind === 'int' ? whole : money,
         valueParser: (p) => {
           const n = parseNum(p.newValue);
           return kind === 'int' && n !== null ? Math.round(n) : n;
@@ -406,7 +391,7 @@ export function MasterGrid({
           unitCol('coordinator', 'PC'),
           oracleCol('resiCommercial', 'Unit Type', isAdmin, 'text', { headerClass: 'hdr-unit' }),
           oracleCol('bedroom', 'Bedroom / RERA', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'From the Oracle unit type: the key into the RERA index' }),
-          oracleCol('area', 'Area (sq ft)', isAdmin, 'money', { headerClass: 'hdr-unit' }),
+          oracleCol('area', 'Area (sq ft)', isAdmin, 'money', { headerClass: 'hdr-unit', valueFormatter: whole }),
           oracleCol('unitStatus', 'Unit Status', isAdmin, 'text', { headerClass: 'hdr-unit' }),
           oracleCol('unitUsage', 'Unit Usage', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'Fixed: from the Oracle Unit Dump' }),
           oracleCol('mergedUnitNumber', 'Merged Unit No.', isAdmin, 'text', { headerClass: 'hdr-unit', headerTooltip: 'Fixed: from the Oracle Unit Dump' }),

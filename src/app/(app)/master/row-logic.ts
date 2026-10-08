@@ -1,4 +1,5 @@
 // Small pieces shared by the Lease Budget grid and the row form.
+import { fmtDate } from '@/lib/format';
 import type { MasterRow } from '@/lib/budget/master-types';
 
 export const OUTCOMES = ['Renew', 'New tenant', 'Not re-let'] as const;
@@ -35,8 +36,5 @@ export function leaseTiming(r: Pick<MasterRow, 'currentEnd'>, year: number, toda
   return { kind: 'ends' as const, decide: true };
 }
 
-export const dmy = (v: string | null | undefined) => {
-  if (!v) return '';
-  const [y, m, d] = v.slice(0, 10).split('-');
-  return `${d}/${m}/${y}`;
-};
+/** a date as the tool shows it: 08-Oct-2026 */
+export const dmy = (v: string | null | undefined) => fmtDate(v);

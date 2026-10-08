@@ -6,7 +6,7 @@
 
 import { useState, useTransition, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { fmt, MONTHS, sum } from '@/lib/format';
+import { count, fmt, MONTHS, sum } from '@/lib/format';
 import { StatusBadge } from '@/components/status-badge';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, FM_KIND_LABEL, WORK_TYPE, WORK_TYPES, elementLabel, glOf, type FmKind, type WorkType } from '@/lib/budget/fm-types';
 import type { FmFacilityDetail, FmLineRow, FmPageData } from '@/lib/budget/fm-page';
@@ -273,10 +273,10 @@ function FacilityForm({ data, d, onClose, onPrev, onNext }: { data: FmPageData; 
               <Show v={d.activeSince ? `${d.activeSince.slice(0, 4)}${age !== null ? ` · ${age} years` : ''}` : null} />
             </Field>
             <Field label="Gross area, sq ft" locked>
-              <Show v={d.grossArea ? fmt(d.grossArea) : null} />
+              <Show v={d.grossArea ? count(d.grossArea) : null} />
             </Field>
             <Field label="Lettable area, sq ft" locked>
-              <Show v={d.lettableArea ? fmt(d.lettableArea) : null} />
+              <Show v={d.lettableArea ? count(d.lettableArea) : null} />
             </Field>
             <Field label="Units" locked>
               <Show v={String(d.units)} />

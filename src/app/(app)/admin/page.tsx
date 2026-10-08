@@ -3,6 +3,7 @@ import { asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireUser, isFinance, getActiveVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
+import { fmtDateTime } from '@/lib/format';
 import { VersionsPanel, AssumptionsPanel, UsersPanel, PropertiesPanel, ComparativesPanel, LeaseImportPanel, GlImportPanel, RevenueImportPanel } from './panels';
 import { lastActualMonth } from '@/lib/import/revenue-recognition';
 import { GL_LEDGERS, GL_LEDGER_NAMES } from '@/lib/import/gl-other-income';
@@ -92,7 +93,7 @@ async function ImportsTab({ version }: { version: schema.BudgetVersion }) {
           stats={{
             lines: s.lines,
             leased: s.leased,
-            lastImport: s.last ? new Date(s.last.at).toLocaleString('en-GB', { timeZone: 'Asia/Dubai' }) : null,
+            lastImport: s.last ? fmtDateTime(s.last.at) : null,
             lastFile: s.last?.file ?? null,
           }}
         />

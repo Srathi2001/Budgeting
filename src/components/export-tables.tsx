@@ -3,6 +3,7 @@
 // Top bar "Export tables": every data table on the page, as shown (filters, open tabs, typed values),
 // to an Excel file for checking: one sheet per table, named by its heading, amounts as numbers.
 import { useState } from 'react';
+import { XL, fmtDateTime } from '@/lib/format';
 
 type Cell = string | number | null;
 
@@ -24,12 +25,12 @@ function valueOf(td: HTMLTableCellElement): { v: Cell; z?: string } {
   text = text.replace(/\s+/g, ' ').trim();
   if (!text || text === '—' || text === '·') return { v: null };
   const numeric = td.classList.contains('num') || td.classList.contains('anh-num');
-  if (text === '-' && numeric) return { v: 0, z: '#,##0' };
-  if (PCT.test(text)) return { v: Number(text.replace(/[,%]/g, '')) / 100, z: '0.0%' };
+  if (text === '-' && numeric) return { v: 0, z: XL.amount };
+  if (PCT.test(text)) return { v: Number(text.replace(/[,%]/g, '')) / 100, z: XL.pct };
   if (NUM.test(text) && /\d/.test(text)) {
     const neg = text.startsWith('(') && text.endsWith(')');
     const n = Number(text.replace(/[(),]/g, ''));
-    if (Number.isFinite(n)) return { v: neg ? -n : n, z: /\.\d/.test(text) ? '#,##0.00' : '#,##0' };
+    if (Number.isFinite(n)) return { v: neg ? -n : n, z: /\.\d/.test(text) || neg ? XL.amount : XL.count };
   }
   return { v: text };
 }
@@ -67,7 +68,7 @@ export function ExportTables() {
     const about = XLSX.utils.aoa_to_sheet([
       ['Page', crumbs],
       ['Filters', filters || 'None'],
-      ['Exported', new Date().toLocaleString('en-GB', { timeZone: 'Asia/Dubai' })],
+      ['Exported', fmtDateTime(new Date())],
       ['Tables', tables.length],
     ]);
     about['!cols'] = [{ wch: 10 }, { wch: 80 }];

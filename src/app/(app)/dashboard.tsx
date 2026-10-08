@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import Link from 'next/link';
 import type { DashboardData, DashUnit, DueEvent, ExpiryOutcome } from '@/lib/budget/dashboard';
 import { CATEGORIES } from '@/lib/budget/category';
-import { MONTHS } from '@/lib/format';
+import { MONTHS, pct } from '@/lib/format';
 import { ChartCard, Columns, HBars, Legend, LineChart, StatTile, compact } from '@/components/charts';
 import { CATEGORY_COLOR, MEASURE, MOVE_IN_COLOR, OUTCOME_COLOR } from '@/lib/segments';
 import { useFilters } from '@/components/filter-bar';
@@ -17,7 +17,7 @@ import type { DashboardReports } from '@/lib/budget/dashboard-reports-types';
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
 const add12 = (acc: number[], v: number[] | null) => (v ? acc.map((x, i) => x + v[i]) : acc);
-const pctTxt = (n: number | null, d = 1) => (n === null || !Number.isFinite(n) ? '–' : `${(n * 100).toFixed(d)}%`);
+const pctTxt = (n: number | null, d = 2) => (n === null || !Number.isFinite(n) ? '–' : pct(n, d));
 
 // stack order (registry order); multi-year leases already contracted in Oracle count as Renew
 const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
@@ -147,7 +147,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
         <StatTile label="Cash inflow" value={compact(m.cashTotal)} sub="Rent + VAT + deposits" spark={m.cash} />
         <StatTile
           label="Occupancy (avg)"
-          value={pctTxt(sum(m.occ) / 12, 0)}
+          value={pctTxt(sum(m.occ) / 12)}
           sub={`${m.leased} of ${m.units} units leased now`}
           spark={m.occ}
         />
@@ -155,7 +155,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
         <StatTile
           label={`Leases due ${data.year}`}
           value={compact(m.dueRent)}
-          sub={`${m.dueCount} leases · ${pctTxt(m.renewalRate, 0)} renewing${m.avgVacancy === null ? '' : ` · new tenants after ${Math.round(m.avgVacancy)} days`}`}
+          sub={`${m.dueCount} leases · ${pctTxt(m.renewalRate)} renewing${m.avgVacancy === null ? '' : ` · new tenants after ${Math.round(m.avgVacancy)} days`}`}
         />
         <StatTile label="Open issues" value={String(m.issues)} sub={m.issues ? 'Rows to review in Lease Budget' : 'None'} />
       </section>
@@ -205,7 +205,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
         <ChartCard
           title={`Occupancy by month · ${data.year}`}
           sub="Share of units earning rent in the month"
-          table={{ head: ['Month', 'Occupancy %'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, `${(m.occ[i] * 100).toFixed(1)}%`]) }}
+          table={{ head: ['Month', 'Occupancy %'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, pct(m.occ[i])]) }}
         >
           <LineChart labels={monthLabels} series={[{ name: 'Occupancy', color: MEASURE.budget, values: m.occ.map((v) => v * 100) }]} fmt={(n) => `${Math.round(n)}%`} tipFmt={(n) => `${n.toFixed(1)}%`} min={Math.max(0, Math.floor((Math.min(...m.occ) * 100 - 5) / 10) * 10)} />
         </ChartCard>

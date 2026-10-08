@@ -6,24 +6,20 @@
 // card. Colours come from the registries in lib/segments, as CSS variables, so both themes follow.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { fmt, short } from '@/lib/format';
 
 const INK = { primary: 'var(--ink)', secondary: 'var(--ink-2)', muted: 'var(--ink-muted)' };
 const GRID = 'var(--chart-grid)';
 const BASE = 'var(--line-strong)';
 const SURFACE = 'var(--surface)';
 
-export function compact(n: number): string {
-  const a = Math.abs(n);
-  const s = a >= 1e9 ? `${(a / 1e9).toFixed(1)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2)}M` : a >= 1e3 ? `${Math.round(a / 1e3)}K` : `${Math.round(a)}`;
-  return n < 0 ? `−${s}` : s;
-}
-const full = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
+/** chart and tile amounts: short, 2 decimals (259.36M) */
+export const compact = (n: number): string => short(n);
+const full = (n: number) => fmt(n);
 
 /** Tooltip amount: short and readable (AED 12.71M, AED 845.2K, AED 950). */
 export function aed(n: number): string {
-  const a = Math.abs(n);
-  const s = a >= 1e6 ? `${(a / 1e6).toFixed(2)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(1)}K` : `${Math.round(a)}`;
-  return `${n < 0 ? '−' : ''}AED ${s}`;
+  return `${n < 0 ? '−' : ''}AED ${short(Math.abs(n))}`;
 }
 /** A difference: signed (+AED 1.20M / −AED 6.28M). */
 export const aedDiff = (n: number) => (n > 0 ? `+${aed(n)}` : aed(n));

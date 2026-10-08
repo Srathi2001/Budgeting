@@ -4,10 +4,11 @@
 // taken) before anything is saved.
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { count, fmt, pct } from '@/lib/format';
 import { uploadInputTemplate, type TemplateUploadResult } from '@/app/(app)/template-actions';
 
 const show = (v: string | number | null, column: string) =>
-  v === null ? '—' : typeof v === 'number' ? (/pct/i.test(column) ? `${Math.round(v * 1000) / 10}%` : v.toLocaleString('en-US', { maximumFractionDigits: 2 })) : v;
+  v === null ? '—' : typeof v === 'number' ? (/pct/i.test(column) ? pct(v) : Number.isInteger(v) ? count(v) : fmt(v)) : v;
 
 export function TemplateButtons({ kind, versionId, canImport }: { kind: string; versionId: number; canImport: boolean }) {
   const [open, setOpen] = useState(false);

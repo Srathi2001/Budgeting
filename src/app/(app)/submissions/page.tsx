@@ -4,7 +4,7 @@ import { db, schema } from '@/db';
 import { requireUser, getActiveVersion, isFinance } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups } from '@/lib/budget/reports';
-import { fmt, sum } from '@/lib/format';
+import { fmt, fmtDateTime, sum } from '@/lib/format';
 import { StatusBadge } from '@/components/status-badge';
 import { SubmissionActions } from './submission-actions';
 
@@ -101,7 +101,7 @@ export default async function SubmissionsPage() {
           <tbody>
             {activity.map(({ a, user: who, property }) => (
               <tr key={a.id}>
-                <td className="text-xs text-slate-500">{a.at.toLocaleString('en-GB', { timeZone: 'Asia/Dubai' })}</td>
+                <td className="text-xs text-slate-500">{fmtDateTime(a.at)}</td>
                 <td>{who}</td>
                 <td>{property}</td>
                 <td>
