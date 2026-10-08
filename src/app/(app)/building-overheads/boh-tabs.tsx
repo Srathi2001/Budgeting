@@ -14,7 +14,7 @@ import type { Assumptions } from '@/lib/engine/assumptions';
 import { BOH_ACCOUNT, CONTRACT_KIND, CONTRACT_TERMS, type BohBlock, type ContractKind, type ContractRow, type ContractTerms } from '@/lib/budget/boh-types';
 import { contractAmount, parBudget, plBudget, watchmenBudget } from '@/lib/budget/boh-calc';
 import type { InsuranceRow } from '@/lib/budget/boh-schedules';
-import { saveBohAssumptions, saveContracts, saveInsurance, saveWatchmen, syncPurchaseOrders } from './actions';
+import { saveBohAssumptions, saveContracts, saveInsurance, saveWatchmen } from './actions';
 
 interface Common {
   blocks: BohBlock[];
@@ -292,7 +292,7 @@ export function SecurityAllocation({ blocks, versionId, year, cutoff, locked, fi
 type Draft = Omit<ContractRow, 'quantity' | 'rate'> & { key: string; quantity: string; rate: string };
 const toDraft = (r: ContractRow): Draft => ({ ...r, key: `id${r.id}`, quantity: String(r.quantity), rate: String(r.rate) });
 
-export function ContractSchedule({ blocks, versionId, year, cutoff, locked, finance, kind, rows }: Common & { kind: ContractKind; rows: ContractRow[] }) {
+export function ContractSchedule({ blocks, versionId, year, cutoff, locked, kind, rows }: Common & { kind: ContractKind; rows: ContractRow[] }) {
   const router = useRouter();
   const info = CONTRACT_KIND.get(kind)!;
   const view = useView(blocks);
@@ -350,13 +350,6 @@ export function ContractSchedule({ blocks, versionId, year, cutoff, locked, fina
       setMsg(r.errors.length ? { error: r.errors.join(' · ') } : { ok: `Saved ${r.saved}` });
       if (r.saved) router.refresh();
     });
-  const sync = () =>
-    start(async () => {
-      setMsg({ ok: 'Reading purchase orders from Oracle… about a minute' });
-      const r = await syncPurchaseOrders(versionId);
-      setMsg(r);
-      if (!r.error) router.refresh();
-    });
 
   const inView = new Set(view.map((b) => b.propertyId));
   const groups = view.map((b) => ({ b, ls: lines.filter((l) => l.propertyId === b.propertyId) })).filter((g) => g.ls.length);
@@ -397,11 +390,6 @@ export function ContractSchedule({ blocks, versionId, year, cutoff, locked, fina
           </>
         )}
         <TemplateButtons kind={`amc-${kind}`} versionId={versionId} canImport={!locked} />
-        {finance && !locked && (
-          <button className="btn" onClick={sync} disabled={pending} title="Adds this year’s purchase orders on these accounts as contract rows; refreshes the PO figures of rows already here (what the team changed stays)">
-            Load from Oracle POs
-          </button>
-        )}
         <MsgLine msg={msg} />
       </div>
 
@@ -517,7 +505,7 @@ export function ContractSchedule({ blocks, versionId, year, cutoff, locked, fina
             {groups.length === 0 && (
               <tr>
                 <td colSpan={13} className="is-empty">
-                  No contracts for the buildings in view yet. Add one, or load them from Oracle purchase orders.
+                  No contracts for the buildings in view yet. Add one, or use the Excel template.
                 </td>
               </tr>
             )}

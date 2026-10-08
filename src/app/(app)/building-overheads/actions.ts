@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { requireUser, requireFinance } from '@/lib/auth/dal';
+import { requireUser } from '@/lib/auth/dal';
 import { saveBuildingOverheads } from '@/lib/budget/boh';
 import { saveBohAssumptionsAs, saveContractsAs, saveInsuranceAs, saveWatchmenAs, type Result } from '@/lib/budget/boh-schedules';
 import { isContractKind } from '@/lib/budget/boh-types';
@@ -47,24 +47,4 @@ export async function saveWatchmen(versionId: number, input: unknown): Promise<R
 export async function saveContracts(versionId: number, kind: string, input: unknown): Promise<{ saved: number; errors: string[] }> {
   if (!isContractKind(kind)) return { saved: 0, errors: ['Unknown schedule'] };
   return done(await saveContractsAs(await requireUser(), versionId, kind, input));
-}
-
-/** Loads the contracts of the year's purchase orders from Oracle into the schedules (Finance). */
-export async function syncPurchaseOrders(versionId: number): Promise<Result> {
-  const user = await requireFinance();
-  try {
-    const { db, schema } = await import('@/db');
-    const { eq } = await import('drizzle-orm');
-    const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-    if (!v || v.status === 'LOCKED') return { error: 'This budget version is locked' };
-    const { applyPurchaseOrders, readPurchaseOrders } = await import('@/lib/import/fusion-po');
-    const read = await readPurchaseOrders(`${v.year - 1}-01-01`);
-    const r = await applyPurchaseOrders(versionId, read, user.id);
-    revalidatePath('/building-overheads');
-    return {
-      ok: `${r.pos} purchase orders read: ${r.added} new contract lines, ${r.refreshed} refreshed${r.skippedOneOff ? `, ${r.skippedOneOff} one-off lines left out` : ''}${r.unmatched.length ? `; buildings not in the budget: ${r.unmatched.join(', ')}` : ''}`,
-    };
-  } catch (e) {
-    return { error: (e as Error).message };
-  }
 }
