@@ -29,6 +29,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
   const yy = String(data.year).slice(2);
   const B = `${data.year}B`;
   const P = `${data.year - 1}B`;
+  const F = data.forecastName;
 
   const propById = useMemo(() => new Map(data.properties.map((p) => [p.id, p])), [data.properties]);
 
@@ -37,6 +38,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
   const m = useMemo(() => {
     const budget = units.reduce((a, u) => add12(a, u.revenue), z12());
     const prior = units.reduce((a, u) => add12(a, u.prior), z12());
+    const forecast = units.reduce((a, u) => add12(a, u.forecast), z12());
     const cash = units.reduce((a, u) => add12(a, u.cashFlow), z12());
     const inBudget = units.filter((u) => u.revenue);
     // occupancy: share of budget units earning rent in the month
@@ -80,6 +82,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
     return {
       budget,
       prior,
+      forecast,
       cash,
       occ,
       total: sum(budget),
@@ -162,18 +165,18 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
 
       <div className="grid gap-4 xl:grid-cols-2">
         <ChartCard
-          title={`Revenue by month · ${B} vs ${P}`}
-          sub="Budget revenue recognised each month"
-          legend={<Legend shape="line" items={[{ label: B, color: MEASURE.budget }, { label: P, color: MEASURE.prior, dash: true }]} />}
-          table={{ head: ['Month', B, P, 'Change'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, Math.round(m.budget[i]), Math.round(m.prior[i]), Math.round(m.budget[i] - m.prior[i])]) }}
+          title={`Revenue by month · ${B} vs ${F}`}
+          sub={`Budget revenue recognised each month · ${F}: actuals${data.forecastCutoff ? ` to ${MONTHS[data.forecastCutoff - 1]}` : ''}, then the Lease Budget projection`}
+          legend={<Legend shape="line" items={[{ label: B, color: MEASURE.budget }, { label: F, color: MEASURE.prior, dash: true }]} />}
+          table={{ head: ['Month', B, F, 'Change'], rows: MONTHS.map((mo, i) => [`${mo}-${yy}`, m.budget[i], m.forecast[i], m.budget[i] - m.forecast[i]]) }}
         >
           <LineChart
             labels={monthLabels}
             series={[
-              { name: P, color: MEASURE.prior, values: m.prior, dash: true },
+              { name: F, color: MEASURE.prior, values: m.forecast, dash: true },
               { name: B, color: MEASURE.budget, values: m.budget },
             ]}
-            diffLabel={`Change vs ${P}`}
+            diffLabel={`Change vs ${F}`}
           />
         </ChartCard>
 

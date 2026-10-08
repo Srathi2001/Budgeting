@@ -2,7 +2,7 @@
 // browser, so every chart and tile re-renders against the same slice; the rent per sq ft card is
 // computed here for the shared filters (the dashboard refreshes when they change).
 import 'server-only';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, like } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { parseDay } from '@/lib/engine/dates';
 import type { Contract } from '@/lib/engine/lease';
@@ -41,6 +41,11 @@ export interface DashUnit {
   revenue: number[] | null;
   /** prior-year budget revenue by month (null when not in the prior version) */
   prior: number[] | null;
+  /**
+   * prior-year forecast by month (Y-1 F): Oracle actuals to the last closed month, split over the
+   * building's units by their projection, then the Lease Budget projection
+   */
+  forecast: number[];
   cashFlow: number[];
   leased: boolean;
   vacancyLoss: number;
@@ -63,6 +68,9 @@ export interface DashboardData {
   year: number;
   versionName: string;
   priorName: string | null;
+  /** last year's forecast (e.g. 2026F) and its last month of actuals (0 = none) */
+  forecastName: string;
+  forecastCutoff: number;
   units: DashUnit[];
   properties: DashProperty[];
   bus: string[];
@@ -150,6 +158,7 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
       category: categoryOf(u, pp.p.kind),
       revenue: null,
       prior: null,
+      forecast: Array(12).fill(0),
       cashFlow: Array(12).fill(0),
       leased: false,
       vacancyLoss: 0,
@@ -168,6 +177,8 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     d.leased = !!l.currentEnd;
     d.vacancyLoss = c?.vacancyLoss ?? 0;
     d.issues = c?.warnings.length ?? 0;
+    // the Lease Budget's projection of last year (actuals replace the closed months below)
+    d.forecast = c?.priorRevenue ? [...c.priorRevenue] : Array(12).fill(0);
     if (c && l.staffOwner !== 'OWNER') dueEvents(d, l, c.contracts, version.year, yearStart, today);
     units.set(u.id, d);
     // rent per sq ft: passing rent = the current contract, annualised (rent ÷ contract days × 365)
@@ -196,6 +207,29 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
   }
 
   const list = [...units.values()];
+
+  // last year's forecast: actuals (by building) to the last closed month, split over the building's units
+  // by their projection (equally where there is none), then the projection
+  const Y1 = version.year - 1;
+  const actuals = await db
+    .select({ p: schema.revenueActuals.propertyId, m: schema.revenueActuals.month, a: schema.revenueActuals.amount })
+    .from(schema.revenueActuals)
+    .where(and(eq(schema.revenueActuals.kind, 'A'), inArray(schema.revenueActuals.propertyId, ids), like(schema.revenueActuals.month, `${Y1}-%`)));
+  const cutoff = actuals.reduce((m, x) => Math.max(m, Number(x.m.slice(5))), 0);
+  const actualBy = new Map<number, number[]>();
+  for (const x of actuals) {
+    const arr = actualBy.get(x.p) ?? Array(12).fill(0);
+    arr[Number(x.m.slice(5)) - 1] += x.a;
+    actualBy.set(x.p, arr);
+  }
+  for (const [pid, act] of actualBy) {
+    const us = list.filter((d) => d.propertyId === pid && d.revenue);
+    if (!us.length) continue;
+    for (let i = 0; i < cutoff; i++) {
+      const proj = us.reduce((s, d) => s + d.forecast[i], 0);
+      for (const d of us) d.forecast[i] = proj > 0 ? (act[i] * d.forecast[i]) / proj : act[i] / us.length;
+    }
+  }
   // budget vs forecast is per property (Oracle actuals have no unit detail): the category filter
   // keeps the properties with units in it
   const cats = new Map<number, Set<Category>>();
@@ -209,6 +243,8 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     year: version.year,
     versionName: version.name,
     priorName: prior?.name ?? null,
+    forecastName: `${Y1}F`,
+    forecastCutoff: cutoff,
     units: list,
     properties: props.map(({ p, bu }) => ({ id: p.id, code: p.code, name: p.name, bu, pm: p.coordinator ?? '—' })),
     bus: [...new Set(props.map((x) => x.bu))].sort(),
