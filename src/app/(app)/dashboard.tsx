@@ -28,7 +28,6 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
   const { filters } = useFilters();
   const yy = String(data.year).slice(2);
   const B = `${data.year}B`;
-  const P = `${data.year - 1}B`;
   const F = data.forecastName;
 
   const propById = useMemo(() => new Map(data.properties.map((p) => [p.id, p])), [data.properties]);
@@ -37,7 +36,6 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
 
   const m = useMemo(() => {
     const budget = units.reduce((a, u) => add12(a, u.revenue), z12());
-    const prior = units.reduce((a, u) => add12(a, u.prior), z12());
     const forecast = units.reduce((a, u) => add12(a, u.forecast), z12());
     const cash = units.reduce((a, u) => add12(a, u.cashFlow), z12());
     const inBudget = units.filter((u) => u.revenue);
@@ -63,14 +61,14 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
       };
     });
     const vacAll = due.map((e) => e.vacancyDays).filter((v): v is number => v !== null);
-    const byProp = new Map<number, { budget: number; prior: number }>();
+    const byProp = new Map<number, { budget: number; forecast: number }>();
     for (const u of units) {
-      const r = byProp.get(u.propertyId) ?? { budget: 0, prior: 0 };
+      const r = byProp.get(u.propertyId) ?? { budget: 0, forecast: 0 };
       r.budget += sum(u.revenue ?? []);
-      r.prior += sum(u.prior ?? []);
+      r.forecast += sum(u.forecast);
       byProp.set(u.propertyId, r);
     }
-    const props = [...byProp.entries()].map(([id, v]) => ({ id, name: propById.get(id)?.name ?? String(id), ...v, change: v.budget - v.prior }));
+    const props = [...byProp.entries()].map(([id, v]) => ({ id, name: propById.get(id)?.name ?? String(id), ...v, change: v.budget - v.forecast }));
     const buCat = data.bus
       .filter((b) => units.some((u) => u.bu === b))
       .map((b) => ({
@@ -81,12 +79,11 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
     const expiry = OUTCOMES.map(dueBy);
     return {
       budget,
-      prior,
       forecast,
       cash,
       occ,
       total: sum(budget),
-      priorTotal: sum(prior),
+      forecastTotal: sum(forecast),
       cashTotal: sum(cash),
       units: inBudget.length,
       leased: inBudget.filter((u) => u.leased).length,
@@ -107,7 +104,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
     };
   }, [units, data.bus, propById, yy]);
 
-  const change = m.priorTotal ? (m.total - m.priorTotal) / m.priorTotal : null;
+  const change = m.forecastTotal ? (m.total - m.forecastTotal) / m.forecastTotal : null;
   const noLeases = data.units.every((u: DashUnit) => !u.leased);
   const monthLabels = MONTHS.map((x) => x.slice(0, 3));
 
@@ -118,7 +115,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
           <span className="anh-eyebrow">Dashboard</span>
           <h1>{data.versionName}</h1>
           <p className="page-sub mt-1">
-            {locked ? 'Locked, read only' : 'Open for input'} · AED · vs {data.priorName ?? 'no prior budget'} · {m.units} units in view
+            {locked ? 'Locked, read only' : 'Open for input'} · AED · vs {F} (actuals{data.forecastCutoff ? ` to ${MONTHS[data.forecastCutoff - 1]}` : ''} + Lease Budget projection) · {m.units} units in view
           </p>
         </div>
       </header>
@@ -141,10 +138,10 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
         <StatTile
           label={`Revenue ${B}`}
           value={compact(m.total)}
-          delta={change === null ? undefined : `${pctTxt(change)} vs ${P}`}
+          delta={change === null ? undefined : `${pctTxt(change)} vs ${F}`}
           deltaDir={change === null ? undefined : change >= 0 ? 'up' : 'down'}
           adverse={change !== null && change < 0}
-          sub={`${P}: ${compact(m.priorTotal)}`}
+          sub={`${F}: ${compact(m.forecastTotal)}`}
           spark={m.budget}
         />
         <StatTile label="Cash inflow" value={compact(m.cashTotal)} sub="Rent + VAT + deposits" spark={m.cash} />
@@ -215,21 +212,21 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
 
         <ChartCard
           title="Top 10 properties"
-          sub={`${B} revenue, with change vs ${P}`}
-          table={{ head: ['Property', B, P, 'Change'], rows: m.top.map((p) => [p.name, Math.round(p.budget), Math.round(p.prior), Math.round(p.change)]) }}
+          sub={`${B} revenue, with change vs ${F}`}
+          table={{ head: ['Property', B, F, 'Change'], rows: m.top.map((p) => [p.name, p.budget, p.forecast, p.change]) }}
         >
           <HBars
-            rows={m.top.map((p) => ({ label: p.name, values: [p.budget], note: p.prior ? pctTxt((p.budget - p.prior) / p.prior) : undefined }))}
+            rows={m.top.map((p) => ({ label: p.name, values: [p.budget], note: p.forecast ? pctTxt((p.budget - p.forecast) / p.forecast) : undefined }))}
             series={[{ name: B, color: MEASURE.budget }]}
             note={(r) => r.note}
-            noteLabel={`vs ${P}`}
+            noteLabel={`vs ${F}`}
           />
         </ChartCard>
 
         <ChartCard
-          title={`Biggest movers vs ${P}`}
+          title={`Biggest movers vs ${F}`}
           sub="Change in budget revenue by property"
-          table={{ head: ['Property', B, P, 'Change'], rows: m.movers.map((p) => [p.name, Math.round(p.budget), Math.round(p.prior), Math.round(p.change)]) }}
+          table={{ head: ['Property', B, F, 'Change'], rows: m.movers.map((p) => [p.name, p.budget, p.forecast, p.change]) }}
         >
           <HBars diverging rows={m.movers.map((p) => ({ label: p.name, values: [p.change] }))} series={[{ name: 'Change', color: MEASURE.budget }]} />
         </ChartCard>
