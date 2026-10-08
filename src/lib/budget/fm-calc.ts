@@ -30,7 +30,8 @@ export interface FmPropertyResult {
   /** FM staff cost allocated to the building, by team */
   staff: Partial<Record<StaffTeam, number>>;
   staffTotal: number;
-  monthly: { maintenance: number[]; capex: number[]; fmStaff: number[] };
+  /** capex = repairs (R01, R02: below gross profit) + capexItems (R04: cash flow only) */
+  monthly: { maintenance: number[]; capex: number[]; repairs: number[]; capexItems: number[]; fmStaff: number[] };
 }
 
 export interface FmResult {
@@ -50,7 +51,7 @@ export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff:
   const res = (id: number) => {
     let r = byProperty.get(id);
     if (!r) {
-      r = { works: emptyWorks(), staff: {}, staffTotal: 0, monthly: { maintenance: z12(), capex: z12(), fmStaff: z12() } };
+      r = { works: emptyWorks(), staff: {}, staffTotal: 0, monthly: { maintenance: z12(), capex: z12(), repairs: z12(), capexItems: z12(), fmStaff: z12() } };
       byProperty.set(id, r);
     }
     return r;
@@ -63,9 +64,11 @@ export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff:
     if (!wt || !l.amount) continue;
     const r = res(l.propertyId);
     r.works[wt.code] += l.amount;
-    const into = r.monthly[wt.line];
-    if (wt.spread || !l.month) for (let i = 0; i < 12; i++) into[i] += l.amount / 12;
-    else into[Math.min(Math.max(l.month, 1), 12) - 1] += l.amount;
+    const into = [r.monthly[wt.line], ...(wt.pnl === 'maintenance' ? [] : [r.monthly[wt.pnl]])];
+    for (const a of into) {
+      if (wt.spread || !l.month) for (let i = 0; i < 12; i++) a[i] += l.amount / 12;
+      else a[Math.min(Math.max(l.month, 1), 12) - 1] += l.amount;
+    }
   }
 
   // staff: total operating cost per team
@@ -78,13 +81,27 @@ export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff:
   for (const [t, v] of raw) if (t !== 'GA') teamCost[t as StaffTeam] = v * (1 + gaRate);
 
   let unallocated = 0;
-  const allocate = (team: StaffTeam, amount: number, weights: [number, number][]) => {
-    const total = sum(weights.map(([, w]) => w));
+  const allWorks = (id: number) => sum(Object.values(res(id).works));
+  // a team's cost always reaches the buildings (and so the P&L): when its own basis is empty (e.g. no
+  // vacant unit works yet, or a zone whose buildings have no maintenance), the same buildings by all
+  // their works, then equally; with no buildings, every facility by all works, then equally
+  const allocate = (team: StaffTeam, amount: number, basis: [number, number][]) => {
     if (!amount) return;
-    if (total <= 0) {
+    const ids = basis.map(([id]) => id);
+    const everyone = facilities.map((f) => f.id);
+    const options: [number, number][][] = [
+      basis,
+      ids.map((id) => [id, allWorks(id)]),
+      ids.map((id) => [id, 1]),
+      everyone.map((id) => [id, allWorks(id)]),
+      everyone.map((id) => [id, 1]),
+    ];
+    const weights = options.find((o) => sum(o.map(([, w]) => w)) > 0);
+    if (!weights) {
       unallocated += amount;
       return;
     }
+    const total = sum(weights.map(([, w]) => w));
     for (const [id, w] of weights) {
       if (!w) continue;
       const r = res(id);

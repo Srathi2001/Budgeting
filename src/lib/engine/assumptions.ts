@@ -29,6 +29,10 @@ export interface Assumptions {
   depositPct: number;
   /** Maintenance service fee on residential leases with MF, % of the contract rent (other income). */
   mfPct: number;
+  /** ANPM's property management fee (PMA), % of the landlords' rent (REHL, REHL-MJN incl. the mall): 6% in the 2026 budget. */
+  pmaRate: number;
+  /** MJNH's asset management fee (AMA), % of the asset value of each landlord entity: 0.5% in the 2026 budget. */
+  amaRate: number;
 }
 
 export const DEFAULT_ASSUMPTIONS: Assumptions = {
@@ -47,6 +51,8 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
   vatRate: 0.05,
   depositPct: 0.05,
   mfPct: 0.05,
+  pmaRate: 0.06,
+  amaRate: 0.005,
 };
 
 export function withDefaults(partial: Partial<Assumptions> | null | undefined): Assumptions {

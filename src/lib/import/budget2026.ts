@@ -211,7 +211,8 @@ export interface ParsedAnalysisRow {
 export function parseRevenueAnalysis(wb: XLSX.WorkBook): ParsedAnalysisRow[] {
   const ws = wb.Sheets['RevenuexAnalysis'] ?? wb.Sheets['Revenue Analysis'];
   if (!ws) return [];
-  const labels: Record<string, string> = { G: '2026B', H: '2025F', K: '2025B', M: '2024A', N: '2023A' };
+  // column N (2023A) is not read: the tool reports from 2024 on (FIRST_REPORT_YEAR)
+  const labels: Record<string, string> = { G: '2026B', H: '2025F', K: '2025B', M: '2024A' };
   const out: ParsedAnalysisRow[] = [];
   const last = XLSX.utils.decode_range(ws['!ref']!).e.r + 1;
   for (let r = 5; r <= last; r++) {

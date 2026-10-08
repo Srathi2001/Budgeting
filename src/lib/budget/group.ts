@@ -35,6 +35,8 @@ export interface IntergroupRule {
 }
 
 export const INTERGROUP: IntergroupRule[] = [{ scope: 'G:521', account: '52801', label: 'PMA fee', payers: ['501', '502'] }];
+/** where ANPM's PMA fee sits in Other Income (calculated: the PMA rate × the landlords' rent) */
+export const PMA_FEE = { scope: 'G:521', account: '52801' } as const;
 
 export type GroupClass = 'group' | 'owners' | 'intergroup' | 'outside';
 

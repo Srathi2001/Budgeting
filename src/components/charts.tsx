@@ -421,7 +421,7 @@ export function HBars({
   rows,
   series,
   diverging = false,
-  labelWidth = 170,
+  labelWidth = 190,
   fmt = compact,
   tipFmt = aed,
   note,
@@ -445,10 +445,13 @@ export function HBars({
   const height = rows.length * rowH + 4;
   // room right of the longest bar for its value (and note, when there is one)
   const valW = note && rows.some((r) => note(r)) ? 120 : 64;
-  const plotW = Math.max(w - labelWidth - valW - 8, 10);
+  // diverging: value labels sit beyond either end, so both sides keep room for one
+  const plotW = Math.max(w - labelWidth - valW * (diverging ? 2 : 1) - 8, 10);
   const totals = rows.map((r) => r.values.reduce((s, v) => s + v, 0));
   const maxAbs = Math.max(...totals.map(Math.abs), 1);
-  const x0 = diverging ? labelWidth + plotW / 2 : labelWidth;
+  const x0 = diverging ? labelWidth + valW + plotW / 2 : labelWidth;
+  // names cut to the label column (12px text; property names are upper case, about 7.2px a character)
+  const maxChars = Math.max(6, Math.floor((labelWidth - 14) / 7.2));
   const scale = (diverging ? plotW / 2 : plotW) / maxAbs;
   const bh = Math.min(16, rowH - 8);
   const tip: Tip | null =
@@ -484,7 +487,7 @@ export function HBars({
             return (
               <g key={r.label + i} opacity={hover === null || hover === i ? 1 : 0.55}>
                 <text x={labelWidth - 10} y={cy} dy="0.32em" textAnchor="end" fontSize={12} style={{ fill: INK.secondary }}>
-                  {r.label.length > 24 ? `${r.label.slice(0, 23)}…` : r.label}
+                  {r.label.length > maxChars ? `${r.label.slice(0, maxChars - 1)}…` : r.label}
                 </text>
                 {diverging ? (
                   <Bar x={t >= 0 ? x0 : end} y={cy - bh / 2} w={Math.abs(t) * scale} h={bh} color={series[0].color} />

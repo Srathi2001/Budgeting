@@ -7,6 +7,9 @@ import { db, schema } from '@/db';
 import { canEditProperty, isFinance, type EditCheck } from '@/lib/auth/permissions';
 import type { Actor } from '@/lib/auth/permissions';
 import { OI_ACCOUNT, OI_INPUT, OI_STORED, oiInput, type OiBlock, type OiChange, type OiPeriod } from './other-income-types';
+import { withDefaults } from '@/lib/engine/assumptions';
+import { landlordRent } from './admin';
+import { PMA_FEE } from './group';
 
 export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor, props: schema.Property[], editable: Set<number>): Promise<OiBlock[]> {
   const ids = props.map((p) => p.id);
@@ -69,6 +72,13 @@ export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor
     }
   }
 
+  // ANPM's PMA fee is calculated: the rate × the landlords' budget rent (2026 budget: 6%)
+  const pmaBlock = blocks.get(PMA_FEE.scope);
+  if (pmaBlock) {
+    const rent = (await landlordRent(version.id)).reduce((s, v) => s + v, 0);
+    pmaBlock.calcB = { [PMA_FEE.account]: Math.round(rent * withDefaults(version.assumptions).pmaRate * 100) / 100 };
+  }
+
   return [...blocks.values()].sort((a, b) => a.buCode.localeCompare(b.buCode) || (a.kind === b.kind ? a.code.localeCompare(b.code) : a.kind === 'G' ? 1 : -1));
 }
 
@@ -120,6 +130,10 @@ export async function saveOtherIncome(user: Actor, versionId: number, changes: O
       }
     } else {
       buCode = m[2];
+      if (c.scope === PMA_FEE.scope && c.account === PMA_FEE.account && c.period === 'B') {
+        errors.push("The PMA fee is calculated: the PMA rate (Admin → Assumptions) × the landlords' rent");
+        continue;
+      }
       if (!isFinance(user)) {
         errors.push(`General ${buCode}: Finance only`);
         continue;

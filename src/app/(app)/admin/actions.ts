@@ -8,6 +8,7 @@ import { db, schema } from '@/db';
 import { requireFinance } from '@/lib/auth/dal';
 import { recalcLines } from '@/lib/budget/calc';
 import { rollForward } from '@/lib/budget/rollforward';
+import { FIRST_REPORT_YEAR } from '@/lib/budget/comparatives';
 import { DEFAULT_ASSUMPTIONS, type Assumptions } from '@/lib/engine/assumptions';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
 import type { GlPreview } from '@/lib/import/gl-other-income';
@@ -74,6 +75,8 @@ const AssumptionsSchema = z.object({
   vatRate: z.number().min(0).max(1),
   depositPct: z.number().min(0).max(1),
   mfPct: z.number().min(0).max(1),
+  pmaRate: z.number().min(0).max(1),
+  amaRate: z.number().min(0).max(1),
 }) satisfies z.ZodType<Assumptions>;
 
 export async function saveAssumptions(versionId: number, input: Assumptions): Promise<Result> {
@@ -165,7 +168,8 @@ export async function importComparatives(versionId: number, form: FormData): Pro
     if (headerIdx < 0) throw new Error('No "Code" column found in the first sheet');
     const header = rows[headerIdx].map((c) => String(c ?? '').trim().toUpperCase());
     const codeCol = header.findIndex((h) => /^(PROPERTY\s*)?CODE$/.test(h));
-    const labelCols = header.map((h, i) => ({ h, i })).filter((x) => /^\d{4}[ABF]$/.test(x.h));
+    // years before FIRST_REPORT_YEAR are not kept
+    const labelCols = header.map((h, i) => ({ h, i })).filter((x) => /^\d{4}[ABF]$/.test(x.h) && Number(x.h.slice(0, 4)) >= FIRST_REPORT_YEAR);
     if (!labelCols.length) throw new Error('No comparative columns found (headers like 2026F, 2025A, 2024A)');
 
     const props = await db.select().from(schema.properties);
@@ -268,27 +272,82 @@ const FmActualsPreviewSchema = z.object({
   noWorkType: z.number(),
 });
 
-/** Writes the actuals the upload preview returned (the file is read by /api/import/gl): other income, and FM costs from MJN HOLDING. */
+const BohActualRows = z
+  .array(
+    z.object({
+      company: z.string().regex(/^\d{3}$/),
+      propertyId: z.number().int(),
+      account: z.string().regex(/^\d{5}$/),
+      month: z.string().regex(/^\d{4}-\d{2}$/),
+      amount: z.number().finite(),
+    }),
+  )
+  .max(100000);
+const BohActualsPreviewSchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}$/),
+  rows: z.number(),
+  byYear: z.array(z.object({ year: z.string(), lines: z.record(z.string(), z.number()), total: z.number() })),
+  unmatched: z.array(z.object({ segment: z.string(), amount: z.number() })),
+  companyLevel: z.number(),
+});
+
+const AdminActualRows = z
+  .array(
+    z.object({
+      company: z.string().regex(/^\d{3}$/),
+      dept: z.string().max(10),
+      account: z.string().regex(/^\d{5}$/),
+      month: z.string().regex(/^\d{4}-\d{2}$/),
+      amount: z.number().finite(),
+    }),
+  )
+  .max(100000);
+const AdminActualsPreviewSchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}$/),
+  rows: z.number(),
+  byYear: z.array(z.object({ year: z.string(), payroll: z.number(), admin: z.number(), allocation: z.number() })),
+});
+
+/**
+ * Writes the actuals the upload preview returned (the file is read by /api/import/gl): other income,
+ * and from MJN HOLDING the FM costs, building overheads and G&A by department.
+ */
 export async function applyGlActuals(
   versionId: number,
   values: unknown,
   preview: GlPreview,
   file: string | null,
   fm: { rows: unknown; preview: unknown } | null = null,
+  boh: { rows: unknown; preview: unknown } | null = null,
+  ga: { rows: unknown; preview: unknown } | null = null,
 ): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
     const v = GlValues.parse(values);
     const { applyGlImport } = await import('@/lib/import/gl-other-income');
     await applyGlImport(versionId, v, user.id, { file, preview });
-    let fmMsg = '';
+    const extra: string[] = [];
     if (fm) {
       const rows = FmActualRows.parse(fm.rows);
       const { applyFmActuals } = await import('@/lib/import/gl-fm');
       await applyFmActuals(rows, FmActualsPreviewSchema.parse(fm.preview), user.id, file);
-      fmMsg = ` and ${rows.length.toLocaleString('en-US')} FM cost actuals`;
+      extra.push(`${rows.length.toLocaleString('en-US')} FM cost actuals`);
     }
-    return `Imported ${v.length.toLocaleString('en-US')} ${preview.ledger} GL actuals into Other Income${fmMsg}`;
+    if (boh) {
+      const rows = BohActualRows.parse(boh.rows);
+      const { applyBohActuals } = await import('@/lib/import/gl-boh');
+      await applyBohActuals(rows, BohActualsPreviewSchema.parse(boh.preview), user.id, file);
+      extra.push(`${rows.length.toLocaleString('en-US')} building overhead actuals`);
+    }
+    if (ga) {
+      const rows = AdminActualRows.parse(ga.rows);
+      const { applyAdminActuals } = await import('@/lib/import/gl-admin');
+      await applyAdminActuals(rows, AdminActualsPreviewSchema.parse(ga.preview), user.id, file);
+      extra.push(`${rows.length.toLocaleString('en-US')} G&A actuals`);
+    }
+    return `Imported ${v.length.toLocaleString('en-US')} ${preview.ledger} GL actuals into Other Income${extra.length ? `, ${extra.join(' and ')}` : ''}`;
   });
 }
 

@@ -24,9 +24,11 @@ const FILTERED_TABS: Record<string, boolean> = {
   '/': true,
   '/pnl': true,
   '/summary': true,
+  '/consolidated': true,
   '/analysis': false,
   '/master': true,
   '/other-income': false,
+  '/building-overheads': false,
   '/submissions': true,
   '/fm': true,
 };

@@ -45,15 +45,44 @@ describe('FM budget calculation', () => {
     );
     expect(r.teamCost.SUPERVISORY).toBeCloseTo(1100);
     const p1 = r.byProperty.get(1)!, p2 = r.byProperty.get(2)!, p3 = r.byProperty.get(3)!;
-    // supervision: M2–M4 part (30%) over 501/502 by M02 (3:1); R3 part (9%) all to property 2; the rest has no works
-    expect(p1.staff.SUPERVISORY).toBeCloseTo(1100 * 0.3 * 0.75);
-    expect(p2.staff.SUPERVISORY).toBeCloseTo(1100 * 0.3 * 0.25 + 1100 * 0.09);
+    // supervision: M2–M4 part (30%) over 501/502 by M02 (3:1); R3 part (9%) all to property 2; the M1
+    // (19%) and R1/R2/R4 (42%) parts have no works of their types, so they go to the same buildings by
+    // all their works (3,000 : 6,000)
+    expect(p1.staff.SUPERVISORY).toBeCloseTo(1100 * 0.3 * 0.75 + (1100 * 0.61) / 3);
+    expect(p2.staff.SUPERVISORY).toBeCloseTo(1100 * 0.3 * 0.25 + 1100 * 0.09 + (1100 * 0.61 * 2) / 3);
     expect(p3.staff.SUPERVISORY ?? 0).toBe(0); // PMC: no supervision
     // zone 1 team over properties 1 and 2 by maintain cost (3:1)
     expect(p1.staff.ZONE_1).toBeCloseTo(880 * 0.75);
     expect(p2.staff.VACANT).toBeCloseTo(220);
-    // M1 (19%) and R1/R2/R4 (42%) parts have no works to go to
-    expect(r.unallocated).toBeCloseTo(1100 * 0.61);
+    // nothing is left out of the P&L
+    expect(r.unallocated).toBe(0);
+    expect(p1.staffTotal + p2.staffTotal + p3.staffTotal).toBeCloseTo(2200);
     expect(p1.monthly.fmStaff[0]).toBeCloseTo(p1.staffTotal / 12);
+  });
+
+  it('a team whose basis is empty still reaches the buildings (no vacant unit works, a zone without maintenance)', () => {
+    const r = computeFm(
+      facilities,
+      [{ propertyId: 1, workType: 'M02', amount: 3000, month: null }],
+      [
+        { team: 'VACANT', ctc: 600, overtime: 0 }, // no R03 anywhere: by all works → property 1
+        { team: 'ZONE_2', ctc: 400, overtime: 0 }, // zone 2 (property 3) has no works: equally over its buildings
+      ],
+    );
+    expect(r.byProperty.get(1)!.staff.VACANT).toBeCloseTo(600);
+    expect(r.byProperty.get(3)!.staff.ZONE_2).toBeCloseTo(400);
+    expect(r.unallocated).toBe(0);
+  });
+
+  it('splits capex into major repairs (R01, R02) and capex items (R04)', () => {
+    const p = computeFm(facilities, [
+      { propertyId: 1, workType: 'R01', amount: 1200, month: null },
+      { propertyId: 1, workType: 'R02', amount: 600, month: 2 },
+      { propertyId: 1, workType: 'R04', amount: 5000, month: 3 },
+    ], []).byProperty.get(1)!;
+    expect(p.monthly.repairs[0]).toBe(100);
+    expect(p.monthly.repairs[1]).toBe(700);
+    expect(p.monthly.capexItems[2]).toBe(5000);
+    expect(p.monthly.capex.reduce((s, v) => s + v, 0)).toBe(6800);
   });
 });

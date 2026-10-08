@@ -28,3 +28,15 @@ export const OUTCOME_COLOR: Record<ExpiryOutcome, string> = {
 
 /** New tenants moving in (a line over the renewal profile) */
 export const MOVE_IN_COLOR = 'var(--seg-move-in)';
+
+/** Business units (by code) */
+const BU_COLOR: Record<string, string> = { '501': 'var(--seg-bu-501)', '502': 'var(--seg-bu-502)', '522': 'var(--seg-bu-522)' };
+export const buColor = (code: string) => BU_COLOR[code] ?? 'var(--seg-bu-other)';
+
+/** Other income types (Landlord / ANPM split of the GL accounts) */
+export const OI_TYPE_COLOR: Record<string, string> = {
+  'Landlord charges': 'var(--seg-oi-landlord)',
+  'ANPM fees': 'var(--seg-oi-anpm)',
+  'Management fee (PMA)': 'var(--seg-oi-pma)',
+  'Interest & company income': 'var(--seg-oi-company)',
+};

@@ -75,6 +75,8 @@ export interface OiBlock {
   values: OiValues;
   /** maintenance service fee from the leases, budget year */
   mfBudget: number;
+  /** other budget amounts calculated, not entered (ANPM's PMA fee: the rate × the landlords' rent), by account */
+  calcB?: Record<string, number>;
 }
 
 export interface OiChange {
@@ -89,6 +91,7 @@ export function oiCell(b: OiBlock, account: string, c: OiColumn): number | null 
   const v = b.values[account] ?? {};
   if (c === 'F') return v.YTD == null && v.OD == null ? null : (v.YTD ?? 0) + (v.OD ?? 0);
   if (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF') return b.kind === 'P' ? b.mfBudget || null : null;
+  if (c === 'B' && b.calcB?.[account] !== undefined) return b.calcB[account];
   return v[c] ?? null;
 }
 
@@ -96,5 +99,6 @@ export function oiCell(b: OiBlock, account: string, c: OiColumn): number | null 
 export function oiInput(b: OiBlock, account: string, c: OiColumn): boolean {
   if (c !== 'OD' && c !== 'B') return false;
   if (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF' && b.kind === 'P') return false;
+  if (c === 'B' && b.calcB?.[account] !== undefined) return false;
   return true;
 }

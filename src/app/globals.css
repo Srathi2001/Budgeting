@@ -85,6 +85,18 @@
   --seg-not-relet: var(--cat-overheads);
   /* the move-in line rides over the outcome stack: the lead measure colour, not a fifth segment hue */
   --seg-move-in: var(--m-actual);
+
+  /* business units (Rent by year) */
+  --seg-bu-501: var(--div-contracting);
+  --seg-bu-502: var(--div-facilities);
+  --seg-bu-522: var(--div-plant);
+  --seg-bu-other: var(--cat-other);
+
+  /* other income types (Other income by account), in stack order; validated in both themes */
+  --seg-oi-landlord: var(--cat-plant);
+  --seg-oi-anpm: var(--cat-materials);
+  --seg-oi-pma: var(--cat-overheads);
+  --seg-oi-company: var(--cat-labour);
 }
 
 /* Cell states on the entry tabs (Lease Budget grid and form, Other Income, Comparatives): two fills only.

@@ -22,6 +22,8 @@ import type { RrPreview } from '@/lib/import/revenue-recognition';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
 import type { GlLedger, GlPreview, GlValue } from '@/lib/import/gl-other-income';
 import type { FmActual, FmActualsPreview } from '@/lib/import/gl-fm';
+import type { BohActual, BohActualsPreview } from '@/lib/import/gl-boh';
+import type { AdminActual, AdminActualsPreview } from '@/lib/import/gl-admin';
 import { locationOf } from '@/lib/budget/location';
 import { saveComparative } from '../analysis/actions';
 
@@ -151,6 +153,8 @@ export function AssumptionsPanel({
             vatRate: n(f.get('vatRate')) / 100,
             depositPct: n(f.get('depositPct')) / 100,
             mfPct: n(f.get('mfPct')) / 100,
+            pmaRate: n(f.get('pmaRate')) / 100,
+            amaRate: n(f.get('amaRate')) / 100,
           }),
         )
       }
@@ -165,6 +169,8 @@ export function AssumptionsPanel({
       {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. Included in cash inflow', 100, '%')}
       {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
       {field('mfPct', 'Maintenance service fee', a.mfPct, 'Of the renewal / new-tenant rent, residential leases with MF: other income, in the month the contract starts', 100, '%')}
+      {field('pmaRate', 'PMA fee (ANPM)', a.pmaRate, "ANPM's property management fee: of the landlords' rent (REHL, REHL-MJN incl. the mall); eliminated in the group", 100, '%')}
+      {field('amaRate', 'AMA fee (MJNH)', a.amaRate, 'Asset management fee to MJNH: of the asset value entered per entity on Admin Overheads', 100, '%')}
 
       <div className="pt-3">
         <div className="text-sm font-medium text-slate-700">RERA increase bands</div>
@@ -797,7 +803,7 @@ export function GlImportPanel({
   last: { at: string; file: string | null } | null;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [plan, setPlan] = useState<{ values: GlValue[]; preview: GlPreview; fm: { rows: FmActual[]; preview: FmActualsPreview } | null } | null>(null);
+  const [plan, setPlan] = useState<{ values: GlValue[]; preview: GlPreview; fm: { rows: FmActual[]; preview: FmActualsPreview } | null; boh: { rows: BohActual[]; preview: BohActualsPreview } | null; ga: { rows: AdminActual[]; preview: AdminActualsPreview } | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const apply = useAction();
@@ -834,6 +840,7 @@ export function GlImportPanel({
           {ledger === 'MJN HOLDING'
             ? 'Accounts 52xxx are read by property; company-level lines and properties not in the budget go to the General row of their business unit.'
             : 'Accounts 52xxx go to the General row of each company.'}{' '}
+          {ledger === 'MJN HOLDING' && 'The same file carries the FM cost actuals (627xx, 117xx), the building overhead actuals (Building Overheads tab) and the G&A actuals by department (Admin Overheads tab).'}{' '}
           An import replaces this ledger&apos;s GL actuals; the other ledger, Oct–Dec and budget inputs are kept.
         </p>
         <div className="mt-3 text-xs text-slate-600">
@@ -852,7 +859,7 @@ export function GlImportPanel({
               onClick={() =>
                 plan &&
                 apply.run(async () => {
-                  const r = await applyGlActuals(versionId, plan.values, plan.preview, file?.name ?? null, plan.fm);
+                  const r = await applyGlActuals(versionId, plan.values, plan.preview, file?.name ?? null, plan.fm, plan.boh, plan.ga);
                   if (!r.error) setPlan(null);
                   return r;
                 })
@@ -939,6 +946,77 @@ export function GlImportPanel({
                 cols={['Property code', 'AED']}
                 row={(x) => [x.segment, fmt(x.amount)]}
               />
+            </>
+          )}
+          {plan?.boh && (
+            <>
+              <div className="pt-2 text-sm font-semibold">
+                Building overhead actuals <span className="font-normal">· {plan.boh.preview.from} to {plan.boh.preview.to}, replaced for these months</span>
+              </div>
+              <div className="frame">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Year</th>
+                      {Object.keys(plan.boh.preview.byYear[0]?.lines ?? {}).map((l) => (
+                        <th key={l} className="num">
+                          {l}
+                        </th>
+                      ))}
+                      <th className="num">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plan.boh.preview.byYear.map((y) => (
+                      <tr key={y.year}>
+                        <td>{y.year}</td>
+                        {Object.entries(y.lines).map(([l, v]) => (
+                          <td key={l} className="num tabular-nums">
+                            {fmt(v)}
+                          </td>
+                        ))}
+                        <td className="num tabular-nums font-semibold">{fmt(y.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ListBlock
+                title="Building overheads on buildings not in the budget"
+                hint={`not imported · company-level lines (G&A, AED ${fmt(plan.boh.preview.companyLevel)}) are left out too`}
+                items={plan.boh.preview.unmatched}
+                cols={['Property code', 'AED']}
+                row={(x) => [x.segment, fmt(x.amount)]}
+              />
+            </>
+          )}
+          {plan?.ga && (
+            <>
+              <div className="pt-2 text-sm font-semibold">
+                G&amp;A actuals by department <span className="font-normal">· {plan.ga.preview.from} to {plan.ga.preview.to}, replaced for these months</span>
+              </div>
+              <div className="frame max-w-2xl">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Year</th>
+                      <th className="num">Payroll</th>
+                      <th className="num">Admin overheads</th>
+                      <th className="num">Salary allocated to buildings</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plan.ga.preview.byYear.map((y) => (
+                      <tr key={y.year}>
+                        <td>{y.year}</td>
+                        <td className="num tabular-nums">{fmt(y.payroll)}</td>
+                        <td className="num tabular-nums">{fmt(y.admin)}</td>
+                        <td className="num tabular-nums">{fmt(y.allocation)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </div>

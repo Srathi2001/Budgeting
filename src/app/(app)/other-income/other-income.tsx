@@ -183,7 +183,7 @@ export function OtherIncome({
         </td>
       );
     }
-    const calc = c === 'F' || (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF' && b.kind === 'P');
+    const calc = c === 'F' || (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF' && b.kind === 'P') || (c === 'B' && b.calcB?.[account] !== undefined);
     return (
       <td key={c} className={`anh-num ${calc ? 'calc' : 'locked'}`}>
         {fmt(v)}

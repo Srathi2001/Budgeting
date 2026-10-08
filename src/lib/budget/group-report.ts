@@ -4,6 +4,7 @@
 import 'server-only';
 import type { PropertyRollup, OiMonthly } from './reports';
 import type { PropertyExpense } from './expenses';
+import type { EntityCost } from './admin';
 import { INTERGROUP, classifyOtherIncome, classifyRent, isMall, type EntityKey, type GroupClass } from './group';
 
 export interface Atom {
@@ -19,13 +20,19 @@ export const PMA_EXPENSE = { key: 'pma', label: 'PMA fee to ANPM' };
 
 const entityOf = (buCode: string, propertyCode: string | null): EntityKey => (isMall(propertyCode) ? 'MALL' : (buCode as EntityKey));
 
-export function groupAtoms(rolls: PropertyRollup[], oi: OiMonthly[], costs: PropertyExpense[] = []): Atom[] {
+export function groupAtoms(rolls: PropertyRollup[], oi: OiMonthly[], costs: PropertyExpense[] = [], entityCosts: EntityCost[] = []): Atom[] {
   const atoms: Atom[] = [];
+  // general & administration of the companies (ANPM payroll and admin overheads, the AMA fee)
+  for (const c of entityCosts) {
+    const cls = classifyRent(c.entity === 'MALL' ? '502' : c.entity);
+    atoms.push({ line: `exp:${c.line}`, entity: c.entity, cls, months: c.months }, { line: `cash:exp:${c.line}`, entity: c.entity, cls, months: c.cash ?? c.months });
+  }
   // building costs count for the group as the building's rent does (PMC buildings: the owners')
   for (const c of costs) {
     const entity = entityOf(c.buCode, c.code);
     const cls = classifyRent(c.buCode);
-    atoms.push({ line: `exp:${c.line}`, entity, cls, months: c.months }, { line: `cash:exp:${c.line}`, entity, cls, months: c.months });
+    // the cash flow takes the cash months where they differ (premiums paid upfront)
+    atoms.push({ line: `exp:${c.line}`, entity, cls, months: c.months }, { line: `cash:exp:${c.line}`, entity, cls, months: c.cash ?? c.months });
   }
   for (const r of rolls) {
     const entity = entityOf(r.buCode, r.code);

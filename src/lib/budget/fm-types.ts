@@ -12,18 +12,23 @@ export interface WorkTypeInfo {
   spread: boolean;
   /** Building P&L / statements line: maintenance cost, or capex & replacements (as in the 2026 budget) */
   line: 'maintenance' | 'capex';
+  /**
+   * Where it sits in the P&L, as the 2026 Buildingwise P&L and group P&L: operating maintenance (in
+   * gross profit), major repairs below gross profit (R01, R02), capex items in the cash flow only (R04)
+   */
+  pnl: 'maintenance' | 'repairs' | 'capexItems';
 }
 
 export const WORK_TYPES: WorkTypeInfo[] = [
-  { code: 'M01', label: 'Outsourced maintenance contracts', group: 'Maintain', spread: true, line: 'maintenance' },
-  { code: 'M02', label: 'Reactive maintenance', group: 'Maintain', spread: true, line: 'maintenance' },
-  { code: 'M03', label: 'Inspections & surveys', group: 'Maintain', spread: true, line: 'maintenance' },
-  { code: 'M04', label: 'In-house planned maintenance', group: 'Maintain', spread: true, line: 'maintenance' },
-  { code: 'R01', label: 'Major repairs & replacements', group: 'Renewal', spread: false, line: 'capex' },
-  { code: 'R02', label: 'Refurbishment & retrofit', group: 'Renewal', spread: false, line: 'capex' },
+  { code: 'M01', label: 'Outsourced maintenance contracts', group: 'Maintain', spread: true, line: 'maintenance', pnl: 'maintenance' },
+  { code: 'M02', label: 'Reactive maintenance', group: 'Maintain', spread: true, line: 'maintenance', pnl: 'maintenance' },
+  { code: 'M03', label: 'Inspections & surveys', group: 'Maintain', spread: true, line: 'maintenance', pnl: 'maintenance' },
+  { code: 'M04', label: 'In-house planned maintenance', group: 'Maintain', spread: true, line: 'maintenance', pnl: 'maintenance' },
+  { code: 'R01', label: 'Major repairs & replacements', group: 'Renewal', spread: false, line: 'capex', pnl: 'repairs' },
+  { code: 'R02', label: 'Refurbishment & retrofit', group: 'Renewal', spread: false, line: 'capex', pnl: 'repairs' },
   // vacant unit preparation sits in maintenance cost in the 2026 Building P&L (R03 + Ms)
-  { code: 'R03', label: 'Vacant unit preparation', group: 'Renewal', spread: true, line: 'maintenance' },
-  { code: 'R04', label: 'Capex items', group: 'Renewal', spread: false, line: 'capex' },
+  { code: 'R03', label: 'Vacant unit preparation', group: 'Renewal', spread: true, line: 'maintenance', pnl: 'maintenance' },
+  { code: 'R04', label: 'Capex items', group: 'Renewal', spread: false, line: 'capex', pnl: 'capexItems' },
 ];
 export const WORK_TYPE = new Map(WORK_TYPES.map((w) => [w.code, w]));
 export const isWorkType = (s: string): s is WorkType => WORK_TYPE.has(s as WorkType);

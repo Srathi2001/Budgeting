@@ -1,7 +1,7 @@
 import { getCurrentUser, getActiveVersion } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups, cashFlow } from '@/lib/budget/reports';
-import { EXPENSE_LINES, budgetedExpenseLines, propertyExpenseTotals } from '@/lib/budget/expenses';
+import { BELOW_GP_LINES, CASH_ONLY_LINES, OPEX_LINES, budgetedExpenseLines, propertyExpenseTotals, type ExpenseLine } from '@/lib/budget/expenses';
 import { xlsxResponse, r2 } from '@/lib/export/xlsx';
 import { MONTHS, sum } from '@/lib/format';
 
@@ -16,12 +16,30 @@ export async function GET() {
   const budgeted = await budgetedExpenseLines(version.id);
   const costs = await propertyExpenseTotals(version.id, scope.propertyIds);
 
+  // as the page: gross profit after operating costs, major repairs below it, capex items in cash only
   const pnl = [
-    ['S.N.', 'BU', 'Units', 'CODE', 'PROPERTY NAME', 'Rental revenue', ...EXPENSE_LINES.map((l) => l.label), 'Total expenses', 'Gross profit', 'Cash inflow'],
+    [
+      'S.N.',
+      'BU',
+      'Units',
+      'CODE',
+      'PROPERTY NAME',
+      'Rental revenue',
+      ...OPEX_LINES.map((l) => l.label),
+      'Total operating expenses',
+      'Gross profit',
+      ...BELOW_GP_LINES.map((l) => l.label),
+      'Net profit',
+      ...CASH_ONLY_LINES.map((l) => `${l.label} (cash only)`),
+      'Cash inflow',
+    ],
     ...rolls.map((r, i) => {
       const rent = sum(r.revenue);
       const c = costs.get(r.propertyId) ?? {};
-      const exp = sum(Object.values(c));
+      const of = (ls: ExpenseLine[]) => sum(ls.map((l) => c[l.key] ?? 0));
+      // lines not budgeted yet stay blank
+      const cells = (ls: ExpenseLine[]) => ls.map((l) => (budgeted.has(l.key) ? r2(c[l.key] ?? 0) : null));
+      const gp = rent - of(OPEX_LINES);
       return [
         i + 1,
         r.buName,
@@ -29,10 +47,12 @@ export async function GET() {
         r.code,
         r.name,
         r2(rent),
-        // lines not budgeted yet stay blank
-        ...EXPENSE_LINES.map((l) => (budgeted.has(l.key) ? r2(c[l.key] ?? 0) : null)),
-        r2(exp),
-        r2(rent - exp),
+        ...cells(OPEX_LINES),
+        r2(of(OPEX_LINES)),
+        r2(gp),
+        ...cells(BELOW_GP_LINES),
+        r2(gp - of(BELOW_GP_LINES)),
+        ...cells(CASH_ONLY_LINES),
         r2(sum(cashFlow(r))),
       ];
     }),

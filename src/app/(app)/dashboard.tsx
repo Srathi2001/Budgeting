@@ -11,6 +11,8 @@ import { useFilters } from '@/components/filter-bar';
 import { unitPasses } from '@/lib/filters';
 import { RentPsfCard } from './rent-psf-card';
 import { BudgetVsForecastCard } from './budget-vs-forecast-card';
+import { CostsSection, OtherIncomeCard, RentByYearCard } from './dashboard-reports';
+import type { DashboardReports } from '@/lib/budget/dashboard-reports-types';
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const z12 = () => Array(12).fill(0) as number[];
@@ -21,7 +23,7 @@ const pctTxt = (n: number | null, d = 1) => (n === null || !Number.isFinite(n) ?
 const OUTCOMES: ExpiryOutcome[] = ['Renew', 'New tenant', 'Not re-let'];
 const OUTCOME_LABEL: Record<ExpiryOutcome, string> = { Renew: 'Renew', 'New tenant': 'New tenant', 'Not re-let': 'Not re-let' };
 
-export function Dashboard({ data, locked }: { data: DashboardData; locked: boolean }) {
+export function Dashboard({ data, reports, locked }: { data: DashboardData; reports: DashboardReports; locked: boolean }) {
   // the shared page filters (Business unit, Property manager, Category, Property)
   const { filters } = useFilters();
   const yy = String(data.year).slice(2);
@@ -269,8 +271,11 @@ export function Dashboard({ data, locked }: { data: DashboardData; locked: boole
         </ChartCard>
       </div>
 
+      <RentByYearCard data={reports} />
       {data.budgetVsForecast && <BudgetVsForecastCard data={data.budgetVsForecast} />}
       <RentPsfCard data={data.rentPsf} />
+      <OtherIncomeCard data={reports} />
+      <CostsSection data={reports} />
     </div>
   );
 }

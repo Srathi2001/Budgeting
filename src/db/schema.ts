@@ -377,6 +377,136 @@ export const fmActuals = pgTable(
   (t) => [uniqueIndex('fm_actuals_uq').on(t.company, t.propertyId, t.workType, t.element, t.month)],
 );
 
+/**
+ * Building overhead actuals from the GL (MJN HOLDING Account Analysis Report): debit − credit per
+ * building, natural account (the building overhead list) and month. Facts shared by all versions; an
+ * import replaces the months the report covers. Company-level lines are G&A and not kept here.
+ */
+export const bohActuals = pgTable(
+  'boh_actuals',
+  {
+    id: serial('id').primaryKey(),
+    company: text('company').notNull(),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    account: text('account').notNull(),
+    month: text('month').notNull(), // YYYY-MM
+    amount: money('amount').notNull(),
+  },
+  (t) => [uniqueIndex('boh_actuals_uq').on(t.company, t.propertyId, t.account, t.month), index('boh_actuals_month_idx').on(t.month)],
+);
+
+/**
+ * Building overhead budget: the year's amount per building and GL account, entered by the property
+ * manager or Finance (by account). `dueMonth`: the month a lump-sum line is paid (civil
+ * defence, service charges); null = the month of last year's largest payment.
+ */
+export const bohBudget = pgTable(
+  'boh_budget',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    account: text('account').notNull(),
+    amount: money('amount').notNull(),
+    dueMonth: integer('due_month'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [uniqueIndex('boh_budget_uq').on(t.versionId, t.propertyId, t.account)],
+);
+
+/**
+ * G&A actuals from the GL (MJN HOLDING Account Analysis Report): payroll and admin overhead accounts by
+ * company, department (cost centre) and month, debit − credit. Facts shared by all versions; an import
+ * replaces the months the report covers.
+ */
+export const adminActuals = pgTable(
+  'admin_actuals',
+  {
+    id: serial('id').primaryKey(),
+    company: text('company').notNull(),
+    dept: text('dept').notNull(), // cost centre, e.g. 201
+    account: text('account').notNull(),
+    month: text('month').notNull(), // YYYY-MM
+    amount: money('amount').notNull(),
+  },
+  (t) => [uniqueIndex('admin_actuals_uq').on(t.company, t.dept, t.account, t.month), index('admin_actuals_month_idx').on(t.month)],
+);
+
+/**
+ * Payroll budget per department (totals from HR, no employee data): current staff and new hires, and
+ * the 2026 allocation rules: % capitalised to projects (PDD), % recharged to MJNH and to ASRE.
+ * Null % = the default rule for the department.
+ */
+export const adminPayroll = pgTable(
+  'admin_payroll',
+  {
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    dept: text('dept').notNull(),
+    headcount: integer('headcount'),
+    ctc: money('ctc'),
+    newHeadcount: integer('new_headcount'),
+    newCtc: money('new_ctc'),
+    capPct: decimal('cap_pct'),
+    mjnhPct: decimal('mjnh_pct'),
+    asrePct: decimal('asre_pct'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.dept] })],
+);
+
+/** Admin overheads budget: department × GL account × the company that pays it (ANPM 521, REHL 501, REHL-MJN 502). */
+export const adminBudget = pgTable(
+  'admin_budget',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    dept: text('dept').notNull(),
+    account: text('account').notNull(),
+    entity: text('entity').notNull(),
+    amount: money('amount').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [uniqueIndex('admin_budget_uq').on(t.versionId, t.dept, t.account, t.entity)],
+);
+
+/**
+ * Back-up schedules of the admin overheads, as the 2026 department templates' sheets: vehicles,
+ * telephones, training plan, staff welfare events, IT equipment, office capex and other items. One row
+ * per item; `data` holds its fields (by kind, see admin-types ITEM_KINDS). Each item posts to GL accounts.
+ */
+export const adminItems = pgTable(
+  'admin_items',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    /** the department that owns the item (the training plan's postings go to the attendees' departments) */
+    dept: text('dept').notNull(),
+    /** company that pays it: 521 ANPM, 501 REHL, 502 REHL-MJN */
+    payer: text('payer').notNull().default('521'),
+    data: jsonb('data').$type<Record<string, unknown>>().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [index('admin_items_version_idx').on(t.versionId, t.kind)],
+);
+
+/** Asset value per landlord entity (501, 502, MALL), for the AMA fee to MJNH. */
+export const adminAssets = pgTable(
+  'admin_assets',
+  {
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    entity: text('entity').notNull(),
+    assetValue: money('asset_value').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.entity] })],
+);
+
 export const auditLog = pgTable(
   'audit_log',
   {

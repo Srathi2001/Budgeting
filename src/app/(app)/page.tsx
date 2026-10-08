@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { requireUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
 import { loadDashboardData } from '@/lib/budget/dashboard';
-import { getFilters } from '@/lib/filters-server';
+import { loadDashboardReports } from '@/lib/budget/dashboard-reports';
+import { filteredScope, getFilters } from '@/lib/filters-server';
 import { Dashboard } from './dashboard';
 
 export default async function DashboardPage() {
@@ -10,5 +11,6 @@ export default async function DashboardPage() {
   const { version } = await getActiveVersion();
   const props = await visibleProperties(user);
   const data = await loadDashboardData(version!, props.map((p) => p.id), await getFilters());
-  return <Dashboard data={data} locked={version!.status === 'LOCKED'} />;
+  const reports = await loadDashboardReports(version!, user, await filteredScope(user));
+  return <Dashboard data={data} reports={reports} locked={version!.status === 'LOCKED'} />;
 }

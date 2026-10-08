@@ -2,6 +2,9 @@ import { and, eq, inArray, like, max } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { StoredCalc } from './calc';
 
+/** First year the tool reports: Oracle's Revenue Recognition Summary and the GL imports start in Jan-2024. */
+export const FIRST_REPORT_YEAR = 2024;
+
 /**
  * Property-level comparatives a version reports against: current-year forecast and two years of
  * actuals; plus the prior-year budget when no prior budget version exists in the tool.

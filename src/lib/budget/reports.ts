@@ -3,6 +3,9 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { categoryOf, type Category } from './category';
 import { OI_ACCOUNT, OI_ACCOUNTS } from './other-income-types';
+import { withDefaults } from '@/lib/engine/assumptions';
+import { landlordRent } from './admin';
+import { PMA_FEE } from './group';
 
 export interface PropertyRollup {
   propertyId: number;
@@ -171,7 +174,16 @@ export async function otherIncomeMonthly(
     const acct = OI_ACCOUNT.get(r.account);
     if (!acct || !r.amount) continue;
     if (r.propertyId !== null ? !ids.has(r.propertyId) || acct.calc === 'MF' : !generalBus(r.buCode)) continue;
+    if (r.scope === PMA_FEE.scope && r.account === PMA_FEE.account) continue; // calculated below
     for (let i = 0; i < 12; i++) add(r.scope, r.buCode, r.propertyId, r.account, i, Number(r.amount) / 12);
+  }
+
+  // ANPM's PMA fee: the PMA rate × the landlords' budget rent, by month
+  if (generalBus('521')) {
+    const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+    const rate = withDefaults(version?.assumptions).pmaRate;
+    const rent = await landlordRent(versionId);
+    rent.forEach((v, i) => v && add(PMA_FEE.scope, '521', null, PMA_FEE.account, i, v * rate));
   }
 
   const mfAccount = OI_ACCOUNTS.find((a) => a.calc === 'MF')!.code;
