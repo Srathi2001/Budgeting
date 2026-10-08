@@ -67,7 +67,8 @@ export const BOH_ACCOUNTS: BohAccount[] = [
   { code: '62609', name: 'Maintenance tools', line: 'overheads', owner: 'PM', phasing: 'flat' },
   { code: '64401', name: 'Advertisement', line: 'overheads', owner: 'PM', phasing: 'flat' },
   { code: '62501', name: 'Civil defence subscription', line: 'overheads', owner: 'FIN', phasing: 'due' },
-  { code: '64802', name: 'Municipal charges', line: 'overheads', owner: 'FIN', phasing: 'flat' },
+  // a yearly fee per building: paid once a year
+  { code: '64802', name: 'Municipal charges', line: 'overheads', owner: 'FIN', phasing: 'due' },
   { code: '64303', name: 'Management consultancy', line: 'overheads', owner: 'FIN', phasing: 'flat' },
   { code: '62606', name: 'Consultancy - property', line: 'overheads', owner: 'FIN', phasing: 'flat' },
   { code: '64304', name: 'Technical consultancy', line: 'overheads', owner: 'FIN', phasing: 'flat' },
@@ -93,6 +94,8 @@ export const BOH_ACCOUNTS: BohAccount[] = [
   ).map(([code, name]) => ({ code, name, line: 'overheads' as const, owner: 'PM' as const, phasing: 'flat' as const, group: OUTSIDE_FM })),
   { code: '62608', name: 'Master community charges', line: 'land', owner: 'FIN', phasing: 'due' },
   { code: '62604', name: 'DIP fees', line: 'land', owner: 'FIN', phasing: 'due' },
+  { code: '62602', name: 'Land rent', line: 'land', owner: 'FIN', phasing: 'due' },
+  { code: '62601', name: 'Tax DREC', line: 'land', owner: 'FIN', phasing: 'due' },
 ];
 export const BOH_ACCOUNT = new Map(BOH_ACCOUNTS.map((a) => [a.code, a]));
 export const isBohNatural = (natural: string) => BOH_ACCOUNT.has(natural);
@@ -110,8 +113,12 @@ export interface BohRow {
   ytd: number | null;
   /** Y-1 forecast, by how the line is paid (run-rate, year to date + last year's remaining months, or the payment) */
   f: number | null;
-  /** budget amount, null = not entered */
+  /** budget amount used (entered, or calculated: see `calc`), null = none */
   b: number | null;
+  /** the amount typed in (null = none) */
+  entered: number | null;
+  /** how `b` is calculated: null = as entered */
+  calc: BohCalc | null;
   dueMonth: number | null;
   /** due month used when none is entered: last year's largest payment, else January */
   defaultDue: number;
@@ -134,6 +141,70 @@ export interface BohChange {
   account: string;
   amount: number | null;
   dueMonth: number | null;
+}
+
+/**
+ * A calculated budget:
+ * water: the forecast × (1 + %) · insurance: insured value × rate, or the liability premium, × (1 + %) ·
+ * watchmen: share × cost per watchman · contracts: the building's contract schedule ·
+ * forecast: last year's forecast, until an amount is entered (municipal charges).
+ */
+export type BohCalc = 'water' | 'insurance' | 'watchmen' | 'contracts' | 'forecast';
+export const BOH_CALC_NOTE: Record<BohCalc, string> = {
+  water: 'Forecast × (1 + the water & electricity %), see Assumptions',
+  insurance: 'Insured value × rate (PAR), or the premium (public liability), × (1 + %), see Assumptions',
+  watchmen: 'Watchmen × cost per watchman, see Security allocation',
+  contracts: 'Total of the contract schedule',
+  forecast: 'Last year’s forecast until an amount is entered',
+};
+
+// ---- contract schedules (AMC tabs) ------------------------------------------------------------
+
+export type ContractKind = 'security' | 'cleaning' | 'pest' | 'waste' | 'materials' | 'telecom';
+export interface ContractKindInfo {
+  kind: ContractKind;
+  label: string;
+  /** accounts a row of this schedule can book to (first = default) */
+  accounts: string[];
+  /** what quantity × rate means here */
+  quantity: string;
+  rate: string;
+}
+export const CONTRACT_KINDS: ContractKindInfo[] = [
+  { kind: 'security', label: 'Security AMC', accounts: ['62504', '62610'], quantity: 'Months', rate: 'Monthly fee' },
+  { kind: 'cleaning', label: 'Cleaning AMC', accounts: ['62502', '62218', '62207', '62611', '62123', '62110'], quantity: 'Months / visits', rate: 'Fee' },
+  { kind: 'pest', label: 'Pest control', accounts: ['62210', '62115'], quantity: 'Visits / months', rate: 'Fee' },
+  { kind: 'waste', label: 'Waste disposal', accounts: ['62402', '62105'], quantity: 'Collections a year', rate: 'Rate' },
+  { kind: 'materials', label: 'Cleaning materials', accounts: ['62401', '62609'], quantity: 'Quantity', rate: 'Rate' },
+  { kind: 'telecom', label: 'Telephone & internet', accounts: ['62119', '64253', '64251', '62122'], quantity: 'Months', rate: 'Monthly charge' },
+];
+export const CONTRACT_KIND = new Map(CONTRACT_KINDS.map((k) => [k.kind, k]));
+export const isContractKind = (s: unknown): s is ContractKind => CONTRACT_KIND.has(s as ContractKind);
+/** schedule of an account (accounts in a schedule are budgeted by it once a building has rows) */
+export const CONTRACT_KIND_OF = new Map(CONTRACT_KINDS.flatMap((k) => k.accounts.map((a) => [a, k.kind] as const)));
+
+export const CONTRACT_TERMS = ['Monthly', 'Quarterly', 'Half-yearly', 'Yearly', 'One-off'] as const;
+export type ContractTerms = (typeof CONTRACT_TERMS)[number];
+
+export interface ContractRow {
+  id: number;
+  propertyId: number;
+  kind: ContractKind;
+  account: string;
+  supplier: string | null;
+  description: string | null;
+  terms: ContractTerms;
+  quantity: number;
+  rate: number;
+  startMonth: number | null;
+  remarks: string | null;
+  source: 'PO' | 'PM';
+  poNumber: string | null;
+  poCategory: string | null;
+  poStatus: string | null;
+  poQuantity: number | null;
+  poRate: number | null;
+  poAmount: number | null;
 }
 
 /** Monthly phasing of an annual amount. `pattern`: last year's monthly actuals (seasonal lines). */

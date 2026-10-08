@@ -8,7 +8,7 @@ import { Fragment, useMemo, useState, useTransition } from 'react';
 import { fmt, MONTHS } from '@/lib/format';
 import { useFilters } from '@/components/filter-bar';
 import { propertyPasses } from '@/lib/filters';
-import { BOH_ACCOUNT, BOH_ACCOUNTS, BOH_LINES, BOH_LINE_LABEL, paidInOneMonth, type BohBlock, type BohChange, type BohRow } from '@/lib/budget/boh-types';
+import { BOH_ACCOUNT, BOH_ACCOUNTS, BOH_CALC_NOTE, BOH_LINES, BOH_LINE_LABEL, paidInOneMonth, type BohBlock, type BohChange, type BohRow } from '@/lib/budget/boh-types';
 import { saveBuildingOverheadCells } from './actions';
 import { TemplateButtons } from '@/components/template-buttons';
 
@@ -26,6 +26,8 @@ type Col = 'a2' | 'a1' | 'ytd' | 'f' | 'b';
 const COLS: Col[] = ['a2', 'a1', 'ytd', 'f', 'b'];
 const hasData = (r: BohRow) => COLS.some((c) => r[c] !== null && Math.abs(r[c]!) >= 0.5);
 const pct = (b: number | null, f: number | null) => (b === null || !f ? null : (b - f) / Math.abs(f));
+/** calculated where it comes from (Assumptions, Security allocation, the contract schedule), not typed */
+const fixed = (r: BohRow) => r.calc !== null && r.calc !== 'forecast';
 
 export function BuildingOverheads({
   blocks: initial,
@@ -126,8 +128,10 @@ export function BuildingOverheads({
       return n;
     });
     setDrafts((d) => omit(d, k));
-    if (parsed === r.b) return;
-    update(b, r.account, { b: parsed, dueMonth: parsed === null ? null : r.dueMonth });
+    if (parsed === r.entered) return;
+    // municipal charges: last year's forecast until an amount is entered
+    const byForecast = parsed === null && r.calc === 'forecast';
+    update(b, r.account, { entered: parsed, b: parsed ?? (byForecast ? r.f : null), calc: byForecast ? 'forecast' : null, dueMonth: parsed === null ? null : r.dueMonth });
     save(b, r.account, { propertyId: b.propertyId, account: r.account, amount: parsed, dueMonth: parsed === null ? null : r.dueMonth }, r);
   };
 
@@ -139,6 +143,12 @@ export function BuildingOverheads({
 
   const amountCell = (b: BohBlock, r: BohRow) => {
     const k = key(b.propertyId, r.account);
+    if (fixed(r))
+      return (
+        <td className="anh-num calc" title={BOH_CALC_NOTE[r.calc!]}>
+          {fmt(r.b)}
+        </td>
+      );
     if (!canEnter(b, r.account))
       return (
         <td className="anh-num locked" title={BOH_ACCOUNT.get(r.account)?.owner === 'FIN' && !finance ? 'Entered by Finance' : undefined}>
@@ -150,9 +160,11 @@ export function BuildingOverheads({
         <input
           aria-label={`${b.code} ${BOH_ACCOUNT.get(r.account)?.name} ${label.b}`}
           inputMode="decimal"
-          value={k in drafts ? drafts[k] : r.b === null ? '' : fmt(r.b)}
+          value={k in drafts ? drafts[k] : r.entered === null ? '' : fmt(r.entered)}
+          placeholder={r.calc === 'forecast' ? fmt(r.b) : undefined}
+          title={r.calc === 'forecast' ? BOH_CALC_NOTE.forecast : undefined}
           onFocus={(e) => {
-            setDrafts((d) => ({ ...d, [k]: r.b === null ? '' : String(r.b) }));
+            setDrafts((d) => ({ ...d, [k]: r.entered === null ? '' : String(r.entered) }));
             requestAnimationFrame(() => e.target.select());
           }}
           onChange={(e) => setDrafts((d) => ({ ...d, [k]: e.target.value }))}
@@ -171,6 +183,7 @@ export function BuildingOverheads({
 
   const dueCell = (b: BohBlock, r: BohRow) => {
     const acct = BOH_ACCOUNT.get(r.account)!;
+    if (r.calc === 'contracts') return <td className="locked" title="By each contract's terms">Per contracts</td>;
     if (!paidInOneMonth(acct)) return <td className="locked" title={acct.phasing === 'seasonal' ? "The portfolio's monthly pattern of the last two full years (summer peak)" : 'Evenly over 12 months'}>{acct.phasing === 'seasonal' ? 'Seasonal' : 'Monthly'}</td>;
     const shown = r.dueMonth ?? r.defaultDue;
     // premiums paid upfront: expensed monthly, paid (cash flow) in one month
@@ -234,8 +247,8 @@ export function BuildingOverheads({
         <div>
           <h1 className="page-title">Building Overheads</h1>
           <p className="page-sub">
-            {versionName} · by building and GL account · actuals from the GL (Account Analysis Report) · property managers enter contracts and running costs, Finance
-            enters utilities, insurance, watchmen, civil defence, consultancy and service charges
+            {versionName} · by building and GL account · actuals from the GL (Account Analysis Report) · property managers enter running costs and the contract schedules, Finance the other lines; water &
+            electricity, insurance, watchmen and contract lines are calculated (see the tabs)
           </p>
         </div>
         <div className="ml-auto flex gap-2">

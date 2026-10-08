@@ -416,6 +416,74 @@ export const bohBudget = pgTable(
 );
 
 /**
+ * Insurance base per building (the insurance schedule): total insured value, last year's PAR rate and
+ * public liability premium. The budget is calculated: PAR = value × rate × (1 + PAR %), public
+ * liability = premium × (1 + PL %), the percentages in the version's assumptions.
+ */
+export const bohInsurance = pgTable(
+  'boh_insurance',
+  {
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    insuredValue: money('insured_value'),
+    parRate: numeric('par_rate', { precision: 16, scale: 10, mode: 'number' }),
+    plPremium: money('pl_premium'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.propertyId] })],
+);
+
+/** Watchmen per building (security allocation): the share of a watchman (1 = one full watchman). Budget = share × cost per watchman. */
+export const bohWatchmen = pgTable(
+  'boh_watchmen',
+  {
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    share: decimal('share').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.propertyId] })],
+);
+
+/**
+ * AMC and service contract schedules of the buildings (security, cleaning, pest control, waste,
+ * cleaning materials, telephone & internet): one row per contract or item, quantity × rate a year,
+ * paid by its terms. Rows from Oracle purchase orders (source PO) keep the PO's figures for reference;
+ * the property team changes the budget fields. A building's account with rows is budgeted by them.
+ */
+export const bohContracts = pgTable(
+  'boh_contracts',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    propertyId: integer('property_id').notNull().references(() => properties.id),
+    kind: text('kind').notNull(), // security / cleaning / pest / waste / materials / telecom
+    account: text('account').notNull(),
+    supplier: text('supplier'),
+    description: text('description'),
+    terms: text('terms').notNull().default('Monthly'), // Monthly / Quarterly / Half-yearly / Yearly / One-off
+    quantity: decimal('quantity').notNull().default(12),
+    rate: money('rate').notNull().default(0),
+    startMonth: integer('start_month'),
+    remarks: text('remarks'),
+    /** PO: from an Oracle purchase order (the po* fields hold it) · PM: entered */
+    source: text('source').notNull().default('PM'),
+    poNumber: text('po_number'),
+    poLine: text('po_line'),
+    poCategory: text('po_category'),
+    poStatus: text('po_status'),
+    poQuantity: decimal('po_quantity'),
+    poRate: money('po_rate'),
+    poAmount: money('po_amount'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [index('boh_contracts_version_idx').on(t.versionId, t.propertyId), uniqueIndex('boh_contracts_po_uq').on(t.versionId, t.poNumber, t.poLine, t.propertyId, t.account)],
+);
+
+/**
  * G&A actuals from the GL (MJN HOLDING Account Analysis Report): payroll and admin overhead accounts by
  * company, department (cost centre) and month, debit − credit. Facts shared by all versions; an import
  * replaces the months the report covers.

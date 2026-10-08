@@ -7,7 +7,9 @@ import { getFilters, filteredScope } from '@/lib/filters-server';
 import { loadOtherIncome, saveOtherIncome } from '@/lib/budget/other-income';
 import { OI_ACCOUNTS, oiCell, oiInput, oiLabel, type OiChange } from '@/lib/budget/other-income-types';
 import { loadBuildingOverheads, saveBuildingOverheads } from '@/lib/budget/boh';
-import { BOH_ACCOUNT, BOH_LINE_LABEL, paidInOneMonth, type BohChange } from '@/lib/budget/boh-types';
+import { BOH_ACCOUNT, BOH_LINE_LABEL, CONTRACT_KIND, CONTRACT_TERMS, paidInOneMonth, type BohChange, type ContractKind } from '@/lib/budget/boh-types';
+import { contractAmount } from '@/lib/budget/boh-calc';
+import { loadContracts, saveContractsAs } from '@/lib/budget/boh-schedules';
 import { loadAdminOverheads, saveAdminOverheads } from '@/lib/budget/admin';
 import { ADMIN_ACCOUNTS, ADMIN_ACCOUNT, AMA_ENTITIES, DEPTS, PAYERS, deptName, isPayrollAccount, type AdminChange } from '@/lib/budget/admin-types';
 import { ITEM_KIND, SCHEDULE_ACCOUNT } from '@/lib/budget/admin-items';
@@ -16,7 +18,7 @@ import { saveFmStaffAs } from '@/lib/budget/fm-save';
 import { STAFF_TEAMS } from '@/lib/budget/fm-types';
 import type { Template, TemplateChange, TplRow } from './cell-template';
 
-export const TEMPLATE_KINDS = ['other-income', 'building-overheads', 'admin-overheads', 'fm-labour'] as const;
+export const TEMPLATE_KINDS = ['other-income', 'building-overheads', 'admin-overheads', 'fm-labour', 'amc-security', 'amc-cleaning', 'amc-pest', 'amc-waste', 'amc-materials', 'amc-telecom'] as const;
 export type TemplateKind = (typeof TEMPLATE_KINDS)[number];
 export const isTemplateKind = (s: unknown): s is TemplateKind => TEMPLATE_KINDS.includes(s as TemplateKind);
 
@@ -33,6 +35,12 @@ const FILE: Record<TemplateKind, string> = {
   'building-overheads': 'Building Overheads',
   'admin-overheads': 'Admin Overheads',
   'fm-labour': 'FM Labour allocation',
+  'amc-security': 'Security AMC',
+  'amc-cleaning': 'Cleaning AMC',
+  'amc-pest': 'Pest control',
+  'amc-waste': 'Waste disposal',
+  'amc-materials': 'Cleaning materials',
+  'amc-telecom': 'Telephone & internet',
 };
 export const templateFileName = (kind: TemplateKind, year: number) => `${FILE[kind]} input ${year}.xlsx`;
 
@@ -116,7 +124,8 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
     const rows: TplRow[] = blocks.flatMap((b) =>
       b.rows.map((r) => {
         const a = BOH_ACCOUNT.get(r.account)!;
-        const may = b.editable && (a.owner === 'PM' || finance);
+        // calculated budgets (water, insurance, watchmen, contract lines) are changed where they are calculated
+        const may = b.editable && (a.owner === 'PM' || finance) && (r.calc === null || r.calc === 'forecast');
         return {
           key: `${b.propertyId}|${r.account}`,
           values: {
@@ -251,6 +260,71 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
     };
   }
 
+  if (kind.startsWith('amc-')) {
+    const ck = kind.slice(4) as ContractKind;
+    const info = CONTRACT_KIND.get(ck)!;
+    const props = await scoped();
+    const editable = await editablePropertyIds(user, version);
+    const byId = new Map(props.map((p) => [p.id, p]));
+    const rows = await loadContracts(version.id, props.map((p) => p.id), ck);
+    const acctText = (a: string) => `${a} ${BOH_ACCOUNT.get(a)?.name ?? ''}`.trim();
+    const building = (id: number) => `${byId.get(id)?.code ?? ''} ${byId.get(id)?.name ?? ''}`.trim();
+    const OPEN = ['account', 'supplier', 'description', 'terms', 'start', 'quantity', 'rate', 'remarks'];
+    return {
+      title: info.label,
+      scope: `${props.length} buildings`,
+      locked,
+      instructions: [
+        `4. One row per contract or item: ${info.quantity.toLowerCase()} × ${info.rate.toLowerCase()} = the amount for ${Y}. Terms say when it is paid (monthly from the start month; quarterly, half-yearly, yearly or one-off in the start month).`,
+        '5. Rows from Oracle purchase orders show the PO number and amount for reference; change the budget columns if the 2027 contract differs (set the quantity or rate to 0 to drop one).',
+        '6. To add a contract, use a blank row at the bottom: choose the building, then fill the row.',
+      ],
+      sheets: [
+        {
+          name: info.label,
+          columns: [
+            { key: 'building', header: 'Building', width: 36, kind: 'text', label: true, identity: true, list: props.filter((p) => editable.has(p.id)).map((p) => building(p.id)), help: 'New rows: the building (drop-down).' },
+            { key: 'account', header: 'Account', width: 30, kind: 'text', input: true, list: info.accounts.map(acctText), help: 'GL account (drop-down).' },
+            { key: 'supplier', header: 'Supplier', width: 26, kind: 'text', input: true, label: true },
+            { key: 'description', header: 'Description', width: 50, kind: 'text', input: true, help: 'Scope of the contract or item.' },
+            { key: 'terms', header: 'Terms', width: 12, kind: 'text', input: true, list: CONTRACT_TERMS, help: 'How it is paid.' },
+            { key: 'start', header: 'Start month', width: 10, kind: 'month', input: true, help: 'Blank = January (quarterly: March, half-yearly: June).' },
+            { key: 'quantity', header: info.quantity, width: 12, kind: 'number', input: true },
+            { key: 'rate', header: info.rate, width: 13, kind: 'money', input: true },
+            { key: 'amount', header: `${Y}B amount`, width: 14, kind: 'money', help: 'Quantity × rate, as of the download.' },
+            { key: 'po', header: 'PO number', width: 15, kind: 'text' },
+            { key: 'poAmount', header: 'PO amount', width: 13, kind: 'money' },
+            { key: 'remarks', header: 'Remarks', width: 30, kind: 'text', input: true },
+          ],
+          rows: rows.map((r) => ({
+            key: `c|${r.id}`,
+            values: {
+              pid: r.propertyId,
+              building: building(r.propertyId),
+              account: acctText(r.account),
+              supplier: r.supplier,
+              description: r.description,
+              terms: r.terms,
+              start: r.startMonth,
+              quantity: r.quantity,
+              rate: r.rate,
+              amount: contractAmount(r),
+              po: r.poNumber,
+              poAmount: r.poAmount,
+              remarks: r.remarks,
+            },
+            open: !locked && editable.has(r.propertyId) ? OPEN : [],
+          })),
+          newRows: 60,
+          keyOf: (v, n) => {
+            const code = /^\S+/.exec(String(v.building ?? '').trim())?.[0];
+            return code ? `new|${n}|${code}` : null;
+          },
+        },
+      ],
+    };
+  }
+
   // fm-labour
   const page = await loadFmPage(version, user, [], null);
   const label = new Map(STAFF_TEAMS.map((t) => [t.code, t]));
@@ -329,6 +403,42 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
       return { kind: 'asset', entity: a, value: num(c.to) };
     });
     return chunks(list, (p) => saveAdminOverheads(user, version.id, p));
+  }
+  if (kind.startsWith('amc-')) {
+    const ck = kind.slice(4) as ContractKind;
+    const info = CONTRACT_KIND.get(ck)!;
+    const byCode = new Map((await visibleProperties(user)).map((p) => [p.code, p.id]));
+    const errors: string[] = [];
+    const lines = [...byKey].flatMap(([key, cs]) => {
+      const [k, a, b] = key.split('|');
+      const cur = k === 'c' ? rowOf.get(key)!.values : {};
+      const get = (col: string) => {
+        const c = cs.find((x) => x.column === col);
+        return c ? c.to : (cur[col] ?? null);
+      };
+      const propertyId = k === 'c' ? Number(cur.pid) : byCode.get(b);
+      if (!propertyId) {
+        errors.push(`Row ${a}: building ${b} not found`);
+        return [];
+      }
+      const terms = (get('terms') as string | null) ?? 'Monthly';
+      return [
+        {
+          id: k === 'c' ? Number(a) : null,
+          propertyId,
+          account: /^\d{5}/.exec(String(get('account') ?? ''))?.[0] ?? info.accounts[0],
+          supplier: (get('supplier') as string | null) ?? null,
+          description: (get('description') as string | null) ?? null,
+          terms,
+          quantity: num(get('quantity')) ?? (terms === 'Monthly' ? 12 : 1),
+          rate: num(get('rate')) ?? 0,
+          startMonth: num(get('start')),
+          remarks: (get('remarks') as string | null) ?? null,
+        },
+      ];
+    });
+    const r = await saveContractsAs(user, version.id, ck, { lines, deleted: [] });
+    return { saved: r.saved, errors: [...errors, ...r.errors] };
   }
   // fm-labour: each changed team with both its amounts
   const staff = [...byKey].map(([key, cs]) => {

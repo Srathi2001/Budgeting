@@ -36,6 +36,6 @@ export async function uploadInputTemplate(kind: string, versionId: number, form:
   if (diff.error) return { ...none, error: diff.error };
   if (!apply || !diff.changes.length) return { changes: diff.changes, errors: diff.errors };
   const r = await applyInputTemplate(kind, user, version, current, diff.changes);
-  revalidatePath(PAGE[kind]);
+  revalidatePath(PAGE[kind] ?? '/building-overheads');
   return { changes: diff.changes, errors: diff.errors, saved: r.saved, refused: r.errors };
 }

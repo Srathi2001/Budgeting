@@ -6,6 +6,8 @@ import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../src/db';
 import { applyLineChanges } from '../src/lib/budget/save';
 import { fmTransitionAs, saveFmLinesAs } from '../src/lib/budget/fm-save';
+import { saveBuildingOverheads } from '../src/lib/budget/boh';
+import { saveContractsAs } from '../src/lib/budget/boh-schedules';
 import { recalcLines } from '../src/lib/budget/calc';
 import { saveOtherIncome } from '../src/lib/budget/other-income';
 
@@ -191,6 +193,34 @@ async function main() {
     if (subBefore) await db.insert(schema.fmSubmissions).values(subBefore);
     await db.delete(schema.auditLog).where(and(eq(schema.auditLog.propertyId, fid), inArray(schema.auditLog.entity, ['fm_lines', 'fm_submission'])));
   } else console.log('SKIP  FM checks: no fmd@budget.local user');
+
+  // 6. Building overheads: calculated budgets, the municipal default, contract schedules
+  {
+    const pid = original.propertyId;
+    const startAt = new Date();
+    let b = await saveBuildingOverheads(fin, open.id, [{ propertyId: pid, account: '62324', amount: 1000, dueMonth: null }]);
+    check('water & electricity is calculated, not typed', /calculated/.test(b.errors[0] ?? ''), b.errors[0]);
+    b = await saveBuildingOverheads(fin, open.id, [{ propertyId: pid, account: '64802', amount: 500, dueMonth: null }]);
+    check('municipal charges can be typed over the forecast', b.saved === 1, b.errors[0]);
+    await saveBuildingOverheads(fin, open.id, [{ propertyId: pid, account: '64802', amount: null, dueMonth: null }]);
+    const line = { id: null, propertyId: pid, account: '62210', supplier: 'TEST PEST', description: 'TEST monthly', terms: 'Monthly', quantity: 12, rate: 100, startMonth: null, remarks: null };
+    let c = await saveContractsAs(pm, open.id, 'pest', { lines: [line], deleted: [] });
+    check('PM adds a contract on own building', c.saved === 1 && !c.errors.length, c.errors[0]);
+    c = await saveContractsAs(pm, open.id, 'pest', { lines: [{ ...line, propertyId: theirs.l.propertyId }], deleted: [] });
+    check("PM cannot add a contract on another PM's building", c.saved === 0 && /Not your property/.test(c.errors[0] ?? ''), c.errors[0]);
+    c = await saveContractsAs(pm, open.id, 'pest', { lines: [{ ...line, account: '62504' }], deleted: [] });
+    check('account must belong to the schedule', /not in the Pest control schedule/.test(c.errors[0] ?? ''), c.errors[0]);
+    b = await saveBuildingOverheads(pm, open.id, [{ propertyId: pid, account: '62210', amount: 9, dueMonth: null }]);
+    check('an account with contracts is calculated from them', /calculated/.test(b.errors[0] ?? ''), b.errors[0]);
+    const [po] = await db.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, open.id), eq(schema.bohContracts.source, 'PO'))).limit(1);
+    if (po) {
+      c = await saveContractsAs(fin, open.id, po.kind as 'pest', { lines: [], deleted: [po.id] });
+      check('a PO contract row cannot be removed', /can’t be removed/.test(c.errors[0] ?? ''), c.errors[0]);
+    }
+    // restore
+    await db.delete(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, open.id), eq(schema.bohContracts.supplier, 'TEST PEST')));
+    await db.delete(schema.auditLog).where(and(inArray(schema.auditLog.entity, ['boh_budget', 'boh_contracts']), sql`${schema.auditLog.at} >= ${startAt}`));
+  }
 
   // restore
   await db

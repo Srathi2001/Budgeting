@@ -33,7 +33,22 @@ export interface Assumptions {
   pmaRate: number;
   /** MJNH's asset management fee (AMA), % of the asset value of each landlord entity: 0.5% in the 2026 budget. */
   amaRate: number;
+  // Building overheads (set in its Assumptions tab)
+  /** water & electricity: forecast and budget increase on the year before (2026 budget: 5%) */
+  bohUtilitiesPct: number;
+  /** insurance: change of the PAR rate on last year's (2026 budget: 7%) */
+  insParPct: number;
+  /** insurance: change of the public liability premium on last year's (2026 budget: 7%) */
+  insPlPct: number;
+  /** cost per watchman a year (2026 budget: 49,335) */
+  watchmanCost: number;
 }
+
+/** set in Building overheads' Assumptions tab, not in Admin */
+export const BOH_ASSUMPTION_KEYS = ['bohUtilitiesPct', 'insParPct', 'insPlPct', 'watchmanCost'] as const;
+export type BohAssumptionKey = (typeof BOH_ASSUMPTION_KEYS)[number];
+/** the assumptions set in Admin */
+export type AdminAssumptions = Omit<Assumptions, BohAssumptionKey>;
 
 export const DEFAULT_ASSUMPTIONS: Assumptions = {
   renewalTermDays: 365,
@@ -53,6 +68,10 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
   mfPct: 0.05,
   pmaRate: 0.06,
   amaRate: 0.005,
+  bohUtilitiesPct: 0.05,
+  insParPct: 0.07,
+  insPlPct: 0.07,
+  watchmanCost: 49335,
 };
 
 export function withDefaults(partial: Partial<Assumptions> | null | undefined): Assumptions {

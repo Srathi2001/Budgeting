@@ -7,7 +7,7 @@
 // input cells are compared with the tool and the differences go through the page's own save path.
 import ExcelJS from 'exceljs';
 
-export type CellKind = 'text' | 'money' | 'int' | 'pct' | 'month';
+export type CellKind = 'text' | 'money' | 'number' | 'int' | 'pct' | 'month';
 export type CellValue = string | number | null;
 
 export interface TplCol {
@@ -37,7 +37,7 @@ export interface TplSheet {
   rows: TplRow[];
   /** blank rows for new entries; `keyOf` builds the key from the identity values (null: not identified) */
   newRows?: number;
-  keyOf?: (values: Record<string, unknown>) => string | null;
+  keyOf?: (values: Record<string, unknown>, excelRow: number) => string | null;
 }
 export interface Template {
   title: string;
@@ -60,7 +60,7 @@ const FILL = {
 };
 const THIN = { style: 'thin', color: { argb: 'FFBFBFBF' } } as ExcelJS.Border;
 const BOX = { top: THIN, bottom: THIN, left: THIN, right: THIN };
-const FMT: Record<CellKind, string | undefined> = { text: undefined, money: '#,##0', int: '0', pct: '0.0%', month: undefined };
+const FMT: Record<CellKind, string | undefined> = { text: undefined, money: '#,##0', number: '#,##0.##', int: '0', pct: '0.0%', month: undefined };
 
 const show = (kind: CellKind, v: CellValue) => (kind === 'month' && typeof v === 'number' ? MONTHS[v - 1] : v);
 
@@ -203,7 +203,7 @@ function parse(kind: CellKind, v: unknown, list?: readonly string[]): CellValue 
   if (typeof v === 'string' && kind === 'pct' && /%\s*$/.test(v)) n /= 100;
   if (!Number.isFinite(n)) return 'bad';
   if (kind === 'int' && !Number.isInteger(n)) return 'bad';
-  return Math.round(n * (kind === 'pct' ? 1e6 : 100)) / (kind === 'pct' ? 1e6 : 100);
+  return Math.round(n * (kind === 'pct' ? 1e6 : kind === 'number' ? 1e4 : 100)) / (kind === 'pct' ? 1e6 : kind === 'number' ? 1e4 : 100);
 }
 
 export interface TemplateChange {
@@ -266,7 +266,7 @@ export async function diffTemplate(data: ArrayBuffer, current: Template): Promis
       if (given === null && [...s.columns.filter((c) => c.identity), ...inputs].every((c) => raw[c.key] === null || raw[c.key] === undefined)) return;
       let key = given === null ? null : String(given);
       if (key === null) {
-        key = s.keyOf?.(raw) ?? null;
+        key = s.keyOf?.(raw, n) ?? null;
         if (!key) {
           errors.push({ excelRow: n, sheet: s.name, row: nameOf(s, raw) || 'New row', message: `Fill in ${s.columns.filter((c) => c.identity).map((c) => c.header).join(' and ')}` });
           return;

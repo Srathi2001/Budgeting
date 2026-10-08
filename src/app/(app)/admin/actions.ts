@@ -9,7 +9,7 @@ import { requireFinance } from '@/lib/auth/dal';
 import { recalcLines } from '@/lib/budget/calc';
 import { rollForward } from '@/lib/budget/rollforward';
 import { FIRST_REPORT_YEAR } from '@/lib/budget/comparatives';
-import { DEFAULT_ASSUMPTIONS, type Assumptions } from '@/lib/engine/assumptions';
+import { DEFAULT_ASSUMPTIONS, type AdminAssumptions } from '@/lib/engine/assumptions';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
 import type { GlPreview } from '@/lib/import/gl-other-income';
 import type { RrPreview } from '@/lib/import/revenue-recognition';
@@ -77,16 +77,17 @@ const AssumptionsSchema = z.object({
   mfPct: z.number().min(0).max(1),
   pmaRate: z.number().min(0).max(1),
   amaRate: z.number().min(0).max(1),
-}) satisfies z.ZodType<Assumptions>;
+}) satisfies z.ZodType<AdminAssumptions>;
 
-export async function saveAssumptions(versionId: number, input: Assumptions): Promise<Result> {
+export async function saveAssumptions(versionId: number, input: AdminAssumptions): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
     const a = AssumptionsSchema.parse(input);
     const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
     if (!v || v.status === 'LOCKED') throw new Error('Version is locked');
     await db.transaction(async (tx) => {
-      await tx.update(schema.budgetVersions).set({ assumptions: a }).where(eq(schema.budgetVersions.id, versionId));
+      // keep the settings made elsewhere (Building overheads' Assumptions tab)
+      await tx.update(schema.budgetVersions).set({ assumptions: { ...v.assumptions, ...a } }).where(eq(schema.budgetVersions.id, versionId));
       await recalcLines(tx, versionId);
     });
     await audit(user.id, versionId, 'assumptions', 'update', { from: { ...DEFAULT_ASSUMPTIONS, ...v.assumptions }, to: a });
