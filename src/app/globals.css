@@ -321,6 +321,15 @@ body {
 .frame-tall {
   max-height: calc(100vh - var(--topbar-h) - 150px);
 }
+/* A table box is never taller than the screen, so its scrollbars (the horizontal one at its foot) stay in
+   view once the table is on screen; the header row sticks while it scrolls. In the components layer, so
+   a smaller limit on one table (max-h-64 …) still applies. */
+@layer components {
+  .frame,
+  .anh-grid-wrap {
+    max-height: calc(100dvh - var(--topbar-h) - 24px);
+  }
+}
 
 .tbl {
   width: 100%;

@@ -157,6 +157,7 @@ export function BohAssumptions({ blocks, versionId, year, cutoff, locked, financ
             </button>
           )}
         </div>
+        <div className="anh-grid-wrap">
         <table className="anh-grid">
           <thead>
             <tr className="h1">
@@ -205,6 +206,7 @@ export function BohAssumptions({ blocks, versionId, year, cutoff, locked, financ
             </tr>
           </tbody>
         </table>
+        </div>
       </section>
     </div>
   );
@@ -244,6 +246,7 @@ export function SecurityAllocation({ blocks, versionId, year, cutoff, locked, fi
         <MsgLine msg={msg} />
         <span className="ml-auto text-sm">Cost per watchman: AED {fmt(cost)} a year (Assumptions)</span>
       </div>
+      <div className="anh-grid-wrap">
       <table className="anh-grid">
         <thead>
           <tr className="h1">
@@ -283,6 +286,7 @@ export function SecurityAllocation({ blocks, versionId, year, cutoff, locked, fi
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
