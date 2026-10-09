@@ -177,6 +177,14 @@ export const FEE_ENTITIES = [
 ] as const;
 export type FeeEntity = (typeof FEE_ENTITIES)[number]['key'];
 
+/** the companies ANPM's G&A is shared over by revenue (2026: PayrollxCost K:M; the mall is not in it) */
+export const SPLIT_ENTITIES = [
+  { key: '501', name: 'REHL' },
+  { key: '502', name: 'REHL-MJN (without the mall)' },
+  { key: '522', name: 'PMC' },
+] as const;
+export type SplitEntity = (typeof SPLIT_ENTITIES)[number]['key'];
+
 /** the management fees: PMA to ANPM on the landlord's rent, AMA to MJNH on the asset value */
 export const FEES = [
   { key: 'PMA', name: 'PMA fee to ANPM', base: 'Rent' },

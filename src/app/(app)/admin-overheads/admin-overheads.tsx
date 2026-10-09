@@ -370,7 +370,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 const shown = new Set(rows.map((r) => r.account));
                 return (
                   <Fragment key={dept}>
-                    <tr className="section">
+                    <tr className="section" id={`dept-${dept}`}>
                       <td colSpan={2 + 4 + PAYERS.length + 1}>
                         {dept} · {deptName(dept)}
                         {d?.elsewhere && <span className="ml-2 font-normal text-slate-500">in {d.elsewhere}</span>}

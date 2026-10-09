@@ -27,6 +27,7 @@ import { RowForm } from './row-form';
 import { TemplateImport } from './template-import';
 import { OUTCOMES, annualRent, needsVacancyDays, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
+import { LeaseTabs } from './lease-tabs';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -552,6 +553,7 @@ export function MasterGrid({
     <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
+        <LeaseTabs tab="grid" />
         <input className="input w-56" placeholder="Search unit, tenant…" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
         <label className="flex items-center gap-1 text-[13px]">
           <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue by month

@@ -6,6 +6,9 @@ import { isFiltered } from '@/lib/filters';
 import { filteredScope } from '@/lib/filters-server';
 import { AdoptPropertyFilter } from '@/components/filter-bar';
 import { MasterGrid } from './master-grid';
+import { LeaseSummary } from './lease-summary';
+import { LeaseTabs } from './lease-tabs';
+import { loadLeaseSummary } from '@/lib/budget/lease-summary';
 
 export const metadata = { title: 'Lease Budget · Budget' };
 
@@ -28,6 +31,21 @@ export default async function MasterPage(props: PageProps<'/master'>) {
 
   // the shared page filters (BU, PM, category, property); a ?p= link wins until it is adopted
   const scope = await filteredScope(user);
+  if (sp.tab === 'summary') {
+    const data = await loadLeaseSummary(version!, scope.propertyIds, scope.categories, scope.filters);
+    return (
+      <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
+        <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+          <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
+          <LeaseTabs tab="summary" />
+          <span className="ml-auto text-xs">AED</span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <LeaseSummary data={data} />
+        </div>
+      </div>
+    );
+  }
   const propertyIds = linked.length ? linked : scope.propertyIds;
   const categories = linked.length ? [] : scope.categories;
   const editable = await editablePropertyIds(user, version!);

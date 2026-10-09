@@ -7,6 +7,8 @@ import { CONTRACT_KINDS, isContractKind } from '@/lib/budget/boh-types';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { BuildingOverheads } from './building-overheads';
 import { BohAssumptions, ContractSchedule, SecurityAllocation } from './boh-tabs';
+import { BohSummary } from './boh-summary';
+import { AdoptPropertyFilter } from '@/components/filter-bar';
 
 export const metadata = { title: 'Building Overheads · Budget' };
 
@@ -18,6 +20,7 @@ const fingerprint = (x: unknown) => {
 };
 
 const TABS = [
+  { key: 'summary', label: 'Summary' },
   { key: 'overview', label: 'Overview' },
   { key: 'assumptions', label: 'Assumptions' },
   { key: 'security-allocation', label: 'Security allocation' },
@@ -40,7 +43,10 @@ export default async function BuildingOverheadsPage({ searchParams }: PageProps<
 
   let body: React.ReactNode;
   // each tab starts afresh when its saved data changes (the server's figures replace what was typed)
-  if (tab === 'assumptions') {
+  // ?p=12: a building opened from the Summary (taken over as the shared Property filter)
+  const linked = typeof sp.p === 'string' ? props.find((p) => p.id === Number(sp.p))?.id : undefined;
+  if (tab === 'summary') body = <BohSummary blocks={blocks} versionName={version!.name} year={version!.year} cutoff={cutoff} />;
+  else if (tab === 'assumptions') {
     const insurance = await loadInsurance(version!.id, ids);
     const a = withDefaults(version!.assumptions);
     body = <BohAssumptions key={fingerprint([insurance, a])} {...common} assumptions={a} insurance={insurance} />;
@@ -55,6 +61,7 @@ export default async function BuildingOverheadsPage({ searchParams }: PageProps<
 
   return (
     <div>
+      {linked && <AdoptPropertyFilter ids={[linked]} path="/building-overheads" />}
       <nav className="seg mx-6 mt-4 flex-wrap" aria-label="Building overheads tabs">
         {TABS.map((t) => (
           <Link key={t.key} href={t.key === 'overview' ? '/building-overheads' : `/building-overheads?tab=${t.key}`} aria-current={tab === t.key ? 'page' : undefined} className={tab === t.key ? 'on' : undefined}>
