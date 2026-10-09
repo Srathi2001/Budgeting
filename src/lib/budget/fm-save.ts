@@ -96,12 +96,27 @@ const Staff = z
   )
   .max(7);
 
+/**
+ * The staff budget is spread over every facility, so a change moves cost inside facilities that FMD has
+ * already submitted or Finance has approved. FM may change it only while no facility is submitted or
+ * approved; Finance may always (the audit row keeps the figures before and after).
+ */
+export function staffEditBlocked(user: Pick<Actor, 'role'>, statuses: string[]): string | null {
+  if (user.role === 'ADMIN' || user.role === 'FINANCE') return null;
+  const n = statuses.filter((s) => s === 'SUBMITTED' || s === 'APPROVED').length;
+  return n ? `${n} ${n === 1 ? 'facility is' : 'facilities are'} submitted or approved: the staff budget is fixed; ask Finance to return them or to change it` : null;
+}
+
 export async function saveFmStaffAs(user: Actor, versionId: number, input: unknown): Promise<FmResult> {
   if (!isFinance(user) && !isFm(user)) return { error: 'The FM staff budget is entered by facilities management' };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') return { error: 'This budget version is locked' };
+  const subs = await db.select({ status: schema.fmSubmissions.status }).from(schema.fmSubmissions).where(eq(schema.fmSubmissions.versionId, versionId));
+  const blocked = staffEditBlocked(user, subs.map((s) => s.status));
+  if (blocked) return { error: blocked };
   const parsed = Staff.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
+  const before = await db.select({ team: schema.fmStaff.team, ctc: schema.fmStaff.ctc, overtime: schema.fmStaff.overtime }).from(schema.fmStaff).where(eq(schema.fmStaff.versionId, versionId));
   await db.transaction(async (tx) => {
     for (const s of parsed.data) {
       const row = { versionId, team: s.team as StaffTeam, ctc: s.ctc, overtime: s.team === 'GA' ? 0 : s.overtime, updatedBy: user.id };
@@ -110,7 +125,7 @@ export async function saveFmStaffAs(user: Actor, versionId: number, input: unkno
         .values(row)
         .onConflictDoUpdate({ target: [schema.fmStaff.versionId, schema.fmStaff.team], set: { ctc: row.ctc, overtime: row.overtime, updatedAt: new Date(), updatedBy: user.id } });
     }
-    await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'fm_staff', action: 'save', changes: parsed.data });
+    await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'fm_staff', action: 'save', changes: { before, after: parsed.data, facilitiesSubmittedOrApproved: subs.filter((x) => x.status === 'SUBMITTED' || x.status === 'APPROVED').length } });
   });
   return { ok: 'Staff budget saved' };
 }
@@ -134,10 +149,13 @@ export async function fmTransitionAs(user: Actor, versionId: number, propertyId:
   const current: Status = sub?.status ?? 'DRAFT';
   if (!t.from.includes(current)) return { error: `Cannot ${action} a facility that is ${current.toLowerCase()}` };
   const n = note?.trim().slice(0, 2000) || null;
-  await db
-    .insert(schema.fmSubmissions)
-    .values({ versionId, propertyId, status: t.to, note: n, updatedBy: user.id })
-    .onConflictDoUpdate({ target: [schema.fmSubmissions.versionId, schema.fmSubmissions.propertyId], set: { status: t.to, note: n, updatedAt: new Date(), updatedBy: user.id } });
-  await db.insert(schema.auditLog).values({ userId: user.id, versionId, propertyId, entity: 'fm_submission', action, changes: { from: current, to: t.to, note: n } });
+  // the status and its audit row change together or not at all
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(schema.fmSubmissions)
+      .values({ versionId, propertyId, status: t.to, note: n, updatedBy: user.id })
+      .onConflictDoUpdate({ target: [schema.fmSubmissions.versionId, schema.fmSubmissions.propertyId], set: { status: t.to, note: n, updatedAt: new Date(), updatedBy: user.id } });
+    await tx.insert(schema.auditLog).values({ userId: user.id, versionId, propertyId, entity: 'fm_submission', action, changes: { from: current, to: t.to, note: n } });
+  });
   return { ok: action === 'submit' ? 'Submitted to Finance' : action === 'approve' ? 'Approved' : 'Returned to facilities management' };
 }

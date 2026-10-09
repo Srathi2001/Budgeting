@@ -30,6 +30,11 @@ export interface Assumptions {
   /** Maintenance service fee on residential leases with MF, % of the contract rent (other income). */
   mfPct: number;
   /**
+   * Last closed month of the GL actuals (1–12) the budget is built on: other income YTD = Jan to this
+   * month of Y-1, the rest of Y-1 is the typed forecast. The 2026 budget was built on September (9).
+   */
+  actualsCutoffMonth: number;
+  /**
    * ANPM's property management fee (PMA), % of each landlord's rent, and MJNH's asset management fee (AMA),
    * % of its asset value: the rates when there is no last budget to default to. Set per landlord in Admin
    * overheads (2026 budget: 6% and 0.5%).
@@ -69,6 +74,7 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
   vatRate: 0.05,
   depositPct: 0.05,
   mfPct: 0.05,
+  actualsCutoffMonth: 9,
   pmaRate: 0.06,
   amaRate: 0.005,
   bohUtilitiesPct: 0.05,

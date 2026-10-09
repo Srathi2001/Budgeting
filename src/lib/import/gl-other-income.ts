@@ -4,11 +4,14 @@
 // companies) and MJN PRIVATE OFFICE. In MJN HOLDING the property segment of the account code picks the
 // budget property; company-level lines (property 000000) and properties not in the budget go to the
 // General row of the company's business unit. MJN PRIVATE OFFICE has no budget properties: all of it
-// goes to General rows. Periods for budget year Y: Y-3 → A2, Y-2 → A1, Y-1 Jan–Sep → YTD.
+// goes to General rows. Periods for budget year Y: Y-3 → A2, Y-2 → A1, Y-1 Jan to the cut-off month → YTD.
 // Income is credit − debit. An import replaces that ledger's GL actuals; typed inputs are untouched.
 
 import { and, eq, inArray } from 'drizzle-orm';
-import { db, schema } from '@/db';
+import { db, schema, type DB } from '@/db';
+import { withDefaults } from '@/lib/engine/assumptions';
+
+type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { OI_ACCOUNT } from '@/lib/budget/other-income-types';
 import { glSegments, scanAccountAnalysis, type GlScan } from './gl-analysis';
 import { propertyKey } from './tenant-lease';
@@ -86,16 +89,18 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
   if (!version) throw new Error('Version not found');
   if (version.status === 'LOCKED') throw new Error('Version is locked');
   if (scan.title && scan.title !== GL_REPORT) throw new Error(`This is the ${scan.title}: export the ${GL_REPORT} instead (Oracle GL → Account Analysis Report)`);
-  // an import replaces Y-3 to Y-1 Sep, so the report has to cover all of it
+  // an import replaces Y-3 to the cut-off month of Y-1, so the report has to cover all of it
   const Y0 = version.year;
+  const cutoff = withDefaults(version.assumptions).actualsCutoffMonth;
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const ym = (p: string | null) => {
     const m = /^([A-Za-z]{3})-(\d{2})$/.exec(p?.trim() ?? '');
     return m ? (2000 + Number(m[2])) * 100 + ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'].indexOf(m[1].toUpperCase()) + 1 : null;
   };
   const from = ym(scan.periodFrom);
   const to = ym(scan.periodTo);
-  const need = `Jan-${String(Y0 - 3).slice(2)} to Sep-${String(Y0 - 1).slice(2)}`;
-  if (from === null || to === null || from > (Y0 - 3) * 100 + 1 || to < (Y0 - 1) * 100 + 9)
+  const need = `Jan-${String(Y0 - 3).slice(2)} to ${MON[cutoff - 1]}-${String(Y0 - 1).slice(2)}`;
+  if (from === null || to === null || from > (Y0 - 3) * 100 + 1 || to < (Y0 - 1) * 100 + cutoff)
     throw new Error(`The report covers ${scan.periodFrom ?? '?'} to ${scan.periodTo ?? '?'}: run it for ${need} (an import replaces all three years)`);
   const ledger = scan.ledger?.trim().toUpperCase();
   if (!isGlLedger(ledger)) throw new Error(`Ledger ${scan.ledger ?? '(none)'}: expected ${GL_LEDGER_NAMES.join(' or ')}`);
@@ -107,7 +112,7 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
     const [y, m] = month.split('-').map(Number);
     if (y === Y - 3) return 'A2';
     if (y === Y - 2) return 'A1';
-    if (y === Y - 1 && m <= 9) return 'YTD';
+    if (y === Y - 1 && m <= cutoff) return 'YTD';
     return null;
   };
 
@@ -162,7 +167,7 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
     v.amount += m.credit - m.debit;
     values.set(k, v);
   }
-  if (outside.size) skipped.set('months', { what: `${outside.size} month(s)`, detail: `${[...outside].sort().join(', ')}: outside ${Y - 3}–${Y - 1} Sep` });
+  if (outside.size) skipped.set('months', { what: `${outside.size} month(s)`, detail: `${[...outside].sort().join(', ')}: outside ${Y - 3}–${Y - 1} ${MON[cutoff - 1]}` });
 
   const list = [...values.values()].map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100 })).filter((v) => v.amount !== 0);
   const r = (n: number) => Math.round(n);
@@ -196,15 +201,15 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
 }
 
 /** Replaces the GL actuals (A2, A1, YTD) of the preview's ledger with `values`; other ledgers are kept. */
-export async function applyGlImport(versionId: number, values: GlValue[], userId: number | null, info: { file: string | null; preview: GlPreview }) {
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+export async function applyGlImport(versionId: number, values: GlValue[], userId: number | null, info: { file: string | null; preview: GlPreview }, on: Tx = db) {
+  const [version] = await on.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') throw new Error('Version is locked');
   const ledger = info.preview.ledger;
   if (!isGlLedger(ledger)) throw new Error(`Unknown ledger ${ledger}`);
   const bus = ledgerBus(ledger);
   const outside = values.find((v) => !bus.includes(v.buCode));
   if (outside) throw new Error(`Business unit ${outside.buCode} is not in ledger ${ledger}`);
-  await db.transaction(async (tx) => {
+  const run = async (tx: Tx) => {
     for (const b of GL_LEDGERS[ledger].bus) await tx.insert(schema.businessUnits).values(b).onConflictDoNothing();
     await tx
       .delete(schema.otherIncome)
@@ -221,5 +226,7 @@ export async function applyGlImport(versionId: number, values: GlValue[], userId
       action: 'other_income_actuals',
       changes: { file: info.file, ledger: info.preview.ledger, period: `${info.preview.periodFrom} – ${info.preview.periodTo}`, values: values.length, totals: info.preview.totals },
     });
-  });
+  };
+  if (on === db) await db.transaction(run);
+  else await run(on);
 }

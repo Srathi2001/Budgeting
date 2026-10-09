@@ -25,10 +25,13 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
       role: schema.users.role,
       coordinator: schema.users.coordinator,
       active: schema.users.active,
+      sessionVersion: schema.users.sessionVersion,
     })
     .from(schema.users)
     .where(eq(schema.users.id, session.uid));
   if (!user || !user.active) return null;
+  // a password or role change, or a deactivation, signs every earlier session out
+  if ((session.sv ?? 0) !== user.sessionVersion) return null;
   return { id: user.id, name: user.name, email: user.email, role: user.role, coordinator: user.coordinator };
 });
 
@@ -60,3 +63,10 @@ export const getActiveVersion = cache(async () => {
   const version = all.find((v) => v.id === wanted) ?? all.find((v) => v.status === 'OPEN') ?? all[0] ?? null;
   return { version, all };
 });
+
+/** The active version, or a clear error for the page's error boundary when there is none yet. */
+export async function requireVersion(): Promise<schema.BudgetVersion> {
+  const { version } = await getActiveVersion();
+  if (!version) throw new Error('No budget version yet: Finance creates one in Admin → Budget versions');
+  return version;
+}

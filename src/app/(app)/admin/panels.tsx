@@ -20,12 +20,14 @@ import {
 } from './actions';
 import type { RrPreview } from '@/lib/import/revenue-recognition';
 import type { ImportPreview } from '@/lib/import/tenant-lease';
-import type { GlLedger, GlPreview, GlValue } from '@/lib/import/gl-other-income';
-import type { FmActual, FmActualsPreview } from '@/lib/import/gl-fm';
-import type { BohActual, BohActualsPreview } from '@/lib/import/gl-boh';
-import type { AdminActual, AdminActualsPreview } from '@/lib/import/gl-admin';
+import type { GlLedger, GlPreview } from '@/lib/import/gl-other-income';
+import type { FmActualsPreview } from '@/lib/import/gl-fm';
+import type { BohActualsPreview } from '@/lib/import/gl-boh';
+import type { AdminActualsPreview } from '@/lib/import/gl-admin';
 import { locationOf } from '@/lib/budget/location';
+import { oiLabel } from '@/lib/budget/other-income-types';
 import { saveComparative } from '../analysis/actions';
+import { ConfirmDialog } from '@/components/ui/dialog';
 
 type Result = { error?: string; ok?: string };
 
@@ -48,8 +50,35 @@ export function VersionsPanel({
   versions: { id: number; name: string; year: number; status: 'OPEN' | 'LOCKED'; isBaseline: boolean; createdAt: string }[];
 }) {
   const { pending, run, Msg } = useAction();
+  const [locking, setLocking] = useState<{ id: number; name: string } | null>(null);
+  const [rolling, setRolling] = useState<{ id: number; name: string; year: number } | null>(null);
   return (
     <div className="space-y-4">
+      <ConfirmDialog
+        open={!!locking}
+        onOpenChange={(o) => !o && setLocking(null)}
+        title={locking ? `Lock ${locking.name}?` : ''}
+        body="Nobody can change anything in a locked version: inputs, statuses, imports. Finance can reopen it later."
+        confirmLabel="Lock"
+        onConfirm={async () => {
+          if (!locking) return null;
+          const r = await setVersionStatus(locking.id, 'LOCKED');
+          return r.error ?? null;
+        }}
+      />
+      <ConfirmDialog
+        open={!!rolling}
+        onOpenChange={(o) => !o && setRolling(null)}
+        title={rolling ? `Roll ${rolling.name} forward to ${rolling.year + 1}` : ''}
+        body="For every unit, the contract in force on 1 January becomes the current contract; renewals are derived again from the RERA index and budget rates. RERA rows and manual other income are copied."
+        confirmLabel="Create version"
+        note={rolling ? { label: 'Name of the new version', required: true, initial: `${rolling.year + 1} Budget` } : undefined}
+        onConfirm={async (name) => {
+          if (!rolling || !name) return 'A name is needed';
+          const r = await createNextVersion(rolling.id, name);
+          return r.error ?? null;
+        }}
+      />
       <div className="frame">
         <table className="tbl">
           <thead>
@@ -75,7 +104,7 @@ export function VersionsPanel({
                 <td className="text-xs text-slate-500">{v.createdAt.slice(0, 10)}</td>
                 <td className="flex gap-1">
                   {v.status === 'OPEN' ? (
-                    <button className="btn" disabled={pending} onClick={() => confirm(`Lock ${v.name}? Nobody will be able to edit it.`) && run(() => setVersionStatus(v.id, 'LOCKED'))}>
+                    <button className="btn" disabled={pending} onClick={() => setLocking({ id: v.id, name: v.name })}>
                       Lock
                     </button>
                   ) : (
@@ -86,14 +115,7 @@ export function VersionsPanel({
                   <button className="btn" disabled={pending} onClick={() => run(() => recalcVersion(v.id))}>
                     Recalculate
                   </button>
-                  <button
-                    className="btn"
-                    disabled={pending}
-                    onClick={() => {
-                      const name = prompt(`Name for the ${v.year + 1} version created from "${v.name}"`, `${v.year + 1} Budget`);
-                      if (name) run(() => createNextVersion(v.id, name));
-                    }}
-                  >
+                  <button className="btn" disabled={pending} onClick={() => setRolling({ id: v.id, name: v.name, year: v.year })}>
                     Roll forward to {v.year + 1}
                   </button>
                 </td>
@@ -153,6 +175,7 @@ export function AssumptionsPanel({
             vatRate: n(f.get('vatRate')) / 100,
             depositPct: n(f.get('depositPct')) / 100,
             mfPct: n(f.get('mfPct')) / 100,
+            actualsCutoffMonth: n(f.get('actualsCutoffMonth')),
           }),
         )
       }
@@ -167,6 +190,7 @@ export function AssumptionsPanel({
       {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. Included in cash inflow', 100, '%')}
       {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
       {field('mfPct', 'Maintenance service fee', a.mfPct, 'Of the renewal / new-tenant rent, residential leases with MF: other income, in the month the contract starts', 100, '%')}
+      {field('actualsCutoffMonth', 'GL actuals cut-off month', a.actualsCutoffMonth, 'Last closed month of the GL actuals (1–12): other income YTD runs to it, the rest of the prior year is typed. Changing it needs a fresh GL import.', 1, '(1–12)')}
 
       <div className="pt-3">
         <div className="text-sm font-medium text-slate-700">RERA increase bands</div>
@@ -789,6 +813,7 @@ export function GlImportPanel({
   year,
   locked,
   last,
+  cutoff = 9,
 }: {
   ledger: GlLedger;
   companies: string[];
@@ -797,13 +822,16 @@ export function GlImportPanel({
   year: number;
   locked: boolean;
   last: { at: string; file: string | null } | null;
+  /** the version's GL actuals cut-off month (1–12) */
+  cutoff?: number;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [plan, setPlan] = useState<{ values: GlValue[]; preview: GlPreview; fm: { rows: FmActual[]; preview: FmActualsPreview } | null; boh: { rows: BohActual[]; preview: BohActualsPreview } | null; ga: { rows: AdminActual[]; preview: AdminActualsPreview } | null } | null>(null);
+  const [plan, setPlan] = useState<{ planId: number; preview: GlPreview; fm: { preview: FmActualsPreview } | null; boh: { preview: BohActualsPreview } | null; ga: { preview: AdminActualsPreview } | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const apply = useAction();
-  const label = { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: `${year - 1} Jan–Sep` };
+  const label = { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: oiLabel('YTD', year, cutoff), OD: oiLabel('OD', year, cutoff) };
+  const cutMon = oiLabel('YTD', year, cutoff).slice(-3);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
@@ -814,7 +842,7 @@ export function GlImportPanel({
     setReading(true);
     try {
       // sent as the raw body: the server reads it as a stream
-      const res = await fetch(`/api/import/gl?v=${versionId}&ledger=${encodeURIComponent(ledger)}`, { method: 'POST', body: f });
+      const res = await fetch(`/api/import/gl?v=${versionId}&ledger=${encodeURIComponent(ledger)}&file=${encodeURIComponent(f.name)}`, { method: 'POST', body: f });
       const json = await res.json();
       if (json.error) setError(json.error);
       else setPlan(json);
@@ -832,12 +860,12 @@ export function GlImportPanel({
         <h3 className="text-sm font-semibold">Account Analysis Report · {ledger}</h3>
         <p className="mt-1 max-w-4xl text-xs text-slate-500">
           Other income actuals for <b>{versionName}</b>: {label.A2}, {label.A1} and {label.YTD}, from the Oracle Account Analysis Report (ledger {ledger},
-          companies {companies.join(', ')}, Jan-{String(year - 3).slice(2)} to Sep-{String(year - 1).slice(2)}).{' '}
+          companies {companies.join(', ')}, Jan-{String(year - 3).slice(2)} to {cutMon}-{String(year - 1).slice(2)}).{' '}
           {ledger === 'MJN HOLDING'
             ? 'Accounts 52xxx are read by property; company-level lines and properties not in the budget go to the General row of their business unit.'
             : 'Accounts 52xxx go to the General row of each company.'}{' '}
           {ledger === 'MJN HOLDING' && 'The same file carries the FM cost actuals (627xx, 117xx), the building overhead actuals (Building Overheads tab) and the G&A actuals by department (Admin Overheads tab).'}{' '}
-          An import replaces this ledger&apos;s GL actuals; the other ledger, Oct–Dec and budget inputs are kept.
+          An import replaces this ledger&apos;s GL actuals; the other ledger, the {label.OD} forecast and budget inputs are kept.
         </p>
         <div className="mt-3 text-xs text-slate-600">
           Last import {last ? fmtDateTime(last.at) : 'never'}
@@ -855,13 +883,13 @@ export function GlImportPanel({
               onClick={() =>
                 plan &&
                 apply.run(async () => {
-                  const r = await applyGlActuals(versionId, plan.values, plan.preview, file?.name ?? null, plan.fm, plan.boh, plan.ga);
+                  const r = await applyGlActuals(plan.planId);
                   if (!r.error) setPlan(null);
                   return r;
                 })
               }
             >
-              {apply.pending ? 'Importing…' : 'Import'}
+              {apply.pending ? 'Importing…' : plan && file ? `Import ${file.name}` : 'Import'}
             </button>
             <apply.Msg />
             {error && <span className="text-sm text-red-600">{error}</span>}

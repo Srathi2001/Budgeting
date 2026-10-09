@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultMfRenewal } from './master-types';
-import { oiCell, oiInput, type OiBlock } from './other-income-types';
+import { oiCell, oiInput, oiLabel, type OiBlock } from './other-income-types';
 
 const block = (over: Partial<OiBlock> = {}): OiBlock => ({
   scope: 'P:1', kind: 'P', propertyId: 1, buCode: '501', buName: 'REHL', code: '30B101', name: 'X', pm: null, editable: true, values: {}, mfBudget: 0, ...over,
@@ -32,4 +32,20 @@ describe('MF on renewal default', () => {
     expect(defaultMfRenewal({ ...row, vacant: true, mfCurrent: null })).toBe('YES');
   });
   it('commercial: No', () => expect(defaultMfRenewal({ ...row, rc: 'C' })).toBe('NO'));
+});
+
+describe('oiLabel with the GL cut-off month', () => {
+  it('defaults to September, as the 2026 budget', () => {
+    expect(oiLabel('YTD', 2026)).toBe('2025 Jan–Sep');
+    expect(oiLabel('OD', 2026)).toBe('2025 Oct–Dec');
+    expect(oiLabel('F', 2026)).toBe('2025F');
+  });
+  it('follows the version cut-off', () => {
+    expect(oiLabel('YTD', 2027, 6)).toBe('2026 Jan–Jun');
+    expect(oiLabel('OD', 2027, 6)).toBe('2026 Jul–Dec');
+    expect(oiLabel('YTD', 2027, 11)).toBe('2026 Jan–Nov');
+    expect(oiLabel('OD', 2027, 11)).toBe('2026 Dec');
+    expect(oiLabel('OD', 2027, 12)).toBe('2026 (none)');
+    expect(oiLabel('YTD', 2027, 1)).toBe('2026 Jan');
+  });
 });

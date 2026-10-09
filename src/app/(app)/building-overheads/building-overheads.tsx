@@ -137,16 +137,27 @@ export function BuildingOverheads({
 
   const commitDue = (b: BohBlock, r: BohRow, month: number | null) => {
     if (month === r.dueMonth || r.b === null) return;
+    // a month is kept with the typed amount; a line still following last year's forecast has none to
+    // keep it on, so the forecast is never turned into a typed figure behind the user's back
+    if (r.entered === null) {
+      setStatus({ kind: 'error', text: `${b.code} ${BOH_ACCOUNT.get(r.account)?.name}: enter the amount first; while it follows last year's forecast it is paid in the month of last year's largest payment` });
+      return;
+    }
     update(b, r.account, { dueMonth: month });
-    save(b, r.account, { propertyId: b.propertyId, account: r.account, amount: r.b, dueMonth: month }, r);
+    save(b, r.account, { propertyId: b.propertyId, account: r.account, amount: r.entered, dueMonth: month }, r);
   };
 
   const amountCell = (b: BohBlock, r: BohRow) => {
     const k = key(b.propertyId, r.account);
     if (fixed(r))
       return (
-        <td className="anh-num calc" title={BOH_CALC_NOTE[r.calc!]}>
+        <td className="anh-num calc" title={r.entered === null ? BOH_CALC_NOTE[r.calc!] : `${BOH_CALC_NOTE[r.calc!]} · a typed amount of ${fmt(r.entered)} is kept but not used while this applies`}>
           {fmt(r.b)}
+          {r.entered !== null && (
+            <span className="ml-1 text-[9px] font-bold uppercase tracking-wider" aria-label="A typed amount is hidden by the calculation">
+              typed
+            </span>
+          )}
         </td>
       );
     if (!canEnter(b, r.account))

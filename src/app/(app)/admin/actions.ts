@@ -1,6 +1,6 @@
 'use server';
 
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -75,6 +75,7 @@ const AssumptionsSchema = z.object({
   vatRate: z.number().min(0).max(1),
   depositPct: z.number().min(0).max(1),
   mfPct: z.number().min(0).max(1),
+  actualsCutoffMonth: z.number().int().min(1).max(12),
 }) satisfies z.ZodType<AdminAssumptions>;
 
 export async function saveAssumptions(versionId: number, input: AdminAssumptions): Promise<Result> {
@@ -119,7 +120,13 @@ export async function upsertUser(id: number | null, input: z.infer<typeof UserSc
       ...(d.password ? { passwordHash: await bcrypt.hash(d.password, 10) } : {}),
     };
     if (id) {
-      await db.update(schema.users).set(values).where(eq(schema.users.id, id));
+      const [before] = await db.select({ role: schema.users.role, active: schema.users.active }).from(schema.users).where(eq(schema.users.id, id));
+      // a new password, another role or a deactivation signs the user's open sessions out
+      const revoke = !!d.password || (before && (before.role !== d.role || (before.active && !d.active)));
+      await db
+        .update(schema.users)
+        .set({ ...values, ...(revoke ? { sessionVersion: sql`${schema.users.sessionVersion} + 1` } : {}) })
+        .where(eq(schema.users.id, id));
     } else {
       if (!d.password) throw new Error('Set a password for the new user');
       await db.insert(schema.users).values({ ...values, passwordHash: values.passwordHash! });
@@ -310,43 +317,47 @@ const AdminActualsPreviewSchema = z.object({
 });
 
 /**
- * Writes the actuals the upload preview returned (the file is read by /api/import/gl): other income,
- * and from MJN HOLDING the FM costs, building overheads and G&A by department.
+ * Writes a prepared GL import (made by /api/import/gl and kept in import_plans): other income, and from
+ * MJN HOLDING the FM costs, building overheads and G&A by department, in one transaction. A plan is
+ * applied once; the rows come from the server, never from the browser.
  */
-export async function applyGlActuals(
-  versionId: number,
-  values: unknown,
-  preview: GlPreview,
-  file: string | null,
-  fm: { rows: unknown; preview: unknown } | null = null,
-  boh: { rows: unknown; preview: unknown } | null = null,
-  ga: { rows: unknown; preview: unknown } | null = null,
-): Promise<Result> {
+export async function applyGlActuals(planId: number): Promise<Result> {
   const user = await requireFinance();
   return wrap(async () => {
-    const v = GlValues.parse(values);
+    const [plan] = await db.select().from(schema.importPlans).where(and(eq(schema.importPlans.id, planId), eq(schema.importPlans.kind, 'gl')));
+    if (!plan) throw new Error('The prepared import was not found: choose the file again');
+    if (plan.appliedAt) throw new Error('This import has already been applied');
+    if (Date.now() - plan.createdAt.getTime() > 6 * 60 * 60_000) throw new Error('The prepared import is older than 6 hours: choose the file again');
+    if (!plan.versionId) throw new Error('The prepared import has no version');
+    const p = plan.payload as { values: unknown; preview: GlPreview; fm: { rows: unknown; preview: unknown } | null; boh: { rows: unknown; preview: unknown } | null; ga: { rows: unknown; preview: unknown } | null };
+    const v = GlValues.parse(p.values);
+    const fm = p.fm ? { rows: FmActualRows.parse(p.fm.rows), preview: FmActualsPreviewSchema.parse(p.fm.preview) } : null;
+    const boh = p.boh ? { rows: BohActualRows.parse(p.boh.rows), preview: BohActualsPreviewSchema.parse(p.boh.preview) } : null;
+    const ga = p.ga ? { rows: AdminActualRows.parse(p.ga.rows), preview: AdminActualsPreviewSchema.parse(p.ga.preview) } : null;
     const { applyGlImport } = await import('@/lib/import/gl-other-income');
-    await applyGlImport(versionId, v, user.id, { file, preview });
+    const { applyFmActuals } = await import('@/lib/import/gl-fm');
+    const { applyBohActuals } = await import('@/lib/import/gl-boh');
+    const { applyAdminActuals } = await import('@/lib/import/gl-admin');
+    const versionId = plan.versionId;
     const extra: string[] = [];
-    if (fm) {
-      const rows = FmActualRows.parse(fm.rows);
-      const { applyFmActuals } = await import('@/lib/import/gl-fm');
-      await applyFmActuals(rows, FmActualsPreviewSchema.parse(fm.preview), user.id, file);
-      extra.push(`${rows.length.toLocaleString('en-US')} FM cost actuals`);
-    }
-    if (boh) {
-      const rows = BohActualRows.parse(boh.rows);
-      const { applyBohActuals } = await import('@/lib/import/gl-boh');
-      await applyBohActuals(rows, BohActualsPreviewSchema.parse(boh.preview), user.id, file);
-      extra.push(`${rows.length.toLocaleString('en-US')} building overhead actuals`);
-    }
-    if (ga) {
-      const rows = AdminActualRows.parse(ga.rows);
-      const { applyAdminActuals } = await import('@/lib/import/gl-admin');
-      await applyAdminActuals(rows, AdminActualsPreviewSchema.parse(ga.preview), user.id, file);
-      extra.push(`${rows.length.toLocaleString('en-US')} G&A actuals`);
-    }
-    return `Imported ${v.length.toLocaleString('en-US')} ${preview.ledger} GL actuals into Other Income${extra.length ? `, ${extra.join(' and ')}` : ''}`;
+    await db.transaction(async (tx) => {
+      await applyGlImport(versionId, v, user.id, { file: plan.file, preview: p.preview }, tx);
+      if (fm) {
+        await applyFmActuals(fm.rows, fm.preview, user.id, plan.file, tx);
+        extra.push(`${fm.rows.length.toLocaleString('en-US')} FM cost actuals`);
+      }
+      if (boh) {
+        await applyBohActuals(boh.rows, boh.preview, user.id, plan.file, tx);
+        extra.push(`${boh.rows.length.toLocaleString('en-US')} building overhead actuals`);
+      }
+      if (ga) {
+        await applyAdminActuals(ga.rows, ga.preview, user.id, plan.file, tx);
+        extra.push(`${ga.rows.length.toLocaleString('en-US')} G&A actuals`);
+      }
+      // applied once: a second apply of the same plan is refused; the rows are dropped to keep the table small
+      await tx.update(schema.importPlans).set({ appliedAt: new Date(), payload: { applied: true, preview: p.preview } }).where(eq(schema.importPlans.id, planId));
+    });
+    return `Imported ${v.length.toLocaleString('en-US')} ${p.preview.ledger} GL actuals into Other Income${extra.length ? `, ${extra.join(' and ')}` : ''}`;
   });
 }
 

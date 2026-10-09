@@ -8,6 +8,8 @@ export interface SessionPayload {
   role: 'ADMIN' | 'FINANCE' | 'PM' | 'FM';
   coordinator: string | null;
   name: string;
+  /** users.session_version at sign-in; a mismatch means the session was revoked */
+  sv?: number;
 }
 
 function secret() {

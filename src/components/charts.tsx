@@ -5,7 +5,7 @@
 // ink tokens (never the series colour), legend on every chart, hover tooltip, table view on every
 // card. Colours come from the registries in lib/segments, as CSS variables, so both themes follow.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { fmt, short } from '@/lib/format';
 
 const INK = { primary: 'var(--ink)', secondary: 'var(--ink-2)', muted: 'var(--ink-muted)' };
@@ -26,8 +26,7 @@ export const aedDiff = (n: number) => (n > 0 ? `+${aed(n)}` : aed(n));
 
 type TipRow = { color?: string; label: string; value: string };
 /** Tooltip rows: no empty or zero rows, so only what matters at that point is listed. */
-const keep = (rows: (TipRow & { v?: number | null })[]): TipRow[] =>
-  rows.filter((r) => r.v === undefined || (r.v !== null && Math.abs(r.v) >= 0.5)).map((r) => ({ color: r.color, label: r.label, value: r.value }));
+const keep = (rows: (TipRow & { v?: number | null })[]): TipRow[] => rows.filter((r) => r.v === undefined || (r.v !== null && Math.abs(r.v) >= 0.5)).map((r) => ({ color: r.color, label: r.label, value: r.value }));
 
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -47,7 +46,10 @@ function ticks(max: number, min = 0): number[] {
   const raw = span / 4;
   const mag = 10 ** Math.floor(Math.log10(raw));
   // whole-number steps only: every axis here is AED or %, and fractional steps round to duplicate labels
-  const step = Math.max(1, [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= 5)!);
+  const step = Math.max(
+    1,
+    [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= 5)!,
+  );
   const out: number[] = [];
   for (let v = Math.floor(min / step) * step; v <= max + step * 0.001; v += step) out.push(v);
   if (out[out.length - 1] < max) out.push(out[out.length - 1] + step);
@@ -100,22 +102,13 @@ export function Legend({ items, shape = 'rect' }: { items: { label: string; colo
 }
 
 /** Chart card (.anh-card) with a chart / table toggle (every chart has a table twin). */
-export function ChartCard({
-  title,
-  sub,
-  legend,
-  table,
-  children,
-  className = '',
-}: {
-  title: string;
-  sub?: string;
-  legend?: ReactNode;
-  table: { head: string[]; rows: (string | number)[][] };
-  children: ReactNode;
-  className?: string;
-}) {
-  const [view, setView] = useState<'chart' | 'table'>('chart');
+/** When set, every ChartCard shows this view (the dashboard's "all as tables"); null = each card's own choice. */
+export const ChartViewContext = createContext<'chart' | 'table' | null>(null);
+
+export function ChartCard({ title, sub, legend, table, children, className = '' }: { title: string; sub?: string; legend?: ReactNode; table: { head: string[]; rows: (string | number)[][] }; children: ReactNode; className?: string }) {
+  const [own, setView] = useState<'chart' | 'table'>('chart');
+  const forced = useContext(ChartViewContext);
+  const view = forced ?? own;
   return (
     <section className={`anh-card ${className}`}>
       <header className="anh-card__head">
@@ -176,15 +169,7 @@ function YAxis({ ys, y, w, fmt = compact }: { ys: number[]; y: (v: number) => nu
     <g>
       {ys.map((v, i) => (
         <g key={v}>
-          <line
-            x1={PAD.l}
-            x2={w - PAD.r}
-            y1={y(v)}
-            y2={y(v)}
-            style={{ stroke: i === 0 ? BASE : GRID }}
-            strokeWidth={i === 0 ? 2 : 1}
-            shapeRendering="crispEdges"
-          />
+          <line x1={PAD.l} x2={w - PAD.r} y1={y(v)} y2={y(v)} style={{ stroke: i === 0 ? BASE : GRID }} strokeWidth={i === 0 ? 2 : 1} shapeRendering="crispEdges" />
           <text x={PAD.l - 8} y={y(v)} dy="0.32em" textAnchor="end" fontSize={11} style={{ fill: INK.muted }} className="tabular-nums">
             {fmt(v)}
           </text>
@@ -252,22 +237,10 @@ export function LineChart({
           {series.map((s) => {
             const pts = s.values.map((v, i) => (v === null ? null : `${x(i)},${y(v)}`)).filter(Boolean);
             return (
-              <polyline
-                key={s.name}
-                points={pts.join(' ')}
-                fill="none"
-                style={{ stroke: s.color }}
-                strokeWidth={s.width ?? (s.dash ? 2 : 2.5)}
-                strokeDasharray={s.dash ? '6 4' : undefined}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
+              <polyline key={s.name} points={pts.join(' ')} fill="none" style={{ stroke: s.color }} strokeWidth={s.width ?? (s.dash ? 2 : 2.5)} strokeDasharray={s.dash ? '6 4' : undefined} strokeLinejoin="round" strokeLinecap="round" />
             );
           })}
-          {hover !== null &&
-            series.map((s) =>
-              s.values[hover] === null ? null : <circle key={s.name} cx={x(hover)} cy={y(s.values[hover]!)} r={4} style={{ fill: s.color, stroke: SURFACE }} strokeWidth={2} />,
-            )}
+          {hover !== null && series.map((s) => (s.values[hover] === null ? null : <circle key={s.name} cx={x(hover)} cy={y(s.values[hover]!)} r={4} style={{ fill: s.color, stroke: SURFACE }} strokeWidth={2} />))}
           {/* end marker on the last point */}
           {series.map((s) => {
             const i = s.values.length - 1;
@@ -385,24 +358,13 @@ export function Columns({
             return (
               <g key={l.name} pointerEvents="none">
                 <path d={path} fill="none" stroke={l.color} strokeWidth={2} strokeLinejoin="round" />
-                {pts.map((p, i) =>
-                  p ? <circle key={i} cx={p[0]} cy={p[1]} r={hover === i ? 5 : 4} fill={l.color} stroke="var(--surface)" strokeWidth={2} /> : null,
-                )}
+                {pts.map((p, i) => (p ? <circle key={i} cx={p[0]} cy={p[1]} r={hover === i ? 5 : 4} fill={l.color} stroke="var(--surface)" strokeWidth={2} /> : null))}
               </g>
             );
           })}
           {/* hover targets: the whole column band */}
           {labels.map((l, i) => (
-            <rect
-              key={l}
-              x={PAD.l + band * i}
-              y={PAD.t}
-              width={band}
-              height={height - PAD.t - PAD.b}
-              fill="transparent"
-              onPointerEnter={() => setHover(i)}
-              onPointerLeave={() => setHover(null)}
-            />
+            <rect key={l} x={PAD.l + band * i} y={PAD.t} width={band} height={height - PAD.t - PAD.b} fill="transparent" onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)} />
           ))}
         </svg>
       )}
@@ -459,14 +421,8 @@ export function HBars({
           title: rows[hover].label,
           rows:
             series.length > 1
-              ? [
-                  { label: 'Total', value: tipFmt(totals[hover]) },
-                  ...keep(series.map((s, k) => ({ color: s.color, label: s.name, value: tipFmt(rows[hover].values[k]), v: rows[hover].values[k] }))),
-                ]
-              : [
-                  { color: series[0].color, label: series[0].name, value: diverging ? aedDiff(totals[hover]) : tipFmt(totals[hover]) },
-                  ...(rows[hover].note ? [{ label: noteLabel, value: rows[hover].note! }] : []),
-                ],
+              ? [{ label: 'Total', value: tipFmt(totals[hover]) }, ...keep(series.map((s, k) => ({ color: s.color, label: s.name, value: tipFmt(rows[hover].values[k]), v: rows[hover].values[k] })))]
+              : [{ color: series[0].color, label: series[0].name, value: diverging ? aedDiff(totals[hover]) : tipFmt(totals[hover]) }, ...(rows[hover].note ? [{ label: noteLabel, value: rows[hover].note! }] : [])],
         };
   return (
     <div ref={ref} className="relative" style={{ height: rows.length ? height : 80 }}>
@@ -496,15 +452,7 @@ export function HBars({
                     return <Bar key={s.name} x={xs} y={cy - bh / 2} w={width} h={bh} color={s.color} />;
                   })
                 )}
-                <text
-                  x={diverging ? (t >= 0 ? end + 6 : end - 6) : end + 6}
-                  y={cy}
-                  dy="0.32em"
-                  textAnchor={diverging && t < 0 ? 'end' : 'start'}
-                  fontSize={11}
-                  style={{ fill: INK.primary }}
-                  className="tabular-nums"
-                >
+                <text x={diverging ? (t >= 0 ? end + 6 : end - 6) : end + 6} y={cy} dy="0.32em" textAnchor={diverging && t < 0 ? 'end' : 'start'} fontSize={11} style={{ fill: INK.primary }} className="tabular-nums">
                   {fmt(t)}
                   {extra && <tspan style={{ fill: INK.muted }}> {extra}</tspan>}
                 </text>
@@ -574,10 +522,7 @@ export function BarList({
               <span className="relative block h-3.5 w-full">
                 {diverging && <span className="absolute inset-y-[-3px] left-1/2 block w-px bg-[var(--line-strong)]" />}
                 {diverging ? (
-                  <span
-                    className="absolute inset-y-0 block"
-                    style={{ width: `${span(r.value)}%`, background: color, ...(r.value < 0 ? { right: '50%' } : { left: '50%' }) }}
-                  />
+                  <span className="absolute inset-y-0 block" style={{ width: `${span(r.value)}%`, background: color, ...(r.value < 0 ? { right: '50%' } : { left: '50%' }) }} />
                 ) : (
                   <span className="absolute inset-y-0 left-0 block" style={{ width: `${span(r.value)}%`, background: color }} />
                 )}
@@ -629,24 +574,20 @@ export function StatTile({
     <article className="anh-kpi anh-kpi--compact">
       <div className="anh-kpi__top">
         <span className="anh-eyebrow">{label}</span>
-        {spark && (
-          <svg width={72} height={20} className="shrink-0" aria-hidden="true">
-            <polyline
-              points={spark.map((v, i) => `${(i / (spark.length - 1)) * 70 + 1},${19 - (v / max) * 17}`).join(' ')}
-              fill="none"
-              style={{ stroke: 'var(--m-actual)' }}
-              strokeWidth={1.5}
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
       </div>
       <div className="anh-kpi__value">{value}</div>
       {(sub || delta) && (
-        <div className="anh-kpi__foot">
-          <span>{sub}</span>
-          {delta && <span className={`anh-var ${deltaDir ? `anh-var--${deltaDir}` : ''} ${adverse ? 'is-adverse' : ''}`}>{delta}</span>}
+        // wraps in narrow tiles (six across on a laptop) so the change never spills into the next tile
+        <div className="anh-kpi__foot flex-wrap">
+          <span className="min-w-0">{sub}</span>
+          {delta && <span className={`anh-var whitespace-nowrap ${deltaDir ? `anh-var--${deltaDir}` : ''} ${adverse ? 'is-adverse' : ''}`}>{delta}</span>}
         </div>
+      )}
+      {spark && (
+        // a full-width strip under the figures: scales with the tile instead of sharing the label's row
+        <svg viewBox="0 0 72 20" preserveAspectRatio="none" className="block h-5 w-full" aria-hidden="true">
+          <polyline points={spark.map((v, i) => `${(i / (spark.length - 1)) * 70 + 1},${19 - (v / max) * 17}`).join(' ')} fill="none" style={{ stroke: 'var(--m-actual)' }} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
       )}
     </article>
   );

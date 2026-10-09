@@ -79,6 +79,9 @@ export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff:
   const gaRate = base > 0 ? ga / base : 0;
   const teamCost: Partial<Record<StaffTeam, number>> = {};
   for (const [t, v] of raw) if (t !== 'GA') teamCost[t as StaffTeam] = v * (1 + gaRate);
+  // no team cost entered yet: the G&A share has no base to ride on, so it is carried as its own
+  // team (over every facility by their works) rather than silently dropped
+  if (base <= 0 && ga > 0) teamCost.GA = ga;
 
   let unallocated = 0;
   const allWorks = (id: number) => sum(Object.values(res(id).works));
@@ -123,6 +126,8 @@ export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff:
   }
   allocate('PPM', teamCost.PPM ?? 0, facilities.map((f) => [f.id, maintain(f.id)]));
   allocate('VACANT', teamCost.VACANT ?? 0, facilities.map((f) => [f.id, res(f.id).works.R03]));
+  // G&A with no team base (see above): every facility by all their works, then equally
+  allocate('GA', teamCost.GA ?? 0, facilities.map((f) => [f.id, allWorks(f.id)]));
 
   for (const r of byProperty.values()) {
     r.staffTotal = sum(Object.values(r.staff).map((v) => v ?? 0));

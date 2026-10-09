@@ -13,6 +13,8 @@ import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
 import { FIRST_REPORT_YEAR } from './comparatives';
 import { propertyRollups } from './reports';
+import { oiLabel } from './other-income-types';
+import { withDefaults } from '@/lib/engine/assumptions';
 import { loadFmBudget } from './fm';
 import { BUILDING_LINES, budgetedExpenseLines, propertyExpenseTotals } from './expenses';
 import { FM_KIND_LABEL, STAFF_TEAMS, WORK_TYPES, type FmKind, type WorkType } from './fm-types';
@@ -208,7 +210,7 @@ export async function loadDashboardReports(
   const propName = new Map(rolls.map((r) => [String(r.propertyId), r.name]));
 
   return {
-    labels: { B: `${Y}B`, P: `${Y - 1}B`, F: fLabel, A1: `${Y - 2}A`, A2: `${Y - 3}A`, fmYtd, oiYtd: `${Y - 1} Jan–Sep` },
+    labels: { B: `${Y}B`, P: `${Y - 1}B`, F: fLabel, A1: `${Y - 2}A`, A2: `${Y - 3}A`, fmYtd, oiYtd: oiLabel('YTD', Y, withDefaults(version.assumptions).actualsCutoffMonth) },
     rentByYear: { bus: buCodes.map((code) => ({ code, name: buName.get(code) ?? code })), years },
     otherIncome: { general, accounts, outside },
     costs: {

@@ -1,5 +1,5 @@
-import Link from 'next/link';
-import { requireUser, getActiveVersion, isFinance } from '@/lib/auth/dal';
+import { RoutedTabs } from '@/components/ui/tabs';
+import { requireUser, isFinance, requireVersion } from '@/lib/auth/dal';
 import { loadAdminOverheads } from '@/lib/budget/admin';
 import { ITEM_KINDS, isItemKind, type ItemKind } from '@/lib/budget/admin-items';
 import { AdminOverheads } from './admin-overheads';
@@ -14,33 +14,27 @@ export default async function AdminOverheadsPage({ searchParams }: PageProps<'/a
   const user = await requireUser();
   // it holds payroll: Finance only
   if (!isFinance(user)) return <div className="p-6 text-slate-600">Admin overheads are entered by Finance.</div>;
-  const { version } = await getActiveVersion();
+  const version = await requireVersion();
   const sp = await searchParams;
   const tab = typeof sp.tab === 'string' && (isItemKind(sp.tab) || sp.tab === 'summary') ? sp.tab : 'overview';
-  const summary = tab === 'summary' ? await loadAdminSummary(version!) : null;
-  const data = summary?.data ?? (await loadAdminOverheads(version!));
-  const locked = version!.status === 'LOCKED';
+  const summary = tab === 'summary' ? await loadAdminSummary(version) : null;
+  const data = summary?.data ?? (await loadAdminOverheads(version));
+  const locked = version.status === 'LOCKED';
   const count = (k: string) => data.items.filter((i) => i.kind === k).length;
   return (
-    <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
-      <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 px-4 py-2">
-        <h1 className="text-base font-bold">Admin Overheads · {version!.name}</h1>
-        <nav className="seg" aria-label="Admin Overheads tabs">
-          <Link href="/admin-overheads?tab=summary" aria-current={tab === 'summary' ? 'page' : undefined} className={tab === 'summary' ? 'on' : undefined}>
-            Summary
-          </Link>
-          <Link href="/admin-overheads" aria-current={tab === 'overview' ? 'page' : undefined} className={tab === 'overview' ? 'on' : undefined}>
-            Overview
-          </Link>
-          {ITEM_KINDS.map((k) => (
-            <Link key={k.kind} href={`/admin-overheads?tab=${k.kind}`} aria-current={tab === k.kind ? 'page' : undefined} className={tab === k.kind ? 'on' : undefined}>
-              {k.label}
-              {count(k.kind) > 0 && <span className="ml-1 tabular-nums">({count(k.kind)})</span>}
-            </Link>
-          ))}
-        </nav>
-        <span className="ml-auto text-xs">AED</span>
-        {tab === 'overview' && <TemplateButtons kind="admin-overheads" versionId={version!.id} canImport={!locked} />}
+    <div className="ui-fill flex min-h-0 flex-col">
+      <div className="ui-toolbar ui-toolbar__row">
+        <h1 className="ui-toolbar__title">Admin Overheads · {version.name}</h1>
+        <RoutedTabs
+          ariaLabel="Admin Overheads tabs"
+          tabs={[
+            { href: '/admin-overheads?tab=summary', label: 'Summary', param: { name: 'tab', value: 'summary' } },
+            { href: '/admin-overheads', label: 'Overview', param: { name: 'tab', value: null } },
+            ...ITEM_KINDS.map((k) => ({ href: `/admin-overheads?tab=${k.kind}`, label: count(k.kind) > 0 ? `${k.label} (${count(k.kind)})` : k.label, param: { name: 'tab', value: k.kind } })),
+          ]}
+        />
+        <span className="ml-auto text-xs anh-muted">AED</span>
+        {tab === 'overview' && <TemplateButtons kind="admin-overheads" versionId={version.id} canImport={!locked} />}
       </div>
       {summary ? (
         <div className="min-h-0 flex-1 overflow-auto">
@@ -48,10 +42,10 @@ export default async function AdminOverheadsPage({ searchParams }: PageProps<'/a
         </div>
       ) : tab === 'overview' ? (
         <div className="min-h-0 flex-1 overflow-auto">
-          <AdminOverheads data={data} versionId={version!.id} versionName={version!.name} locked={locked} />
+          <AdminOverheads data={data} versionId={version.id} versionName={version.name} locked={locked} />
         </div>
       ) : (
-        <AdminSchedule key={tab} kind={tab as ItemKind} items={data.items.filter((i) => i.kind === tab)} versionId={version!.id} year={version!.year} locked={locked} />
+        <AdminSchedule key={tab} kind={tab as ItemKind} items={data.items.filter((i) => i.kind === tab)} versionId={version.id} year={version.year} locked={locked} />
       )}
     </div>
   );

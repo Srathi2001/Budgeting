@@ -8,6 +8,7 @@ import { isFinance, isFm, type CurrentUser } from '@/lib/auth/dal';
 import type { FmPropertyResult } from './fm-calc';
 import { loadFmBudget } from './fm';
 import { WORK_TYPES, isWorkType, type StaffTeam } from './fm-types';
+import { staffEditBlocked } from './fm-save';
 import { propertyRollups } from './reports';
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'RETURNED';
@@ -93,6 +94,8 @@ export interface FmPageData {
   staff: FmStaffRow[];
   unallocated: number;
   canEditStaff: boolean;
+  /** why the staff budget can't be changed right now (facilities submitted or approved) */
+  staffLockedReason: string | null;
   finance: boolean;
 }
 
@@ -294,7 +297,8 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
       prior: prev ? { ctc: rawPrior.get(t)?.ctc ?? 0, overtime: rawPrior.get(t)?.overtime ?? 0, cost: t === 'GA' ? 0 : (prev.result.teamCost[t] ?? 0) } : null,
     })),
     unallocated: cur.result.unallocated,
-    canEditStaff: !locked && (finance || isFm(user)),
+    canEditStaff: !locked && (finance || isFm(user)) && !staffEditBlocked(user, subs.map((x) => x.status)),
+    staffLockedReason: locked ? 'This budget version is locked' : staffEditBlocked(user, subs.map((x) => x.status)),
     finance,
   };
 }

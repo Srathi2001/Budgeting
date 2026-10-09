@@ -41,6 +41,8 @@ export const users = pgTable('users', {
   /** Property coordinator code (PC column), e.g. RUCHI. Required for PMs. */
   coordinator: text('coordinator'),
   active: boolean('active').notNull().default(true),
+  /** bumped on a password change, role change or deactivation: sessions signed before it are no longer valid */
+  sessionVersion: integer('session_version').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -580,6 +582,26 @@ export const adminFees = pgTable(
     updatedBy: integer('updated_by'),
   },
   (t) => [primaryKey({ columns: [t.versionId, t.fee, t.entity] })],
+);
+
+/**
+ * A prepared import (what an upload would write), kept on the server between preview and apply so the
+ * apply never trusts rows posted back by the browser. `payload` holds the rows and previews; `appliedAt`
+ * is set when it has been written, after which it cannot be applied again.
+ */
+export const importPlans = pgTable(
+  'import_plans',
+  {
+    id: serial('id').primaryKey(),
+    kind: text('kind').notNull(), // gl
+    versionId: integer('version_id').references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    userId: integer('user_id'),
+    file: text('file'),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    appliedAt: timestamp('applied_at', { withTimezone: true }),
+  },
+  (t) => [index('import_plans_user_idx').on(t.userId, t.createdAt)],
 );
 
 export const auditLog = pgTable(

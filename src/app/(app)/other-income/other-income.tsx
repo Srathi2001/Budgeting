@@ -48,6 +48,7 @@ export function OtherIncome({
   year,
   locked,
   mfPct,
+  cutoff = 9,
 }: {
   blocks: OiBlock[];
   versionId: number;
@@ -55,6 +56,8 @@ export function OtherIncome({
   year: number;
   locked: boolean;
   mfPct: number;
+  /** the version's GL actuals cut-off month (1–12) */
+  cutoff?: number;
 }) {
   const [blocks, setBlocks] = useState(initial);
   // the shared page filters (BU, PM, category, property)
@@ -164,7 +167,7 @@ export function OtherIncome({
       return (
         <td key={c} className={`anh-num input${dirty.has(k) ? ' is-dirty' : ''}${bad.has(k) ? ' is-error' : ''}`}>
           <input
-            aria-label={`${b.code} ${OI_ACCOUNT.get(account)?.name} ${oiLabel(c, year)}`}
+            aria-label={`${b.code} ${OI_ACCOUNT.get(account)?.name} ${oiLabel(c, year, cutoff)}`}
             inputMode="decimal"
             value={k in drafts ? drafts[k] : v === null ? '' : fmt(v)}
             onFocus={(e) => {
@@ -262,7 +265,7 @@ export function OtherIncome({
               {OI_COLUMNS.map((c) => (
                 <th key={c} className="anh-num" title={c === 'B' ? `Maintenance service fee: ${Math.round(mfPct * 100)}% of renewal / new-tenant rent, from the Lease Budget` : undefined}>
                   {c === 'F' && <span className="fx">fx</span>}
-                  {oiLabel(c, year)}
+                  {oiLabel(c, year, cutoff)}
                 </th>
               ))}
             </tr>

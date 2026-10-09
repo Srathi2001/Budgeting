@@ -1,5 +1,6 @@
 // The input pages' Excel templates (see cell-template.ts): what each one holds, who may use it, and how
 // an upload's changes are saved (through the page's own save function and its permission checks).
+import { withDefaults } from '@/lib/engine/assumptions';
 import 'server-only';
 import { isFinance, isFm, visibleProperties, editablePropertyIds, type CurrentUser } from '@/lib/auth/dal';
 import type { schema } from '@/db';
@@ -52,6 +53,8 @@ export const templateFileName = (kind: TemplateKind, year: number) => `${FILE[ki
 export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, version: schema.BudgetVersion, filtered: boolean): Promise<Template> {
   const locked = version.status === 'LOCKED';
   const Y = version.year;
+  const cutoff = withDefaults(version.assumptions).actualsCutoffMonth;
+  const oiL = (c: Parameters<typeof oiLabel>[0]) => oiLabel(c, Y, cutoff);
   const scoped = async () => {
     const props = await visibleProperties(user);
     if (!filtered) return props;
@@ -92,7 +95,7 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
       scope: `${blocks.filter((b) => b.kind === 'P').length} properties`,
       locked,
       instructions: [
-        `4. Enter the ${oiLabel('OD', Y)} forecast and the ${oiLabel('B', Y)} budget per property and account. Actuals come from the GL; the maintenance service fee budget is calculated from the leases and the PMA fee from the rent.`,
+        `4. Enter the ${oiL('OD')} forecast and the ${oiL('B')} budget per property and account. Actuals come from the GL; the maintenance service fee budget is calculated from the leases and the PMA fee from the rent.`,
       ],
       sheets: [
         {
@@ -105,12 +108,12 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
             { key: 'gl', header: 'GL', width: 8, kind: 'text' },
             { key: 'account', header: 'Account', width: 30, kind: 'text', label: true },
             { key: 'side', header: 'LL / ANPM', width: 10, kind: 'text' },
-            { key: 'A2', header: oiLabel('A2', Y), width: 12, kind: 'money' },
-            { key: 'A1', header: oiLabel('A1', Y), width: 12, kind: 'money' },
-            { key: 'YTD', header: oiLabel('YTD', Y), width: 13, kind: 'money' },
-            { key: 'OD', header: oiLabel('OD', Y), width: 13, kind: 'money', input: true, help: `Forecast for the rest of ${Y - 1}.` },
-            { key: 'F', header: `${oiLabel('F', Y)} (calc.)`, width: 13, kind: 'money', help: `${oiLabel('YTD', Y)} + ${oiLabel('OD', Y)}, as of the download.` },
-            { key: 'B', header: oiLabel('B', Y), width: 13, kind: 'money', input: true, help: `Budget for ${Y}. Grey where it is calculated.` },
+            { key: 'A2', header: oiL('A2'), width: 12, kind: 'money' },
+            { key: 'A1', header: oiL('A1'), width: 12, kind: 'money' },
+            { key: 'YTD', header: oiL('YTD'), width: 13, kind: 'money' },
+            { key: 'OD', header: oiL('OD'), width: 13, kind: 'money', input: true, help: `Forecast for the rest of ${Y - 1}.` },
+            { key: 'F', header: `${oiL('F')} (calc.)`, width: 13, kind: 'money', help: `${oiL('YTD')} + ${oiL('OD')}, as of the download.` },
+            { key: 'B', header: oiL('B'), width: 13, kind: 'money', input: true, help: `Budget for ${Y}. Grey where it is calculated.` },
           ],
           rows,
         },

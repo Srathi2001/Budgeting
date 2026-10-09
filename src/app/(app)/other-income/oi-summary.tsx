@@ -17,9 +17,9 @@ import { OI_ACCOUNT, OI_ACCOUNTS, OI_TYPES, oiCell, oiLabel, oiType, type OiBloc
 const GROUP_ORDER: GroupClass[] = ['group', 'owners', 'intergroup', 'outside'];
 const CLASS_LABEL: Record<GroupClass, string> = { group: `${GROUP_NAME} income`, owners: "Owners' share (PMC)", intergroup: 'Intergroup (PMA fee)', outside: 'Outside the group' };
 
-export function OiSummary({ blocks, versionName, year }: { blocks: OiBlock[]; versionName: string; year: number }) {
+export function OiSummary({ blocks, versionName, year, cutoff = 9 }: { blocks: OiBlock[]; versionName: string; year: number; cutoff?: number }) {
   const { filters, universe } = useFilters();
-  const L = { A1: oiLabel('A1', year), YTD: oiLabel('YTD', year), F: oiLabel('F', year), B: oiLabel('B', year) };
+  const L = { A1: oiLabel('A1', year, cutoff), YTD: oiLabel('YTD', year, cutoff), F: oiLabel('F', year, cutoff), B: oiLabel('B', year, cutoff), OD: oiLabel('OD', year, cutoff) };
   const link = (b: OiBlock) => (b.kind === 'P' ? `/other-income?p=${b.propertyId}` : '/other-income');
   const name = (b: OiBlock) => (b.kind === 'G' ? `General · ${b.buCode} ${b.buName}` : `${b.code} ${b.name}`);
 
@@ -69,7 +69,7 @@ export function OiSummary({ blocks, versionName, year }: { blocks: OiBlock[]; ve
 
   return (
     <div className="anh-main">
-      <SummaryHead eyebrow="Other Income · Summary" title={versionName} sub={`${rows.length} properties and company rows with other income in view · ${L.F} = ${L.YTD} actuals + the Oct–Dec forecast · AED`} />
+      <SummaryHead eyebrow="Other Income · Summary" title={versionName} sub={`${rows.length} properties and company rows with other income in view · ${L.F} = ${L.YTD} actuals + the ${L.OD} forecast · AED`} />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <StatTile label={`Other income ${L.B}`} value={compact(B)} sub={`${L.F}: ${compact(F)}`} {...(F && B ? { delta: pctSigned((B - F) / F), deltaDir: B >= F ? ('up' as const) : ('down' as const), adverse: B < F } : {})} />
@@ -143,7 +143,7 @@ export function OiSummary({ blocks, versionName, year }: { blocks: OiBlock[]; ve
 
       <Card title="By property" sub="Click a property to open it in Other Income">
         <SummaryTable
-          head={['Property', 'BU', 'PM', L.YTD, L.F, L.B, 'Change', 'Accounts typed', 'Oct–Dec entered']}
+          head={['Property', 'BU', 'PM', L.YTD, L.F, L.B, 'Change', 'Accounts typed', `${L.OD} entered`]}
           int={[7]}
           rows={[
             ...rows.map((r) => ({ href: link(r.b), cells: [name(r.b), r.b.buCode, r.b.pm ?? '–', r.ytd, r.f, r.bud, r.bud ? change(r.bud, r.f) : '–', r.typed, r.od ? 'Yes' : 'No'] })),
@@ -170,7 +170,7 @@ export function OiSummary({ blocks, versionName, year }: { blocks: OiBlock[]; ve
                 .map((x) => ({ what: `${name(x.b)} · ${x.a.name}`, why: `${compact(x.f!)} → ${compact(x.bud!)} (${change(x.bud, x.f)})`, href: link(x.b) })),
             },
             { title: `New in ${L.B} (no ${L.F})`, items: cells.filter((x) => Math.abs(x.f ?? 0) <= 5_000 && (x.bud ?? 0) > 10_000).map((x) => ({ what: `${name(x.b)} · ${x.a.name}`, why: compact(x.bud!), href: link(x.b) })) },
-            { title: 'Oct–Dec forecast not entered', items: rows.filter((r) => r.ytd > 0 && !r.od).map((r) => ({ what: name(r.b), why: `${L.YTD} ${compact(r.ytd)}`, href: link(r.b) })) },
+            { title: `${L.OD} forecast not entered`, items: rows.filter((r) => r.ytd > 0 && !r.od).map((r) => ({ what: name(r.b), why: `${L.YTD} ${compact(r.ytd)}`, href: link(r.b) })) },
           ]}
         />
       </Card>

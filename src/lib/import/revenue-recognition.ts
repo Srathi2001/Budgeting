@@ -4,7 +4,7 @@
 // actual part of the current-year forecast); Oracle's forecast months are kept for reference only.
 // The remaining months of the current year are projected from the Lease Budget inputs instead.
 
-import { eq, inArray, max } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, max } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { readTables } from './oracle-html';
 import { propertyKey } from './tenant-lease';
@@ -134,18 +134,33 @@ export async function planRevenueImport(report: RrReport) {
   return { rows, propertyIds: [...matched], preview };
 }
 
-/** Replaces the revenue actuals of the properties in the report. */
+/**
+ * The months an import replaces, per kind: accounted months only inside the report's own period
+ * (so a Jan–Sep report never removes earlier years' actuals), Oracle's forecast as a whole (it is
+ * reference only and the newest report supersedes it).
+ */
+export function replaceWindow(rows: { month: string; kind: string }[]): { actual: { from: string; to: string } | null; forecast: boolean } {
+  const actual = rows.filter((r) => r.kind === 'A').map((r) => r.month).sort();
+  return { actual: actual.length ? { from: actual[0], to: actual[actual.length - 1] } : null, forecast: rows.some((r) => r.kind === 'F') };
+}
+
+/** Replaces the revenue actuals of the properties in the report, for the months the report covers. */
 export async function applyRevenueImport(report: RrReport, userId: number | null, file: string | null) {
   const { rows, propertyIds, preview } = await planRevenueImport(report);
   if (!rows.length) throw new Error('No property in the report matches the budget');
+  const window = replaceWindow(rows);
   await db.transaction(async (tx) => {
-    await tx.delete(schema.revenueActuals).where(inArray(schema.revenueActuals.propertyId, propertyIds));
+    const a = schema.revenueActuals;
+    if (window.actual) {
+      await tx.delete(a).where(and(inArray(a.propertyId, propertyIds), eq(a.kind, 'A'), gte(a.month, window.actual.from), lte(a.month, window.actual.to)));
+    }
+    if (window.forecast) await tx.delete(a).where(and(inArray(a.propertyId, propertyIds), eq(a.kind, 'F')));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.revenueActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({
       userId,
       entity: 'revenue_import',
       action: 'revenue_recognition_summary',
-      changes: { file, accountingPeriods: preview.accountingPeriods, forecastPeriod: preview.forecastPeriod, properties: preview.matched, years: preview.years },
+      changes: { file, accountingPeriods: preview.accountingPeriods, forecastPeriod: preview.forecastPeriod, properties: preview.matched, years: preview.years, replaced: window },
     });
   });
   return preview;

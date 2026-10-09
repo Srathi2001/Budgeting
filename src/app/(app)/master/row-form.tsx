@@ -7,6 +7,7 @@ import { useState, type ReactNode } from 'react';
 import { MF_CHOICES, MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, type RowPatch } from '@/lib/budget/master-types';
 import { count, fmt, MONTHS, pct } from '@/lib/format';
 import { ScheduleEditor } from './schedule-editor';
+import { ConfirmDialog } from '@/components/ui/dialog';
 import { OUTCOMES, annualRent, dmy, leaseTiming, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 
 type Row = MasterRow;
@@ -77,7 +78,8 @@ function ReraEditor({ row, canEdit, onSave }: { row: Row; canEdit: boolean; onSa
         className="btn-primary btn-xs"
         disabled={!dirty || busy}
         onClick={async () => {
-          const lo = parse(min), hi = parse(max);
+          const lo = parse(min),
+            hi = parse(max);
           if ((lo !== null && !Number.isFinite(lo)) || (hi !== null && !Number.isFinite(hi))) return setMsg({ error: 'Enter numbers' });
           setBusy(true);
           const err = await onSave!(lo, hi);
@@ -176,10 +178,12 @@ export function RowForm({
   // a new tenant after a current lease starts after the vacancy days: the start is not typed
   const newTenantAfterLease = outcome === 'New tenant' && timing.kind !== 'vacant' && !contractedLock && !!row.currentEnd;
 
+  // leaving with unsaved changes asks first (a dialog, so it reads the same as the other confirmations)
+  const [leaving, setLeaving] = useState<(() => void) | null>(null);
   const confirmLeave = (go?: () => void) => () => {
     if (!go) return;
-    if (dirty && !confirm('Discard unsaved changes?')) return;
-    go();
+    if (dirty) setLeaving(() => go);
+    else go();
   };
   const save = async () => {
     setSaving(true);
@@ -215,12 +219,7 @@ export function RowForm({
   const date = (k: keyof Row, enabled: boolean, opts: { placeholder?: string | null; override?: boolean } = {}) =>
     enabled ? (
       <div className="flex items-center gap-1">
-        <input
-          type="date"
-          className={box(changed(k as string), opts.override && val(k) !== null)}
-          value={(val(k) as string | null) ?? opts.placeholder ?? ''}
-          onChange={(e) => set(k, e.target.value || null)}
-        />
+        <input type="date" className={box(changed(k as string), opts.override && val(k) !== null)} value={(val(k) as string | null) ?? opts.placeholder ?? ''} onChange={(e) => set(k, e.target.value || null)} />
         {opts.override && val(k) !== null && (
           <button type="button" className="text-xs text-slate-400 hover:text-red-600" title="Back to the calculated date" onClick={() => set(k, null)}>
             ×
@@ -249,6 +248,18 @@ export function RowForm({
 
   return (
     <aside aria-label="Row form" className="lease-form flex h-full min-h-0 w-1/2 shrink-0 flex-col border-l-2 border-sky-700 bg-slate-50 text-[13px]">
+      <ConfirmDialog
+        open={!!leaving}
+        onOpenChange={(o) => !o && setLeaving(null)}
+        title="Discard unsaved changes?"
+        body={`${row.unitCode} has changes that were not saved. Leaving the row drops them.`}
+        confirmLabel="Discard"
+        destructive
+        onConfirm={() => {
+          leaving?.();
+          return null;
+        }}
+      />
       {/* header */}
       <div className="flex items-start gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <div className="min-w-0">
@@ -493,11 +504,7 @@ export function RowForm({
               <Field label={outcome === 'Renew' ? 'MF on renewal' : 'MF on new tenant'} hint={`${pct(mfPct)} of the rent · other income in the start month`}>
                 {canEdit && !owner ? (
                   // three choices only; a line nobody has set shows its default (renewal: as the current lease, new tenant: Yes)
-                  <select
-                    className={box(changed('mfRenewal'))}
-                    value={val('mfRenewal') ?? mfDefault}
-                    onChange={(e) => set('mfRenewal', e.target.value as MfChoice)}
-                  >
+                  <select className={box(changed('mfRenewal'))} value={val('mfRenewal') ?? mfDefault} onChange={(e) => set('mfRenewal', e.target.value as MfChoice)}>
                     {MF_CHOICES.map((c) => (
                       <option key={c} value={c}>
                         {MF_LABEL[c]}
@@ -545,11 +552,7 @@ export function RowForm({
                       {i > 1 && (
                         <Field label="Renew">
                           {open ? (
-                            <select
-                              className={box(changed(renewKey))}
-                              value={val(renewKey) === null ? '' : val(renewKey) ? 'Y' : 'N'}
-                              onChange={(e) => set(renewKey, e.target.value === '' ? null : e.target.value === 'Y')}
-                            >
+                            <select className={box(changed(renewKey))} value={val(renewKey) === null ? '' : val(renewKey) ? 'Y' : 'N'} onChange={(e) => set(renewKey, e.target.value === '' ? null : e.target.value === 'Y')}>
                               <option value="">Automatic</option>
                               <option value="Y">Yes</option>
                               <option value="N">No</option>
@@ -560,9 +563,7 @@ export function RowForm({
                         </Field>
                       )}
                       <Field label="Start" locked={locked ? 'Fixed: contracted lease year (Oracle)' : i === 1 && newTenantAfterLease ? 'From the vacancy days' : false}>
-                        {i === 1 && newTenantAfterLease
-                          ? show(r1Preview.start ? dmy(r1Preview.start) : null)
-                          : date(`r${i}Start`, open, { placeholder: (i === 1 ? r1Preview.start : d?.start) ?? null, override: true })}
+                        {i === 1 && newTenantAfterLease ? show(r1Preview.start ? dmy(r1Preview.start) : null) : date(`r${i}Start`, open, { placeholder: (i === 1 ? r1Preview.start : d?.start) ?? null, override: true })}
                       </Field>
                       <Field label="End" locked={locked ? 'Fixed: contracted lease year (Oracle)' : false}>
                         {date(`r${i}End`, open, { placeholder: (i === 1 ? r1Preview.end : d?.end) ?? null, override: true })}
@@ -582,15 +583,7 @@ export function RowForm({
           <Section title="Cheque schedules" tone="input" note="Edit saves straight away">
             <div className="flex flex-wrap gap-3">
               {schedules.map(({ key, title, c, field, note }) => (
-                <ScheduleEditor
-                  key={key}
-                  title={title}
-                  contract={c}
-                  year={year}
-                  editable={canEdit}
-                  overrideNote={note}
-                  onSave={(items) => void onSave({ [field]: items } as RowPatch)}
-                />
+                <ScheduleEditor key={key} title={title} contract={c} year={year} editable={canEdit} overrideNote={note} onSave={(items) => void onSave({ [field]: items } as RowPatch)} />
               ))}
             </div>
           </Section>
@@ -657,11 +650,7 @@ export function RowForm({
         </Section>
 
         <Section title="Notes" tone="input">
-          {canEdit ? (
-            <textarea className={`${box(changed('notes'))} min-h-16`} value={val('notes') ?? ''} onChange={(e) => set('notes', e.target.value || null)} />
-          ) : (
-            show(row.notes)
-          )}
+          {canEdit ? <textarea className={`${box(changed('notes'))} min-h-16`} value={val('notes') ?? ''} onChange={(e) => set('notes', e.target.value || null)} /> : show(row.notes)}
         </Section>
 
         {onRemove && (

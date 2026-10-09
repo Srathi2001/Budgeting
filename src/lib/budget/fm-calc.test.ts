@@ -85,4 +85,22 @@ describe('FM budget calculation', () => {
     expect(p.monthly.capexItems[2]).toBe(5000);
     expect(p.monthly.capex.reduce((s, v) => s + v, 0)).toBe(6800);
   });
+
+  it('never drops the G&A amount when no team cost is entered yet', () => {
+    const r = computeFm(
+      [
+        { id: 1, bu: '501', zone: 'ZONE_1' },
+        { id: 2, bu: '502', zone: 'ZONE_2' },
+      ],
+      [
+        { propertyId: 1, workType: 'M01', amount: 300, month: null },
+        { propertyId: 2, workType: 'M01', amount: 100, month: null },
+      ],
+      [{ team: 'GA', ctc: 400, overtime: 0 }],
+    );
+    const allocated = [...r.byProperty.values()].reduce((s, p) => s + p.staffTotal, 0);
+    expect(allocated + r.unallocated).toBeCloseTo(400, 6);
+    expect(r.byProperty.get(1)!.staffTotal).toBeCloseTo(300, 6);
+    expect(r.byProperty.get(2)!.staffTotal).toBeCloseTo(100, 6);
+  });
 });

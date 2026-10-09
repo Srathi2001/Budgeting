@@ -56,8 +56,9 @@ export function oiType(account: string): OiType {
 }
 
 /**
- * Stored periods, relative to the version year Y: A2 = Y-3 actual, A1 = Y-2 actual, YTD = Y-1 Jan–Sep
- * actual (GL), OD = Y-1 Oct–Dec (input), B = budget Y (input). F = YTD + OD is calculated.
+ * Stored periods, relative to the version year Y: A2 = Y-3 actual, A1 = Y-2 actual, YTD = Y-1 Jan to the
+ * GL cut-off month (actual, from the GL; September for the 2026 budget), OD = the rest of Y-1 (input),
+ * B = budget Y (input). F = YTD + OD is calculated. The cut-off is the version's actualsCutoffMonth.
  */
 export const OI_STORED = ['A2', 'A1', 'YTD', 'OD', 'B'] as const;
 export type OiPeriod = (typeof OI_STORED)[number];
@@ -65,8 +66,14 @@ export const OI_INPUT: readonly OiPeriod[] = ['OD', 'B'];
 export type OiColumn = OiPeriod | 'F';
 export const OI_COLUMNS: OiColumn[] = ['A2', 'A1', 'YTD', 'OD', 'F', 'B'];
 
-export function oiLabel(c: OiColumn, year: number): string {
-  return { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: `${year - 1} Jan–Sep`, OD: `${year - 1} Oct–Dec`, F: `${year - 1}F`, B: `${year}B` }[c];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Column label; `cutoff` is the version's GL actuals cut-off month (1–12, default September). */
+export function oiLabel(c: OiColumn, year: number, cutoff = 9): string {
+  const m = Math.min(12, Math.max(1, Math.round(cutoff)));
+  const ytd = m === 1 ? `${year - 1} Jan` : `${year - 1} Jan–${MON[m - 1]}`;
+  const od = m >= 12 ? `${year - 1} (none)` : m === 11 ? `${year - 1} Dec` : `${year - 1} ${MON[m]}–Dec`;
+  return { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: ytd, OD: od, F: `${year - 1}F`, B: `${year}B` }[c];
 }
 
 /** account → period → amount (null: nothing entered) */

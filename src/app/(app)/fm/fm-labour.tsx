@@ -54,6 +54,7 @@ export function FmLabour({ data }: { data: FmPageData }) {
             </button>
           )}
           {msg && <span className={`text-sm ${msg.error ? 'text-red-600' : ''}`}>{msg.error ?? msg.ok}</span>}
+          {!edit && data.staffLockedReason && <span className="text-sm">{data.staffLockedReason}</span>}
           <TemplateButtons kind="fm-labour" versionId={version.id} canImport={edit} />
           <div className="anh-legend-cells ml-auto" aria-label="Cell legend">
             <span>
@@ -178,7 +179,7 @@ export function FmLabour({ data }: { data: FmPageData }) {
                 </td>
                 <td>{f.bu}</td>
                 <td>{f.zone?.replace('ZONE_', 'Zone ') ?? ''}</td>
-                <td className="anh-num calc">{fmt(f.staff.SUPERVISORY ?? 0)}</td>
+                <td className="anh-num calc">{fmt((f.staff.SUPERVISORY ?? 0) + (f.staff.GA ?? 0))}</td>
                 <td className="anh-num calc">{fmt(zone(f))}</td>
                 <td className="anh-num calc">{fmt(f.staff.PPM ?? 0)}</td>
                 <td className="anh-num calc">{fmt(f.staff.VACANT ?? 0)}</td>
@@ -193,7 +194,7 @@ export function FmLabour({ data }: { data: FmPageData }) {
             )}
             <tr className="total">
               <td colSpan={3}>Total · {allocated.length} facilities</td>
-              <td className="anh-num">{fmt(col((f) => f.staff.SUPERVISORY ?? 0))}</td>
+              <td className="anh-num">{fmt(col((f) => (f.staff.SUPERVISORY ?? 0) + (f.staff.GA ?? 0)))}</td>
               <td className="anh-num">{fmt(col(zone))}</td>
               <td className="anh-num">{fmt(col((f) => f.staff.PPM ?? 0))}</td>
               <td className="anh-num">{fmt(col((f) => f.staff.VACANT ?? 0))}</td>

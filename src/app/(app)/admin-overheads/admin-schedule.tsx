@@ -11,6 +11,7 @@ import { fmt, MONTHS } from '@/lib/format';
 import { ADMIN_ACCOUNT, ADMIN_ACCOUNTS, DEPTS, PAYERS, deptName } from '@/lib/budget/admin-types';
 import { CAPEX, ITEM_KIND, SCHEDULE_ACCOUNT, itemTotal, type AdminItem, type FieldSpec, type ItemData, type ItemKind } from '@/lib/budget/admin-items';
 import { deleteAdminItemAction, saveAdminItemAction } from './actions';
+import { useConfirm } from '@/components/ui/dialog';
 
 type Msg = { error?: string; ok?: string } | null;
 type Draft = { id: number | null; dept: string; payer: string; values: Record<string, string>; pax: Record<string, string> };
@@ -246,9 +247,10 @@ function ItemForm({
   const data = toData(kind, draft);
   const postings = spec.postings(data, draft.dept).filter((p) => p.amount > 0);
   const set = (key: string, v: string) => setDraft((d) => ({ ...d, values: { ...d.values, [key]: v } }));
-  const leave = (fn?: () => void) => () => {
+  const { confirm, element: confirmEl } = useConfirm();
+  const leave = (fn?: () => void) => async () => {
     if (!fn) return;
-    if (dirty && !confirm('Discard the changes?')) return;
+    if (dirty && !(await confirm({ title: 'Discard the changes?', body: `This ${spec.one} has changes that were not saved.`, confirmLabel: 'Discard', destructive: true }))) return;
     fn();
   };
   const save = () =>
@@ -260,8 +262,8 @@ function ItemForm({
         onSaved(r.id!);
       }
     });
-  const remove = () => {
-    if (!draft.id || !confirm(`Remove this ${spec.one}?`)) return;
+  const remove = async () => {
+    if (!draft.id || !(await confirm({ title: `Remove this ${spec.one}?`, body: 'It leaves the admin overheads of this version; actuals are not touched.', confirmLabel: 'Remove', destructive: true }))) return;
     start(async () => {
       const r = await deleteAdminItemAction(versionId, draft.id!);
       if (r.error) setMsg({ error: r.error });
@@ -335,6 +337,7 @@ function ItemForm({
 
   return (
     <aside aria-label={`${spec.one} form`} className="lease-form flex h-full min-h-0 w-1/2 shrink-0 flex-col border-l-2 border-sky-700 bg-slate-50 text-[13px]">
+      {confirmEl}
       <div className="flex items-start gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <div className="min-w-0">
           <div className="truncate text-sm font-bold">{title}</div>

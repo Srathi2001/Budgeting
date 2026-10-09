@@ -1,73 +1,46 @@
 import { cookies } from 'next/headers';
 import { requireUser, getActiveVersion, isFinance } from '@/lib/auth/dal';
-import { THEME_COOKIE } from '@/lib/theme';
+import { THEME_COOKIE, themeFromCookie } from '@/lib/theme';
 import { logout } from '@/app/login/actions';
-import { NavLinks, PageCrumb } from './nav-links';
-import { ThemeSwitch } from './theme-switch';
-import { VersionSwitcher } from './version-switcher';
+import { AppShell } from '@/components/shell/app-shell';
 import { FilterBar, FiltersProvider } from '@/components/filter-bar';
 import { ExportTables } from '@/components/export-tables';
 import { filterUniverse, getFilters } from '@/lib/filters-server';
+import { ToastProvider } from '@/components/ui/toast';
+import { EmptyState } from '@/components/ui/status';
+import { MobileNote } from '@/components/shell/mobile-note';
 
 export default async function AppLayout({ children }: LayoutProps<'/'>) {
   const user = await requireUser();
   const { version, all } = await getActiveVersion();
   const finance = isFinance(user);
-  const theme = (await cookies()).get(THEME_COOKIE)?.value === 'dark' ? 'dark' : 'light';
+  const fm = user.role === 'FM';
+  const theme = themeFromCookie((await cookies()).get(THEME_COOKIE)?.value);
+  const universe = version ? await filterUniverse(user) : [];
   return (
-    <div className="anh-shell min-h-screen">
-      <aside className="anh-side sticky top-0 h-screen overflow-y-auto">
-        <div className="anh-brand">
-          <div className="mark">AN</div>
-          <div>
-            <b>Al Naboodah</b>
-            <span>Revenue budget</span>
-          </div>
-        </div>
-        <div className="px-4 pt-4">
-          <VersionSwitcher
-            current={version?.id ?? null}
-            versions={all.map((v) => ({ id: v.id, name: v.name, status: v.status }))}
-          />
-        </div>
-        <NavLinks finance={finance} fm={user.role === 'FM'} />
-        <div className="mt-auto border-t border-slate-200 px-4 py-3 text-[13px]">
-          <div className="font-semibold">{user.name}</div>
-          <div className="anh-muted text-xs">
-            {user.role}
-            {user.coordinator ? ` · ${user.coordinator}` : ''}
-          </div>
-          <form action={logout} className="mt-2">
-            <button className="anh-btn anh-btn--secondary anh-btn--sm">Sign out</button>
-          </form>
-        </div>
-      </aside>
-      <header className="anh-top">
-        <div className="anh-crumbs">
-          <span>MJN · REHL · PMC</span>
-          {version && (
-            <>
-              <span>/</span>
-              <span>{version.name}</span>
-            </>
-          )}
-          <span>/</span>
-          <PageCrumb />
-        </div>
-        <span className="flex-1" />
-        <ExportTables />
-        <ThemeSwitch initial={theme} />
-      </header>
-      <main className="min-w-0">
+    <AppShell
+      user={{ name: user.name, role: user.role, coordinator: user.coordinator }}
+      viewer={{ finance, fm }}
+      versions={all.map((v) => ({ id: v.id, name: v.name, status: v.status }))}
+      currentVersion={version?.id ?? null}
+      theme={theme}
+      properties={universe.map((p) => ({ id: p.id, code: p.code, name: p.name, buName: p.buName }))}
+      signOut={logout}
+      tools={<ExportTables />}
+    >
+      <ToastProvider>
         {version ? (
-          <FiltersProvider initial={await getFilters()} universe={await filterUniverse(user)}>
+          <FiltersProvider initial={await getFilters()} universe={universe}>
+            <MobileNote />
             <FilterBar />
             {children}
           </FiltersProvider>
         ) : (
-          <div className="p-8 text-slate-600">No budget versions yet. Run the import script first.</div>
+          <div className="p-8">
+            <EmptyState title="No budget version yet">{finance ? 'Create the first version in Admin → Budget versions, or run the import script.' : 'Finance has not opened a budget version yet.'}</EmptyState>
+          </div>
         )}
-      </main>
-    </div>
+      </ToastProvider>
+    </AppShell>
   );
 }

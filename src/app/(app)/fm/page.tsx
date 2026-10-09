@@ -1,5 +1,5 @@
-import Link from 'next/link';
-import { requireUser, getActiveVersion } from '@/lib/auth/dal';
+import { RoutedTabs } from '@/components/ui/tabs';
+import { requireUser, requireVersion } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { loadFmPage } from '@/lib/budget/fm-page';
 import { FmTemplate } from './fm-template';
@@ -17,43 +17,38 @@ const TABS = [
 
 export default async function FmPage({ searchParams }: PageProps<'/fm'>) {
   const user = await requireUser();
-  const { version } = await getActiveVersion();
+  const version = await requireVersion();
   // the shared page filters (BU, PM, category, property)
   const scope = await filteredScope(user);
   const sp = await searchParams;
   const tab = sp.tab === 'labour' || sp.tab === 'summary' ? sp.tab : 'template';
   const f = tab === 'template' ? Number(sp.f) || null : null;
   if (tab === 'summary') {
-    const summary = await loadFmSummary(version!, user, scope.propertyIds);
+    const summary = await loadFmSummary(version, user, scope.propertyIds);
     return (
-      <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
-        {head(tab)}
+      <div className="ui-fill flex min-h-0 flex-col">
+        {head()}
         <div className="min-h-0 flex-1 overflow-auto">
           <FmSummary data={summary} />
         </div>
       </div>
     );
   }
-  const data = await loadFmPage(version!, user, scope.propertyIds, f);
+  const data = await loadFmPage(version, user, scope.propertyIds, f);
   return (
-    <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
-      {head(tab)}
+    <div className="ui-fill flex min-h-0 flex-col">
+      {head()}
       {tab === 'template' ? <FmTemplate key={`${data.version.id}-${data.detail?.id ?? 0}`} data={data} /> : <FmLabour key={data.version.id} data={data} />}
     </div>
   );
 
-  function head(tab: string) {
+  // the current tab comes from the address (RoutedTabs reads ?tab=)
+  function head() {
     return (
-      <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 px-4 py-2">
-        <h1 className="text-base font-bold">FM Budget · {version!.name}</h1>
-        <nav className="seg" aria-label="FM Budget tabs">
-          {TABS.map((t) => (
-            <Link key={t.key} href={t.key === 'template' ? '/fm' : `/fm?tab=${t.key}`} aria-current={tab === t.key ? 'page' : undefined} className={tab === t.key ? 'on' : undefined}>
-              {t.label}
-            </Link>
-          ))}
-        </nav>
-        <span className="ml-auto text-xs">AED</span>
+      <div className="ui-toolbar ui-toolbar__row">
+        <h1 className="ui-toolbar__title">FM Budget · {version.name}</h1>
+        <RoutedTabs ariaLabel="FM Budget tabs" tabs={TABS.map((t) => ({ href: t.key === 'template' ? '/fm' : `/fm?tab=${t.key}`, label: t.label, param: { name: 'tab', value: t.key === 'template' ? null : t.key } }))} />
+        <span className="ml-auto text-xs anh-muted">AED</span>
       </div>
     );
   }

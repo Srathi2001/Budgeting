@@ -21,7 +21,7 @@ const FiltersContext = createContext<Ctx>({ filters: NO_FILTERS, setFilters: () 
 /** Tabs that show the filter bar; those marked true are filtered on the server and refresh on a change. */
 const FILTERED_TABS: Record<string, boolean> = {
   // the dashboard filters its charts in the browser, but the rent per sq ft card comes from the server
-  '/': true,
+  '/dashboard': true,
   '/pnl': true,
   '/summary': true,
   '/consolidated': true,

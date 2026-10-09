@@ -4,7 +4,9 @@
 // left out; the salary allocation (63112) is kept to show what moved to the buildings. An import
 // replaces the G&A actuals of the months the report covers.
 import { and, gte, lte } from 'drizzle-orm';
-import { db, schema } from '@/db';
+import { db, schema, type DB } from '@/db';
+
+type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { ADMIN_ACCOUNT, SALARY_ALLOCATION, isPayrollAccount } from '@/lib/budget/admin-types';
 import { isBohNatural } from '@/lib/budget/boh-types';
 import { glSegments, type GlScan } from './gl-analysis';
@@ -72,10 +74,12 @@ export async function planAdminActuals(scan: GlScan): Promise<{ rows: AdminActua
 }
 
 /** Replaces the G&A actuals of the months `preview` covers. */
-export async function applyAdminActuals(rows: AdminActual[], preview: AdminActualsPreview, userId: number | null, file: string | null) {
-  await db.transaction(async (tx) => {
+export async function applyAdminActuals(rows: AdminActual[], preview: AdminActualsPreview, userId: number | null, file: string | null, on: Tx = db) {
+  const run = async (tx: Tx) => {
     await tx.delete(schema.adminActuals).where(and(gte(schema.adminActuals.month, preview.from), lte(schema.adminActuals.month, preview.to)));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.adminActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({ userId, entity: 'gl_import', action: 'admin_actuals', changes: { file, from: preview.from, to: preview.to, rows: rows.length, byYear: preview.byYear } });
-  });
+  };
+  if (on === db) await db.transaction(run);
+  else await run(on);
 }

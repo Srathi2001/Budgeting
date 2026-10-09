@@ -1,22 +1,24 @@
 import Link from 'next/link';
-import { requireUser, getActiveVersion } from '@/lib/auth/dal';
+import { requireUser, requireVersion } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups, cashFlow } from '@/lib/budget/reports';
 import { BELOW_GP_LINES, CASH_ONLY_LINES, OPEX_LINES, budgetedExpenseLines, propertyExpenseTotals, type ExpenseLine } from '@/lib/budget/expenses';
 import { sum } from '@/lib/format';
 import { Num, Pct } from '@/components/num';
+import { Basis } from '@/components/statement';
+import { PageHeader } from '@/components/ui/page-header';
 
 export const metadata = { title: 'Building P&L · Budget' };
 
 export default async function PnlPage() {
   const user = await requireUser();
-  const { version } = await getActiveVersion();
+  const version = await requireVersion();
   // the shared page filters (BU, PM, category, property)
   const scope = await filteredScope(user);
-  const rolls = await propertyRollups(version!.id, scope.propertyIds, scope.categories);
+  const rolls = await propertyRollups(version.id, scope.propertyIds, scope.categories);
   // cost lines of the Buildingwise P&L sheet: FM costs from the FM budget, the others not budgeted yet
-  const budgeted = await budgetedExpenseLines(version!.id);
-  const costs = await propertyExpenseTotals(version!.id, scope.propertyIds);
+  const budgeted = await budgetedExpenseLines(version.id);
+  const costs = await propertyExpenseTotals(version.id, scope.propertyIds);
 
   // as the 2026 Buildingwise P&L: gross profit after operating costs; major repairs below it; capex
   // items are paid (cash) but not expensed
@@ -49,19 +51,17 @@ export default async function PnlPage() {
     );
 
   return (
-    <div className="space-y-3 p-6">
-      <header className="flex items-end gap-4">
-        <div>
-          <h1 className="page-title">Building-wise P&amp;L · {version!.year}</h1>
-          <p className="page-sub">
-            {anyCost ? 'Maintenance, FM staff, major repairs and capex items from the FM budget; other costs not budgeted yet' : 'Costs not budgeted yet'} · major repairs below
-            gross profit, capex items in cash only (as the 2026 budget) · AED
-          </p>
-        </div>
-        <a className="btn ml-auto" href="/api/export/pnl">
-          Export to Excel
-        </a>
-      </header>
+    <div className="anh-main">
+      <PageHeader
+        eyebrow="Statements"
+        title={`Building P&L · ${version.year}`}
+        sub={`${version.name} · ${anyCost ? 'maintenance, FM staff, major repairs and capex items from the FM budget; other costs not budgeted yet' : 'costs not budgeted yet'}`}
+        actions={
+          <a className="ui-btn ui-btn--secondary ui-btn--sm" href="/api/export/pnl">
+            Export to Excel
+          </a>
+        }
+      />
       <div className="frame frame-tall">
         <table className="tbl">
           <thead>
@@ -146,6 +146,10 @@ export default async function PnlPage() {
           </tbody>
         </table>
       </div>
+      <Basis>
+        AED, ex VAT. Revenue recognised by day over the lease; gross profit after operating costs; major repairs below gross profit; capex items are paid (cash) but not expensed, as the 2026 budget. A · means the cost line is not budgeted
+        yet.
+      </Basis>
     </div>
   );
 }

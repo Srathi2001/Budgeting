@@ -5,6 +5,7 @@
 // charges (last year's forecast until entered). The budget is phased by month for the P&L: flat, the
 // seasonal pattern (water & electricity), the month paid, or the contracts' terms.
 import 'server-only';
+import { cache } from 'react';
 import { and, eq, gte, inArray, like, lte, max } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { canEditProperty, isFinance, type Actor, type EditCheck } from '@/lib/auth/permissions';
@@ -117,6 +118,14 @@ async function bohContext(version: schema.BudgetVersion, ids: number[]) {
 }
 type BohContext = Awaited<ReturnType<typeof bohContext>>;
 
+/**
+ * The context for the read paths (page, summary, statements), shared within one request: the same
+ * version and set of buildings is worked out once however many loaders ask for it. Writes keep
+ * calling bohContext directly so they never see a stale copy.
+ */
+const bohContextRead = cache((version: schema.BudgetVersion, idsKey: string) => bohContext(version, idsKey ? idsKey.split(',').map(Number) : []));
+const readCtx = (version: schema.BudgetVersion, ids: number[]) => bohContextRead(version, [...new Set(ids)].sort((a, b) => a - b).join(','));
+
 interface BohCell {
   row: BohRow;
   /** budget by month (expense) and the cash paid by month */
@@ -178,7 +187,7 @@ function cellOf(ctx: BohContext, propertyId: number, account: string): BohCell {
 /** A version's budget of one account over all buildings, entered or calculated (null: none). */
 export async function bohAccountBudget(version: schema.BudgetVersion, account: string): Promise<number | null> {
   const ids = (await db.select({ id: schema.properties.id }).from(schema.properties)).map((p) => p.id);
-  const ctx = await bohContext(version, ids);
+  const ctx = await readCtx(version, ids);
   const bs = ids.map((id) => cellOf(ctx, id, account).row.b).filter((b): b is number => b !== null);
   return bs.length ? r2(bs.reduce((s, b) => s + b, 0)) : null;
 }
@@ -186,7 +195,7 @@ export async function bohAccountBudget(version: schema.BudgetVersion, account: s
 export async function loadBuildingOverheads(version: schema.BudgetVersion, props: schema.Property[], editable: Set<number>) {
   const ids = props.map((p) => p.id);
   const bus = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
-  const ctx = await bohContext(version, ids);
+  const ctx = await readCtx(version, ids);
   const blocks: BohBlock[] = props.map((p) => ({
     propertyId: p.id,
     code: p.code,
@@ -244,28 +253,32 @@ export async function saveBuildingOverheads(user: Actor, versionId: number, chan
       continue;
     }
     const where = and(eq(schema.bohBudget.versionId, versionId), eq(schema.bohBudget.propertyId, p.id), eq(schema.bohBudget.account, c.account));
-    const [before] = await db.select().from(schema.bohBudget).where(where);
     const after = c.amount === null ? null : { amount: c.amount, dueMonth: acct.phasing === 'due' || acct.paidUpfront ? c.dueMonth : null };
-    if ((before?.amount ?? null) === (after?.amount ?? null) && (before?.dueMonth ?? null) === (after?.dueMonth ?? null)) continue;
-    if (!after) await db.delete(schema.bohBudget).where(where);
-    else
-      await db
-        .insert(schema.bohBudget)
-        .values({ versionId, propertyId: p.id, account: c.account, ...after, updatedBy: user.id })
-        .onConflictDoUpdate({
-          target: [schema.bohBudget.versionId, schema.bohBudget.propertyId, schema.bohBudget.account],
-          set: { ...after, updatedAt: new Date(), updatedBy: user.id },
-        });
-    await db.insert(schema.auditLog).values({
-      userId: user.id,
-      versionId,
-      propertyId: p.id,
-      entity: 'boh_budget',
-      entityId: `${p.id}|${c.account}`,
-      action: 'update',
-      changes: { from: before ? { amount: before.amount, dueMonth: before.dueMonth } : null, to: after },
+    // the value and its audit row land together or not at all
+    const written = await db.transaction(async (tx) => {
+      const [before] = await tx.select().from(schema.bohBudget).where(where);
+      if ((before?.amount ?? null) === (after?.amount ?? null) && (before?.dueMonth ?? null) === (after?.dueMonth ?? null)) return false;
+      if (!after) await tx.delete(schema.bohBudget).where(where);
+      else
+        await tx
+          .insert(schema.bohBudget)
+          .values({ versionId, propertyId: p.id, account: c.account, ...after, updatedBy: user.id })
+          .onConflictDoUpdate({
+            target: [schema.bohBudget.versionId, schema.bohBudget.propertyId, schema.bohBudget.account],
+            set: { ...after, updatedAt: new Date(), updatedBy: user.id },
+          });
+      await tx.insert(schema.auditLog).values({
+        userId: user.id,
+        versionId,
+        propertyId: p.id,
+        entity: 'boh_budget',
+        entityId: `${p.id}|${c.account}`,
+        action: 'update',
+        changes: { from: before ? { amount: before.amount, dueMonth: before.dueMonth } : null, to: after },
+      });
+      return true;
     });
-    saved++;
+    if (written) saved++;
   }
   return { saved, errors };
 }
@@ -280,7 +293,7 @@ export async function bohMonthly(version: schema.BudgetVersion, propertyIds?: nu
   const lines = new Set<BohLine>();
   const out = new Map<number, Partial<Record<BohLine, { months: number[]; cash: number[] }>>>();
   if (!ids.length) return { byProperty: out, lines };
-  const ctx = await bohContext(version, ids);
+  const ctx = await readCtx(version, ids);
   for (const id of ids)
     for (const acct of BOH_ACCOUNTS) {
       const cell = cellOf(ctx, id, acct.code);

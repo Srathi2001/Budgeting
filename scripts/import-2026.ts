@@ -211,7 +211,9 @@ async function main() {
   }
 
   // ---- users -----------------------------------------------------------------------------------
-  const password = process.env.SEED_PASSWORD ?? 'ChangeMe!2027';
+  // no default: every environment sets its own initial password (users change it on first sign-in)
+  const password = process.env.SEED_PASSWORD;
+  if (!password || password.length < 12) throw new Error('Set SEED_PASSWORD (12+ characters) before seeding users');
   const hash = await bcrypt.hash(password, 10);
   const coordinators = [...new Set(leases.map((l) => l.coordinator).filter(Boolean))] as string[];
   await db.insert(t.users).values([

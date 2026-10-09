@@ -6,6 +6,9 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { count, fmt, pct } from '@/lib/format';
 import { uploadInputTemplate, type TemplateUploadResult } from '@/app/(app)/template-actions';
+import { Dialog } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Banner } from '@/components/ui/status';
 
 const show = (v: string | number | null, column: string) =>
   v === null ? '—' : typeof v === 'number' ? (/pct/i.test(column) ? pct(v) : Number.isInteger(v) ? count(v) : fmt(v)) : v;
@@ -14,13 +17,13 @@ export function TemplateButtons({ kind, versionId, canImport }: { kind: string; 
   const [open, setOpen] = useState(false);
   return (
     <>
-      <a className="btn" href={`/api/export/input-template?kind=${kind}`} title="Excel template: instructions, the lines in view with their reference figures, the cells to fill in">
+      <a className="ui-btn ui-btn--secondary ui-btn--sm" href={`/api/export/input-template?kind=${kind}`} title="Excel template: instructions, the lines in view with their reference figures, the cells to fill in">
         Download template
       </a>
       {canImport && (
-        <button className="btn" onClick={() => setOpen(true)}>
+        <Button size="sm" onClick={() => setOpen(true)} aria-haspopup="dialog">
           Import Excel
-        </button>
+        </Button>
       )}
       {open && <ImportDialog kind={kind} versionId={versionId} onClose={() => setOpen(false)} />}
     </>
@@ -52,34 +55,38 @@ function ImportDialog({ kind, versionId, onClose }: { kind: string; versionId: n
       router.refresh();
     });
 
+  const summary = res?.error ? null : done ? `Saved ${res!.saved} · ${rejected} rejected` : res ? `${res.changes.length} change${res.changes.length === 1 ? '' : 's'} · ${rejected} rejected` : null;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-8" role="dialog" aria-modal="true" aria-label="Import Excel" onClick={onClose}>
-      <div className="card flex max-h-full w-full max-w-5xl flex-col bg-white p-4 text-[13px]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm font-bold">Import Excel</span>
-          <input type="file" accept=".xlsx" onChange={choose} className="text-xs" disabled={pending} />
-          {pending && <span>{form && res ? 'Saving…' : 'Reading…'}</span>}
+    <Dialog
+      open
+      onOpenChange={(o) => !o && !pending && onClose()}
+      title="Import Excel"
+      description="The filled-in template. Every change is listed before anything is saved; rows that cannot be taken are listed with the reason."
+      width={960}
+      footer={
+        <>
+          {summary && <span className={`mr-auto text-sm ${done ? 'font-bold' : ''}`}>{summary}</span>}
+          <Button variant="tertiary" onClick={onClose} disabled={pending}>
+            {done ? 'Close' : 'Cancel'}
+          </Button>
           {res && !res.error && !done && (
-            <span>
-              {res.changes.length} change{res.changes.length === 1 ? '' : 's'} · {rejected} rejected
-            </span>
-          )}
-          {done && (
-            <span className="font-bold">
-              Saved {res!.saved} · {rejected} rejected
-            </span>
-          )}
-          {res?.error && <span className="text-red-600">{res.error}</span>}
-          <span className="ml-auto" />
-          {res && !res.error && !done && (
-            <button className="btn-primary" disabled={pending || !res.changes.length} onClick={apply}>
+            <Button variant="primary" disabled={!res.changes.length} loading={pending} onClick={apply}>
               Apply {res.changes.length} change{res.changes.length === 1 ? '' : 's'}
-            </button>
+            </Button>
           )}
-          <button className="btn" onClick={onClose}>
-            Close
-          </button>
+        </>
+      }
+    >
+      <div className="text-[13px]">
+        <div className="flex flex-wrap items-center gap-3">
+          <input type="file" accept=".xlsx" onChange={choose} className="text-xs" disabled={pending} aria-label="Template file (.xlsx)" />
+          {pending && <span className="anh-muted">{form && res ? 'Saving…' : 'Reading…'}</span>}
         </div>
+        {res?.error && (
+          <Banner kind="error" className="mt-3">
+            {res.error}
+          </Banner>
+        )}
         {res && !res.error && (res.changes.length > 0 || rejected > 0) && (
           <div className="mt-3 grid min-h-0 gap-3 overflow-auto xl:grid-cols-2">
             {res.changes.length > 0 && (
@@ -143,6 +150,6 @@ function ImportDialog({ kind, versionId, onClose }: { kind: string; versionId: n
           </div>
         )}
       </div>
-    </div>
+    </Dialog>
   );
 }

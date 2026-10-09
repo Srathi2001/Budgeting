@@ -6,7 +6,9 @@
 //   fixed assets when an item is capitalised, not lower spending.
 // An import replaces the FM actuals of the months the report covers.
 import { and, gte, lte } from 'drizzle-orm';
-import { db, schema } from '@/db';
+import { db, schema, type DB } from '@/db';
+
+type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { elementOfGl, isWorkType } from '@/lib/budget/fm-types';
 import { glSegments, type GlScan } from './gl-analysis';
 import { propertyKey } from './tenant-lease';
@@ -89,10 +91,12 @@ export async function planFmActuals(scan: GlScan): Promise<{ rows: FmActual[]; p
 }
 
 /** Replaces the FM actuals of the months `preview` covers. */
-export async function applyFmActuals(rows: FmActual[], preview: FmActualsPreview, userId: number | null, file: string | null) {
-  await db.transaction(async (tx) => {
+export async function applyFmActuals(rows: FmActual[], preview: FmActualsPreview, userId: number | null, file: string | null, on: Tx = db) {
+  const run = async (tx: Tx) => {
     await tx.delete(schema.fmActuals).where(and(gte(schema.fmActuals.month, preview.from), lte(schema.fmActuals.month, preview.to)));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.fmActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({ userId, entity: 'gl_import', action: 'fm_actuals', changes: { file, from: preview.from, to: preview.to, rows: rows.length, byYear: preview.byYear } });
-  });
+  };
+  if (on === db) await db.transaction(run);
+  else await run(on);
 }

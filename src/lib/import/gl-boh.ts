@@ -3,7 +3,9 @@
 // month. Lines without a building (property 000000) are company G&A, not building overheads, and are
 // not kept. An import replaces the building overhead actuals of the months the report covers.
 import { and, gte, lte } from 'drizzle-orm';
-import { db, schema } from '@/db';
+import { db, schema, type DB } from '@/db';
+
+type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { BOH_ACCOUNT, BOH_LINE_LABEL, BOH_LINES, isBohNatural } from '@/lib/budget/boh-types';
 import { glSegments, type GlScan } from './gl-analysis';
 import { propertyKey } from './tenant-lease';
@@ -92,10 +94,12 @@ export async function planBohActuals(scan: GlScan): Promise<{ rows: BohActual[];
 }
 
 /** Replaces the building overhead actuals of the months `preview` covers. */
-export async function applyBohActuals(rows: BohActual[], preview: BohActualsPreview, userId: number | null, file: string | null) {
-  await db.transaction(async (tx) => {
+export async function applyBohActuals(rows: BohActual[], preview: BohActualsPreview, userId: number | null, file: string | null, on: Tx = db) {
+  const run = async (tx: Tx) => {
     await tx.delete(schema.bohActuals).where(and(gte(schema.bohActuals.month, preview.from), lte(schema.bohActuals.month, preview.to)));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.bohActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({ userId, entity: 'gl_import', action: 'boh_actuals', changes: { file, from: preview.from, to: preview.to, rows: rows.length, byYear: preview.byYear } });
-  });
+  };
+  if (on === db) await db.transaction(run);
+  else await run(on);
 }

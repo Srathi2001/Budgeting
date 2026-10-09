@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
@@ -28,6 +28,11 @@ import { TemplateImport } from './template-import';
 import { OUTCOMES, annualRent, needsVacancyDays, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
 import { LeaseTabs } from './lease-tabs';
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
+import { Field, Input, Select } from '@/components/ui/field';
+import { StatusLine } from '@/components/ui/status';
+import { useToast } from '@/components/ui/toast';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -75,7 +80,6 @@ type P = { id: number; code: string; name: string; editable: boolean };
 
 const ymdToDmy = (v: unknown) => (typeof v === 'string' ? fmtDate(v) : '');
 
-
 function parseNum(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = typeof v === 'number' ? v : Number(String(v).replace(/[,\s]/g, ''));
@@ -93,13 +97,7 @@ const money2 = (p: ValueFormatterParams) => fmt(p.value as number | null, 2);
 const whole = (p: ValueFormatterParams) => count(p.value as number | null);
 
 /** Field from Oracle (the lease report import): fixed for everyone; the next import refreshes it. */
-function oracleCol(
-  field: keyof Row,
-  headerName: string,
-  _isAdmin: boolean,
-  kind: 'text' | 'money' | 'date' = 'text',
-  extra: Partial<ColDef<Row>> = {},
-): ColDef<Row> {
+function oracleCol(field: keyof Row, headerName: string, _isAdmin: boolean, kind: 'text' | 'money' | 'date' = 'text', extra: Partial<ColDef<Row>> = {}): ColDef<Row> {
   return {
     colId: field as string,
     field,
@@ -110,12 +108,8 @@ function oracleCol(
     editable: false,
     cellDataType: false,
     ...(kind === 'text' ? { valueParser: (p: { newValue: unknown }) => (p.newValue === '' ? null : p.newValue) } : {}),
-    ...(kind === 'money'
-      ? { type: 'rightAligned', valueFormatter: money, valueParser: (p: { newValue: unknown }) => parseNum(p.newValue) }
-      : {}),
-    ...(kind === 'date'
-      ? { valueFormatter: (p: ValueFormatterParams) => ymdToDmy(p.value), valueParser: (p: { newValue: unknown }) => parseDate(p.newValue) }
-      : {}),
+    ...(kind === 'money' ? { type: 'rightAligned', valueFormatter: money, valueParser: (p: { newValue: unknown }) => parseNum(p.newValue) } : {}),
+    ...(kind === 'date' ? { valueFormatter: (p: ValueFormatterParams) => ymdToDmy(p.value), valueParser: (p: { newValue: unknown }) => parseDate(p.newValue) } : {}),
     ...extra,
   };
 }
@@ -218,8 +212,7 @@ function derivedCol(colId: string, headerName: string, get: (r: Row) => unknown,
     cellClass: 'cell-derived',
     type: fmtKind === 'text' ? undefined : 'rightAligned',
     valueGetter: (p) => (p.data && !p.node?.isRowPinned() ? get(p.data) : null),
-    valueFormatter:
-      fmtKind === 'money' ? money : fmtKind === 'money2' ? money2 : fmtKind === 'pct' ? (p) => (p.value === null || p.value === undefined ? '' : pct(p.value as number)) : undefined,
+    valueFormatter: fmtKind === 'money' ? money : fmtKind === 'money2' ? money2 : fmtKind === 'pct' ? (p) => (p.value === null || p.value === undefined ? '' : pct(p.value as number)) : undefined,
   };
 }
 
@@ -237,17 +230,15 @@ function groupStart(c: ColDef<Row>): ColDef<Row> {
 }
 
 function monthCols(key: 'revenue' | 'cashFlow', hdr: string): ColDef<Row>[] {
-  return MONTHS.map(
-    (m, i): ColDef<Row> => ({
-      colId: `${key}_${i}`,
-      headerName: m,
-      headerClass: hdr,
-      type: 'rightAligned',
-      cellClass: `cell-month${i === 0 ? ' group-start' : ''}`,
-      valueGetter: (p) => p.data?.[key]?.[i] ?? 0,
-      valueFormatter: money,
-    }),
-  );
+  return MONTHS.map((m, i): ColDef<Row> => ({
+    colId: `${key}_${i}`,
+    headerName: m,
+    headerClass: hdr,
+    type: 'rightAligned',
+    cellClass: `cell-month${i === 0 ? ' group-start' : ''}`,
+    valueGetter: (p) => p.data?.[key]?.[i] ?? 0,
+    valueFormatter: money,
+  }));
 }
 
 // ---------- component --------------------------------------------------------------------------
@@ -281,12 +272,17 @@ export function MasterGrid({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [errors, setErrors] = useState<string[]>([]);
+  /** edits waiting to be sent after a failed request */
+  const [pendingCount, setPendingCount] = useState(0);
   const [selected, setSelected] = useState<Row | null>(null);
   const [showRevenue, setShowRevenue] = useState(false);
   const [showCash, setShowCash] = useState(false);
   const [onlyIssues, setOnlyIssues] = useState(false);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [removing, setRemoving] = useState<Row | null>(null);
+  const { toast } = useToast();
 
   const refreshTotals = useCallback(() => {
     const api = apiRef.current;
@@ -317,12 +313,13 @@ export function MasterGrid({
     ]);
   }, []);
 
-  /** Sends queued edits; returns the first rejection message, or null. */
+  /** Sends queued edits; returns the first rejection message, or null. A failed request puts the edits back in the queue. */
   const flush = useCallback(async (): Promise<string | null> => {
-    const changes = [...queue.current.entries()].map(([lineId, patch]) => ({ lineId, patch }));
+    const changes = [...queue.current.entries()].map(([lineId, patch]) => ({ lineId, patch: { ...patch } }));
     queue.current.clear();
     if (!changes.length) return null;
     setStatus({ kind: 'saving' });
+    setPendingCount(0);
     try {
       const res = await saveLines(versionId, changes);
       apiRef.current?.applyTransaction({ update: res.rows });
@@ -337,10 +334,22 @@ export function MasterGrid({
       setStatus({ kind: 'saved', text: `Saved ${changes.length} row(s) · recalculated` });
       return null;
     } catch (e) {
-      setStatus({ kind: 'error', text: (e as Error).message });
+      // the request itself failed (network, server): keep the edits so Retry or the next change resends them
+      for (const c of changes) queue.current.set(c.lineId, { ...c.patch, ...(queue.current.get(c.lineId) ?? {}) });
+      setPendingCount(queue.current.size);
+      setStatus({ kind: 'error', text: `Not saved: ${(e as Error).message}` });
       return (e as Error).message;
     }
   }, [versionId, refreshTotals]);
+
+  // unsaved edits are never lost by closing the tab unnoticed
+  useEffect(() => {
+    const guard = (e: BeforeUnloadEvent) => {
+      if (queue.current.size || status.kind === 'saving') e.preventDefault();
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [status.kind]);
 
   const onCellValueChanged = useCallback(
     (e: CellValueChangedEvent<Row>) => {
@@ -350,6 +359,7 @@ export function MasterGrid({
       // the Outcome column stands for the two engine flags
       for (const field of col === 'outcome' ? ['renew1', 'noRenewal'] : [col]) (patch as Record<string, unknown>)[field] = (e.data as unknown as Record<string, unknown>)[field];
       queue.current.set(e.data.lineId, patch);
+      setPendingCount(queue.current.size);
       setStatus({ kind: 'saving', text: 'Unsaved changes…' });
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(flush, 600);
@@ -447,8 +457,7 @@ export function MasterGrid({
             }),
             editable: (p) => editable(p) && !!p.data && needsVacancyDays(p.data),
             // required and missing: flagged like an issue
-            cellClass: (p) =>
-              !p.data || p.node.isRowPinned() || !needsVacancyDays(p.data) ? '' : p.data.vacancyDays === null ? 'cell-input cell-issue' : 'cell-input',
+            cellClass: (p) => (!p.data || p.node.isRowPinned() || !needsVacancyDays(p.data) ? '' : p.data.vacancyDays === null ? 'cell-input cell-issue' : 'cell-input'),
           },
           inputCol('budgetRate', 'Budget Rate', 'money', {
             headerTooltip: 'New-tenant rate. Residential: annual rent · Commercial/labour: AED per sq.ft per year · Camps: AED per bed per month',
@@ -474,11 +483,23 @@ export function MasterGrid({
             cellClass: (p) => (p.data?.increasePctOverride !== null && p.data?.increasePctOverride !== undefined ? 'cell-override' : 'cell-derived'),
           },
           {
-            ...overrideCol('r1Start', (r) => r.r1?.start ?? null, 'date', 'Renewal Start', (r) => r.contracted >= 1 || needsVacancyDays(r)),
+            ...overrideCol(
+              'r1Start',
+              (r) => r.r1?.start ?? null,
+              'date',
+              'Renewal Start',
+              (r) => r.contracted >= 1 || needsVacancyDays(r),
+            ),
             headerTooltip: '1st renewal / new tenant start. Blank = calculated (grey); type to override (dark). More in the row form.',
           },
           {
-            ...overrideCol('r1Rent', (r) => r.r1?.rent ?? null, 'money', 'Renewal Rent', (r) => r.contracted >= 1),
+            ...overrideCol(
+              'r1Rent',
+              (r) => r.r1?.rent ?? null,
+              'money',
+              'Renewal Rent',
+              (r) => r.contracted >= 1,
+            ),
             headerTooltip: '1st renewal rent. Blank = calculated (grey); type to override (dark). More in the row form.',
           },
           {
@@ -530,7 +551,16 @@ export function MasterGrid({
     [refreshTotals],
   );
 
-  const visibleRows = useMemo(() => (onlyIssues ? rows.filter((r) => r.warnings.length) : rows), [rows, onlyIssues]);
+  const issueRows = useMemo(() => rows.filter((r) => r.warnings.length), [rows]);
+  const visibleRows = useMemo(() => (onlyIssues ? issueRows : rows), [rows, issueRows, onlyIssues]);
+  /** selects a row in the grid and scrolls to it (the issues panel, the form's prev / next) */
+  const focusRow = useCallback((lineId: number) => {
+    const api = apiRef.current;
+    const node = api?.getRowNode(String(lineId));
+    if (!api || !node) return;
+    node.setSelected(true, true);
+    api.ensureNodeVisible(node);
+  }, []);
 
   /** Moves the form to the previous / next row as displayed (after sorting and filters). */
   const step = (dir: 1 | -1) => {
@@ -550,144 +580,170 @@ export function MasterGrid({
   const pParam = selectedProperties.length ? selectedProperties.join(',') : 'all';
 
   return (
-    <div className="flex h-[calc(100vh-var(--topbar-h))] flex-col">
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
-        <h1 className="mr-1 text-base font-semibold text-slate-900">Lease Budget</h1>
-        <LeaseTabs tab="grid" />
-        <input className="input w-56" placeholder="Search unit, tenant…" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
-        <label className="flex items-center gap-1 text-[13px]">
-          <input type="checkbox" checked={showRevenue} onChange={(e) => setShowRevenue(e.target.checked)} /> Revenue by month
-        </label>
-        <label className="flex items-center gap-1 text-[13px]">
-          <input type="checkbox" checked={showCash} onChange={(e) => setShowCash(e.target.checked)} /> Cash by month
-        </label>
-        <label className="flex items-center gap-1 text-[13px]">
-          <input type="checkbox" checked={onlyIssues} onChange={(e) => setOnlyIssues(e.target.checked)} /> Issues only
-        </label>
-        <button className="btn btn-xs" onClick={() => apiRef.current?.autoSizeAllColumns()} title="Fit every column to its content">
-          Auto-fit columns
-        </button>
-        <span className="text-xs text-slate-500">
-          {leased} of {rows.length} units have a current lease
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <span className={`text-xs ${status.kind === 'error' ? 'text-red-600' : status.kind === 'saved' ? 'text-emerald-700' : 'text-slate-500'}`}>
-            {locked ? 'Version locked: read only' : status.kind === 'saving' ? (status.text ?? 'Saving…') : status.text}
+    <div className="ui-fill flex min-h-0 flex-col">
+      <div className="ui-toolbar">
+        <div className="ui-toolbar__row">
+          <h1 className="ui-toolbar__title">Lease Budget</h1>
+          <LeaseTabs tab="grid" />
+          <Input className="w-56" placeholder="Search unit, tenant…" aria-label="Search units and tenants" onChange={(e) => apiRef.current?.setGridOption('quickFilterText', e.target.value)} />
+          <div className="ui-chips" role="group" aria-label="Columns and rows">
+            <button type="button" className="ui-chip-toggle" aria-pressed={showRevenue} onClick={() => setShowRevenue((v) => !v)}>
+              Revenue by month
+            </button>
+            <button type="button" className="ui-chip-toggle" aria-pressed={showCash} onClick={() => setShowCash((v) => !v)}>
+              Cash by month
+            </button>
+            <button type="button" className="ui-chip-toggle" aria-pressed={onlyIssues} onClick={() => setOnlyIssues((v) => !v)}>
+              Issues only
+              <span className="ui-chip-toggle__n">{issueRows.length}</span>
+            </button>
+          </div>
+          <Button size="sm" variant="tertiary" onClick={() => apiRef.current?.autoSizeAllColumns()} title="Fit every column to its content">
+            Auto-fit columns
+          </Button>
+          <span className="anh-muted text-xs">
+            {leased} of {rows.length} units have a current lease
           </span>
-          {editableSelected && (
-            <button className="btn" onClick={() => setAdding((a) => !a)}>
-              + Add unit
-            </button>
-          )}
-          <a className="btn" href={`/api/export/template?p=${pParam}`} title="Input template: instructions and the editable fields of the lines in view">
-            Download template
-          </a>
-          {!locked && (
-            <button className="btn" onClick={() => setImporting((v) => !v)}>
-              Import Excel
-            </button>
-          )}
-          <a className="btn" href={`/api/export/master?p=${pParam}`}>
-            Export to Excel
-          </a>
+          <div className="ui-toolbar__end">
+            {locked ? (
+              <span className="anh-tag anh-tag--locked">Version locked · read only</span>
+            ) : (
+              <StatusLine kind={status.kind === 'error' && pendingCount > 0 ? 'error' : status.kind} text={status.kind === 'error' ? status.text : undefined} unsaved={pendingCount} onRetry={() => void flush()} />
+            )}
+            {issueRows.length > 0 && (
+              <Button size="sm" onClick={() => setIssuesOpen(true)} aria-haspopup="dialog">
+                Issues ({issueRows.length})
+              </Button>
+            )}
+            {editableSelected && (
+              <Button size="sm" variant="primary" onClick={() => setAdding(true)}>
+                + Add unit
+              </Button>
+            )}
+            <a className="ui-btn ui-btn--secondary ui-btn--sm" href={`/api/export/template?p=${pParam}`} title="Input template: instructions and the editable fields of the lines in view">
+              Download template
+            </a>
+            {!locked && (
+              <Button size="sm" onClick={() => setImporting((v) => !v)} aria-pressed={importing}>
+                Import Excel
+              </Button>
+            )}
+            <a className="ui-btn ui-btn--secondary ui-btn--sm" href={`/api/export/master?p=${pParam}`}>
+              Export to Excel
+            </a>
+          </div>
         </div>
       </div>
       <Legend />
 
       {importing && <TemplateImport versionId={versionId} onClose={() => setImporting(false)} />}
 
-      {adding && selectedProperty && (
-        <AddUnitForm
-          onCancel={() => setAdding(false)}
+      {selectedProperty && (
+        <AddUnitDialog
+          open={adding}
+          onOpenChange={setAdding}
+          propertyName={properties.find((p) => p.id === selectedProperty)?.name ?? ''}
           onAdd={async (input) => {
             const res = await addUnit(versionId, { ...input, propertyId: selectedProperty });
             if (res.error) return res.error;
             apiRef.current?.applyTransaction({ add: [res.row!] });
             refreshTotals();
-            setAdding(false);
+            toast({ kind: 'success', title: `${input.unitCode} added` });
             return null;
           }}
         />
       )}
 
+      <IssuesSheet open={issuesOpen} onOpenChange={setIssuesOpen} rows={issueRows} onPick={(id) => focusRow(id)} />
+
+      <ConfirmDialog
+        open={!!removing}
+        onOpenChange={(o) => !o && setRemoving(null)}
+        title={removing ? `Remove ${removing.unitCode} from this version?` : ''}
+        body="The unit and its budget inputs leave this budget version only; Oracle and other versions are not touched."
+        confirmLabel="Remove"
+        destructive
+        onConfirm={async () => {
+          if (!removing) return null;
+          const res = await removeLine(versionId, removing.lineId);
+          if (res.error) return res.error;
+          apiRef.current?.applyTransaction({ remove: [removing] });
+          refreshTotals();
+          setSelected(null);
+          toast({ kind: 'success', title: `${removing.unitCode} removed` });
+          return null;
+        }}
+      />
+
       {errors.length > 0 && (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">
-          {errors.slice(0, 5).map((e) => (
-            <div key={e}>{e}</div>
-          ))}
+        <div className="ui-banner ui-banner--error ui-banner--flush" role="alert">
+          <div className="ui-banner__body">
+            {errors.slice(0, 5).map((e) => (
+              <div key={e}>{e}</div>
+            ))}
+          </div>
         </div>
       )}
 
       <div className="flex min-h-0 flex-1">
-      <div className="lease-grid min-w-0 flex-1 p-2">
-        <AgGridReact<Row>
-          theme={theme}
-          rowData={visibleRows}
-          columnDefs={columnDefs}
-          // every column gets the Excel-style checkbox filter
-          defaultColDef={{ resizable: true, sortable: true, minWidth: 56, filter: ExcelFilter }}
-          autoSizeStrategy={{ type: 'fitCellContents', defaultMaxWidth: 300, continuous: true }}
-          // measure every column when auto-fitting, not only the ones on screen
-          suppressColumnVirtualisation
-          getRowId={(p: GetRowIdParams<Row>) => String(p.data.lineId)}
-          onGridReady={onGridReady}
-          onCellValueChanged={onCellValueChanged}
-          onFilterChanged={refreshTotals}
-          onRowDataUpdated={refreshTotals}
-          rowSelection={{ mode: 'singleRow', checkboxes: false, enableClickSelection: true }}
-          onSelectionChanged={(e: SelectionChangedEvent<Row>) => setSelected(e.api.getSelectedRows()[0] ?? null)}
-          getRowClass={(p: RowClassParams<Row>) => (p.data?.warnings?.length && !p.node.isRowPinned() ? 'row-warning' : undefined)}
-          singleClickEdit={false}
-          enterNavigatesVerticallyAfterEdit
-          stopEditingWhenCellsLoseFocus
-          undoRedoCellEditing
-          tooltipShowDelay={300}
-          animateRows={false}
-        />
-      </div>
+        <div className="lease-grid min-w-0 flex-1 p-2">
+          <AgGridReact<Row>
+            theme={theme}
+            rowData={visibleRows}
+            columnDefs={columnDefs}
+            // every column gets the Excel-style checkbox filter
+            defaultColDef={{ resizable: true, sortable: true, minWidth: 56, filter: ExcelFilter }}
+            autoSizeStrategy={{ type: 'fitCellContents', defaultMaxWidth: 300, continuous: true }}
+            // measure every column when auto-fitting, not only the ones on screen
+            suppressColumnVirtualisation
+            getRowId={(p: GetRowIdParams<Row>) => String(p.data.lineId)}
+            onGridReady={onGridReady}
+            onCellValueChanged={onCellValueChanged}
+            onFilterChanged={refreshTotals}
+            onRowDataUpdated={refreshTotals}
+            rowSelection={{ mode: 'singleRow', checkboxes: false, enableClickSelection: true }}
+            onSelectionChanged={(e: SelectionChangedEvent<Row>) => setSelected(e.api.getSelectedRows()[0] ?? null)}
+            getRowClass={(p: RowClassParams<Row>) => (p.data?.warnings?.length && !p.node.isRowPinned() ? 'row-warning' : undefined)}
+            singleClickEdit={false}
+            enterNavigatesVerticallyAfterEdit
+            stopEditingWhenCellsLoseFocus
+            undoRedoCellEditing
+            tooltipShowDelay={300}
+            animateRows={false}
+          />
+        </div>
 
-      {selected && (
-        <RowForm
-          key={selected.lineId}
-          row={selected}
-          year={year}
-          staffDiscount={staffDiscount}
-          mfPct={mfPct}
-          isAdmin={isAdmin}
-          onClose={() => {
-            apiRef.current?.deselectAll();
-            setSelected(null);
-          }}
-          onPrev={() => step(-1)}
-          onNext={() => step(1)}
-          onSaveRera={async (min, max) => {
-            const res = await saveRera(versionId, { propertyId: selected.propertyId, bedroom: selected.bedroom ?? '', min, max });
-            if (res.error) return res.error;
-            // every unit of the property with this RERA code was recalculated
-            apiRef.current?.applyTransaction({ update: res.rows });
-            setSelected((s) => (s ? (res.rows!.find((r) => r.lineId === s.lineId) ?? s) : s));
-            refreshTotals();
-            return null;
-          }}
-          onSave={(patch) => {
-            queue.current.set(selected.lineId, { ...(queue.current.get(selected.lineId) ?? {}), ...patch });
-            if (timer.current) clearTimeout(timer.current);
-            return flush();
-          }}
-          onRemove={
-            selected.editable
-              ? async () => {
-                  if (!confirm(`Remove ${selected.unitCode} from this budget version?`)) return;
-                  const res = await removeLine(versionId, selected.lineId);
-                  if (res.error) return alert(res.error);
-                  apiRef.current?.applyTransaction({ remove: [selected] });
-                  refreshTotals();
-                  setSelected(null);
-                }
-              : undefined
-          }
-        />
-      )}
+        {selected && (
+          <RowForm
+            key={selected.lineId}
+            row={selected}
+            year={year}
+            staffDiscount={staffDiscount}
+            mfPct={mfPct}
+            isAdmin={isAdmin}
+            onClose={() => {
+              apiRef.current?.deselectAll();
+              setSelected(null);
+            }}
+            onPrev={() => step(-1)}
+            onNext={() => step(1)}
+            onSaveRera={async (min, max) => {
+              const res = await saveRera(versionId, { propertyId: selected.propertyId, bedroom: selected.bedroom ?? '', min, max });
+              if (res.error) return res.error;
+              // every unit of the property with this RERA code was recalculated
+              apiRef.current?.applyTransaction({ update: res.rows });
+              setSelected((s) => (s ? (res.rows!.find((r) => r.lineId === s.lineId) ?? s) : s));
+              refreshTotals();
+              return null;
+            }}
+            onSave={(patch) => {
+              queue.current.set(selected.lineId, { ...(queue.current.get(selected.lineId) ?? {}), ...patch });
+              if (timer.current) clearTimeout(timer.current);
+              return flush();
+            }}
+            onRemove={selected.editable ? async () => setRemoving(selected) : undefined}
+          />
+        )}
       </div>
     </div>
   );
@@ -713,57 +769,126 @@ function Legend() {
   );
 }
 
-function AddUnitForm({
+function AddUnitDialog({
+  open,
+  onOpenChange,
+  propertyName,
   onAdd,
-  onCancel,
 }: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  propertyName: string;
   onAdd: (i: { unitCode: string; rc: 'R' | 'C' | 'L'; bedroom: string | null; area: number | null; unitType: string | null }) => Promise<string | null>;
-  onCancel: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const formId = 'add-unit-form';
   return (
-    <form
-      className="flex flex-wrap items-end gap-2 border-b border-slate-200 bg-sky-50 px-4 py-2 text-[13px]"
-      action={async (f) => {
-        const err = await onAdd({
-          unitCode: String(f.get('unitCode') ?? ''),
-          rc: (f.get('rc') as 'R' | 'C' | 'L') ?? 'R',
-          bedroom: (f.get('bedroom') as string) || null,
-          area: parseNum(f.get('area')),
-          unitType: (f.get('unitType') as string) || null,
-        });
-        setError(err);
-      }}
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add a unit"
+      description={`A unit of ${propertyName} that is not in the Oracle report yet. It starts vacant; its inputs are entered in the grid.`}
+      footer={
+        <>
+          <Button variant="tertiary" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" form={formId} loading={busy}>
+            Add unit
+          </Button>
+        </>
+      }
     >
-      <label>
-        Unit code
-        <input name="unitCode" required className="input ml-1 w-44" />
-      </label>
-      <label>
-        R/C
-        <select name="rc" className="input ml-1">
-          <option>R</option>
-          <option>C</option>
-          <option>L</option>
-        </select>
-      </label>
-      <label>
-        BR
-        <input name="bedroom" className="input ml-1 w-16" />
-      </label>
-      <label>
-        SQF
-        <input name="area" className="input ml-1 w-24" />
-      </label>
-      <label>
-        Unit type
-        <input name="unitType" className="input ml-1 w-40" />
-      </label>
-      <button className="btn-primary">Add</button>
-      <button type="button" className="btn" onClick={onCancel}>
-        Cancel
-      </button>
-      {error && <span className="text-red-600">{error}</span>}
-    </form>
+      <form
+        id={formId}
+        className="grid grid-cols-2 gap-3"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const f = new FormData(e.currentTarget);
+          setBusy(true);
+          const err = await onAdd({
+            unitCode: String(f.get('unitCode') ?? '').trim(),
+            rc: (f.get('rc') as 'R' | 'C' | 'L') ?? 'R',
+            bedroom: (f.get('bedroom') as string) || null,
+            area: parseNum(f.get('area')),
+            unitType: (f.get('unitType') as string) || null,
+          });
+          setBusy(false);
+          setError(err);
+          if (!err) {
+            e.currentTarget.reset();
+            onOpenChange(false);
+          }
+        }}
+      >
+        <Field label="Unit code" required className="col-span-2">
+          <Input name="unitCode" required autoFocus />
+        </Field>
+        <Field label="R / C" hint="Residential, commercial or land">
+          <Select name="rc" defaultValue="R">
+            <option>R</option>
+            <option>C</option>
+            <option>L</option>
+          </Select>
+        </Field>
+        <Field label="Bedrooms">
+          <Input name="bedroom" />
+        </Field>
+        <Field label="Area (sq ft)">
+          <Input name="area" numeric />
+        </Field>
+        <Field label="Unit type">
+          <Input name="unitType" />
+        </Field>
+        {error && (
+          <p className="ui-field__error col-span-2" role="alert">
+            {error}
+          </p>
+        )}
+      </form>
+    </Dialog>
+  );
+}
+
+/** Every row with a warning, as a list that jumps to the row. */
+function IssuesSheet({ open, onOpenChange, rows, onPick }: { open: boolean; onOpenChange: (o: boolean) => void; rows: Row[]; onPick: (lineId: number) => void }) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      variant="sheet"
+      title={`${rows.length} row${rows.length === 1 ? '' : 's'} with warnings`}
+      description="A warning is something to check before submitting; it does not block saving. Pick a row to open it in the grid."
+    >
+      {rows.length ? (
+        <ul className="ui-issues">
+          {rows.map((r) => (
+            <li key={r.lineId}>
+              <button
+                type="button"
+                className="ui-issues__row"
+                onClick={() => {
+                  onOpenChange(false);
+                  onPick(r.lineId);
+                }}
+              >
+                <b>
+                  {r.unitCode} · {r.propertyName}
+                </b>
+                <span>{r.tenant ?? 'No current lease'}</span>
+                <ul>
+                  {r.warnings.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="anh-muted text-sm">No warnings in the rows in view.</p>
+      )}
+    </Dialog>
   );
 }

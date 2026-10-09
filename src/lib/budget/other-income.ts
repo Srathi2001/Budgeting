@@ -145,27 +145,31 @@ export async function saveOtherIncome(user: Actor, versionId: number, changes: O
       eq(schema.otherIncome.account, c.account),
       eq(schema.otherIncome.period, c.period),
     );
-    const [before] = await db.select().from(schema.otherIncome).where(where);
-    if ((before?.amount ?? null) === c.amount) continue;
-    if (c.amount === null) await db.delete(schema.otherIncome).where(where);
-    else
-      await db
-        .insert(schema.otherIncome)
-        .values({ versionId, buCode, propertyId, scope: c.scope, account: c.account, period: c.period, amount: c.amount, updatedBy: user.id })
-        .onConflictDoUpdate({
-          target: [schema.otherIncome.versionId, schema.otherIncome.scope, schema.otherIncome.account, schema.otherIncome.period],
-          set: { amount: c.amount, updatedAt: new Date(), updatedBy: user.id },
-        });
-    await db.insert(schema.auditLog).values({
-      userId: user.id,
-      versionId,
-      propertyId,
-      entity: 'other_income',
-      entityId: `${c.scope}|${c.account}|${c.period}`,
-      action: 'update',
-      changes: { from: before?.amount ?? null, to: c.amount },
+    // the value and its audit row land together or not at all
+    const written = await db.transaction(async (tx) => {
+      const [before] = await tx.select().from(schema.otherIncome).where(where);
+      if ((before?.amount ?? null) === c.amount) return false;
+      if (c.amount === null) await tx.delete(schema.otherIncome).where(where);
+      else
+        await tx
+          .insert(schema.otherIncome)
+          .values({ versionId, buCode, propertyId, scope: c.scope, account: c.account, period: c.period, amount: c.amount, updatedBy: user.id })
+          .onConflictDoUpdate({
+            target: [schema.otherIncome.versionId, schema.otherIncome.scope, schema.otherIncome.account, schema.otherIncome.period],
+            set: { amount: c.amount, updatedAt: new Date(), updatedBy: user.id },
+          });
+      await tx.insert(schema.auditLog).values({
+        userId: user.id,
+        versionId,
+        propertyId,
+        entity: 'other_income',
+        entityId: `${c.scope}|${c.account}|${c.period}`,
+        action: 'update',
+        changes: { from: before?.amount ?? null, to: c.amount },
+      });
+      return true;
     });
-    saved++;
+    if (written) saved++;
   }
   return { saved, errors };
 }

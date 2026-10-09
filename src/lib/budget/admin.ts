@@ -279,66 +279,69 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
   if (version.status === 'LOCKED') return { saved: 0, errors: ['This budget version is locked'] };
   const errors: string[] = [];
   let saved = 0;
-  for (const c of changes) {
-    const v = c.value;
-    if (v !== null && (!Number.isFinite(v) || Math.abs(v) > 1e11)) {
-      errors.push('Not a valid amount');
-      continue;
+  // every change and its audit row land together: one transaction for the batch
+  await db.transaction(async (tx) => {
+    for (const c of changes) {
+      const v = c.value;
+      if (v !== null && (!Number.isFinite(v) || Math.abs(v) > 1e11)) {
+        errors.push('Not a valid amount');
+        continue;
+      }
+      if (c.kind === 'payroll') {
+        const kind = PAYROLL_FIELDS[c.field];
+        if (!DEPTS.some((d) => d.code === c.dept && !d.elsewhere)) {
+          errors.push(`${c.dept}: not budgeted here`);
+          continue;
+        }
+        if (v !== null && ((kind === 'int' && (!Number.isInteger(v) || v < 0)) || (kind === 'pct' && (v < 0 || v > 1)))) {
+          errors.push(`${c.dept}: ${kind === 'pct' ? 'a share 0–100%' : 'a whole number'}`);
+          continue;
+        }
+        await tx
+          .insert(schema.adminPayroll)
+          .values({ versionId, dept: c.dept, [c.field]: v, updatedBy: user.id })
+          .onConflictDoUpdate({ target: [schema.adminPayroll.versionId, schema.adminPayroll.dept], set: { [c.field]: v, updatedAt: new Date(), updatedBy: user.id } });
+      } else if (c.kind === 'admin') {
+        if (!ADMIN_ACCOUNT.has(c.account) || isPayrollAccount(c.account) || !PAYERS.some((p) => p.code === c.entity)) {
+          errors.push(`${c.account}: not an admin overhead input`);
+          continue;
+        }
+        const tab = SCHEDULE_ACCOUNT.get(c.account);
+        if (tab) {
+          errors.push(`${ADMIN_ACCOUNT.get(c.account)!.name}: entered in the ${ITEM_KIND.get(tab)!.label} tab`);
+          continue;
+        }
+        const where = and(eq(schema.adminBudget.versionId, versionId), eq(schema.adminBudget.dept, c.dept), eq(schema.adminBudget.account, c.account), eq(schema.adminBudget.entity, c.entity));
+        if (v === null) await tx.delete(schema.adminBudget).where(where);
+        else
+          await tx
+            .insert(schema.adminBudget)
+            .values({ versionId, dept: c.dept, account: c.account, entity: c.entity, amount: v, updatedBy: user.id })
+            .onConflictDoUpdate({
+              target: [schema.adminBudget.versionId, schema.adminBudget.dept, schema.adminBudget.account, schema.adminBudget.entity],
+              set: { amount: v, updatedAt: new Date(), updatedBy: user.id },
+            });
+      } else {
+        if (!FEES.some((f) => f.key === c.fee) || !FEE_ENTITIES.some((e) => e.key === c.entity) || (c.field !== 'rate' && c.field !== 'base')) {
+          errors.push(`${c.fee} ${c.entity}: not a management fee input`);
+          continue;
+        }
+        if (v !== null && (v < 0 || (c.field === 'rate' && v > 1))) {
+          errors.push(`${c.fee} ${c.entity}: ${c.field === 'rate' ? 'a rate 0–100%' : 'not a negative base'}`);
+          continue;
+        }
+        const where = and(eq(schema.adminFees.versionId, versionId), eq(schema.adminFees.fee, c.fee), eq(schema.adminFees.entity, c.entity));
+        await tx
+          .insert(schema.adminFees)
+          .values({ versionId, fee: c.fee, entity: c.entity, [c.field]: v, updatedBy: user.id })
+          .onConflictDoUpdate({ target: [schema.adminFees.versionId, schema.adminFees.fee, schema.adminFees.entity], set: { [c.field]: v, updatedAt: new Date(), updatedBy: user.id } });
+        // both back to the defaults: nothing to keep
+        await tx.delete(schema.adminFees).where(and(where, isNull(schema.adminFees.rate), isNull(schema.adminFees.base)));
+      }
+      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId: JSON.stringify({ ...c, value: undefined }), action: 'update', changes: { to: v } });
+      saved++;
     }
-    if (c.kind === 'payroll') {
-      const kind = PAYROLL_FIELDS[c.field];
-      if (!DEPTS.some((d) => d.code === c.dept && !d.elsewhere)) {
-        errors.push(`${c.dept}: not budgeted here`);
-        continue;
-      }
-      if (v !== null && ((kind === 'int' && (!Number.isInteger(v) || v < 0)) || (kind === 'pct' && (v < 0 || v > 1)))) {
-        errors.push(`${c.dept}: ${kind === 'pct' ? 'a share 0–100%' : 'a whole number'}`);
-        continue;
-      }
-      await db
-        .insert(schema.adminPayroll)
-        .values({ versionId, dept: c.dept, [c.field]: v, updatedBy: user.id })
-        .onConflictDoUpdate({ target: [schema.adminPayroll.versionId, schema.adminPayroll.dept], set: { [c.field]: v, updatedAt: new Date(), updatedBy: user.id } });
-    } else if (c.kind === 'admin') {
-      if (!ADMIN_ACCOUNT.has(c.account) || isPayrollAccount(c.account) || !PAYERS.some((p) => p.code === c.entity)) {
-        errors.push(`${c.account}: not an admin overhead input`);
-        continue;
-      }
-      const tab = SCHEDULE_ACCOUNT.get(c.account);
-      if (tab) {
-        errors.push(`${ADMIN_ACCOUNT.get(c.account)!.name}: entered in the ${ITEM_KIND.get(tab)!.label} tab`);
-        continue;
-      }
-      const where = and(eq(schema.adminBudget.versionId, versionId), eq(schema.adminBudget.dept, c.dept), eq(schema.adminBudget.account, c.account), eq(schema.adminBudget.entity, c.entity));
-      if (v === null) await db.delete(schema.adminBudget).where(where);
-      else
-        await db
-          .insert(schema.adminBudget)
-          .values({ versionId, dept: c.dept, account: c.account, entity: c.entity, amount: v, updatedBy: user.id })
-          .onConflictDoUpdate({
-            target: [schema.adminBudget.versionId, schema.adminBudget.dept, schema.adminBudget.account, schema.adminBudget.entity],
-            set: { amount: v, updatedAt: new Date(), updatedBy: user.id },
-          });
-    } else {
-      if (!FEES.some((f) => f.key === c.fee) || !FEE_ENTITIES.some((e) => e.key === c.entity) || (c.field !== 'rate' && c.field !== 'base')) {
-        errors.push(`${c.fee} ${c.entity}: not a management fee input`);
-        continue;
-      }
-      if (v !== null && (v < 0 || (c.field === 'rate' && v > 1))) {
-        errors.push(`${c.fee} ${c.entity}: ${c.field === 'rate' ? 'a rate 0–100%' : 'not a negative base'}`);
-        continue;
-      }
-      const where = and(eq(schema.adminFees.versionId, versionId), eq(schema.adminFees.fee, c.fee), eq(schema.adminFees.entity, c.entity));
-      await db
-        .insert(schema.adminFees)
-        .values({ versionId, fee: c.fee, entity: c.entity, [c.field]: v, updatedBy: user.id })
-        .onConflictDoUpdate({ target: [schema.adminFees.versionId, schema.adminFees.fee, schema.adminFees.entity], set: { [c.field]: v, updatedAt: new Date(), updatedBy: user.id } });
-      // both back to the defaults: nothing to keep
-      await db.delete(schema.adminFees).where(and(where, isNull(schema.adminFees.rate), isNull(schema.adminFees.base)));
-    }
-    await db.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId: JSON.stringify({ ...c, value: undefined }), action: 'update', changes: { to: v } });
-    saved++;
-  }
+  });
   return { saved, errors };
 }
 

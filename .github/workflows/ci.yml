@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'redesign/**']
+  pull_request:
+
+jobs:
+  checks:
+    name: Type-check, lint, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # the Windows-only npm script shell in .npmrc is ignored on Linux by calling node directly
+      - run: npm ci --ignore-scripts
+      - run: npx next typegen
+      - run: npx tsc --noEmit
+      - run: npx eslint src scripts
+      - run: npx vitest run
+
+  migrations:
+    name: Migrations apply to a fresh PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: budget
+          POSTGRES_PASSWORD: budget
+          POSTGRES_DB: budget
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U budget"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://budget:budget@localhost:5432/budget
+      AUTH_SECRET: ci-only-secret-at-least-32-characters-long
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx tsx scripts/migrate.ts
+      # the schema in code and the migrations folder must agree: a drift shows up as a new file here
+      - run: npx drizzle-kit generate --name ci-drift-check && test -z "$(git status --porcelain drizzle)"

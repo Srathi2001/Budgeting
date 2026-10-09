@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { AnalysisData, AnalysisProperty, AnalysisUnit } from '@/lib/budget/analysis';
 import { MONTHS } from '@/lib/format';
 import { Num, Pct } from '@/components/num';
+import { PageHeader } from '@/components/ui/page-header';
 import { saveNote } from './actions';
 import { useFilters } from '@/components/filter-bar';
 import { unitPasses } from '@/lib/filters';
@@ -47,17 +48,7 @@ const sumArr = (rows: (number[] | null)[]) => {
 const total = (a: number[] | null) => (a ? a.reduce((x, y) => x + y, 0) : null);
 const quarters = (a: number[]) => [0, 1, 2, 3].map((q) => a[q * 3] + a[q * 3 + 1] + a[q * 3 + 2]);
 
-export function AnalysisPivot({
-  versionId,
-  data,
-  finance,
-  locked,
-}: {
-  versionId: number;
-  data: AnalysisData;
-  finance: boolean;
-  locked: boolean;
-}) {
+export function AnalysisPivot({ versionId, data, finance, locked }: { versionId: number; data: AnalysisData; finance: boolean; locked: boolean }) {
   const [dims, setDims] = useState<Dim[]>(PRESETS[0].dims);
   const [period, setPeriod] = useState<Period>('Y');
   const [sortBy, setSortBy] = useState<'name' | 'budget' | 'change'>('budget');
@@ -152,10 +143,7 @@ export function AnalysisPivot({
     const priorTotal = data.priorSource ? total(prior) : comp(labels.prior);
     const units = n.units.filter((u) => u.budget).length;
     // property rows use the override when one is set
-    const vl =
-      n.dim === 'property' && n.property?.vacancyLossOverride !== null && n.property?.vacancyLossOverride !== undefined
-        ? n.property.vacancyLossOverride
-        : n.units.reduce((s, u) => s + u.vacancyLoss, 0);
+    const vl = n.dim === 'property' && n.property?.vacancyLossOverride !== null && n.property?.vacancyLossOverride !== undefined ? n.property.vacancyLossOverride : n.units.reduce((s, u) => s + u.vacancyLoss, 0);
     return {
       budget,
       budgetTotal: total(budget) ?? 0,
@@ -218,12 +206,26 @@ export function AnalysisPivot({
     const hasKids = n.children.length > 0;
     return (
       <Fragment key={n.key}>
-        <tr className={n.depth === 0 && dims.length > 1 ? 'lvl-0' : ''}>
+        <tr className={n.depth === 0 && dims.length > 1 ? 'lvl-0' : ''} role="row" aria-level={n.depth + 1} aria-expanded={hasKids ? open : undefined}>
           <td className="stick stick-edge" style={{ paddingLeft: 10 + n.depth * 18 }}>
             <div className="flex w-[300px] items-center gap-1.5 overflow-hidden">
               {hasKids ? (
-                <button onClick={() => toggle(n)} className="w-4 shrink-0 text-slate-500 hover:text-slate-900" aria-label={open ? 'Collapse' : 'Expand'}>
-                  {open ? '▾' : '▸'}
+                <button
+                  type="button"
+                  onClick={() => toggle(n)}
+                  onKeyDown={(e) => {
+                    // arrow keys as a tree: → opens, ← closes, * opens every row at this level
+                    if (e.key === 'ArrowRight' && !open) toggle(n);
+                    else if (e.key === 'ArrowLeft' && open) toggle(n);
+                    else if (e.key === '*') expandTo(Math.min(n.depth + 1, dims.length - 1));
+                    else return;
+                    e.preventDefault();
+                  }}
+                  className="w-4 shrink-0 text-slate-500 hover:text-slate-900"
+                  aria-expanded={open}
+                  aria-label={`${open ? 'Collapse' : 'Expand'} ${n.label}`}
+                >
+                  <span aria-hidden="true">{open ? '▾' : '▸'}</span>
                 </button>
               ) : (
                 <span className="w-4 shrink-0" />
@@ -393,25 +395,24 @@ export function AnalysisPivot({
   );
 
   return (
-    <div className="space-y-3 p-6">
-      <header className="flex flex-wrap items-end gap-x-6 gap-y-2">
-        <div>
-          <h1 className="page-title">Revenue analysis</h1>
-          <p className="page-sub">
-            {labels.budget} vs {labels.forecast}, {labels.prior}, {labels.actuals.join(', ')} · AED
-          </p>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          {finance && (
-            <Link className="btn" href="/admin?tab=comparatives">
-              Comparatives
-            </Link>
-          )}
-          <a className="btn" href="/api/export/analysis">
-            Export to Excel
-          </a>
-        </div>
-      </header>
+    <div className="anh-main">
+      <PageHeader
+        eyebrow="Revenue"
+        title="Revenue Analysis"
+        sub={`${labels.budget} vs ${labels.forecast}, ${labels.prior} and actuals ${labels.actuals.join(', ')} · AED ex VAT`}
+        actions={
+          <>
+            {finance && (
+              <Link className="ui-btn ui-btn--secondary ui-btn--sm" href="/admin?tab=comparatives">
+                Comparatives
+              </Link>
+            )}
+            <a className="ui-btn ui-btn--secondary ui-btn--sm" href="/api/export/analysis">
+              Export to Excel
+            </a>
+          </>
+        }
+      />
 
       <div className="card flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 text-[13px]">
         <label className="flex items-center gap-2">
@@ -511,7 +512,7 @@ export function AnalysisPivot({
       </div>
 
       <div className="frame frame-tall">
-        <table className="tbl">
+        <table className="tbl" role="treegrid" aria-label={`Revenue analysis by ${dims.map((d) => DIM_LABEL[d]).join(', ')}`} aria-rowcount={-1}>
           <thead>{head}</thead>
           <tbody>
             {sortNodes(tree).map(renderRow)}
@@ -519,13 +520,37 @@ export function AnalysisPivot({
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-slate-500">
-        {labels.budget} and {labels.prior}
-        {data.priorSource ? ` (${data.priorSource.name})` : ''} are held per unit and drill to any level. {labels.forecast} and actuals are held per
-        property: they show for properties and for groups of whole properties, and as “–” below property level. Vacancy loss is the gap between a lease
-        ending and the next tenant starting, at the new rent.
-        {forecastNote && <> {forecastNote}.</>}
-      </p>
+      <section className="ui-defs" aria-labelledby="defs-h">
+        <h2 id="defs-h" className="ui-defs__title">
+          What the columns mean
+        </h2>
+        <dl>
+          <div>
+            <dt>{labels.budget}</dt>
+            <dd>This version&rsquo;s rent, recognised by day over each lease, ex VAT. Held per unit, so it drills to any level.</dd>
+          </div>
+          <div>
+            <dt>{labels.forecast}</dt>
+            <dd>{forecastNote ?? 'Current-year forecast: actuals to the cut-off, then the Lease Budget projection.'} Held per property: shown for properties and groups of whole properties, “–” below property level.</dd>
+          </div>
+          <div>
+            <dt>{labels.prior}</dt>
+            <dd>The prior budget{data.priorSource ? ` (${data.priorSource.name})` : ''}, per unit.</dd>
+          </div>
+          <div>
+            <dt>Change, %</dt>
+            <dd>{labels.budget} minus the comparator, and that change as a share of the comparator. Blank when the comparator is not held at this level.</dd>
+          </div>
+          <div>
+            <dt>Actuals ({labels.actuals.join(', ')})</dt>
+            <dd>Oracle recognised rent from the Revenue Recognition Summary, per property.</dd>
+          </div>
+          <div>
+            <dt>Vacancy loss, % of B</dt>
+            <dd>Rent lost between a lease ending and the next tenant starting, at the new rent; and that loss as a share of {labels.budget}. A typed override replaces the calculated figure.</dd>
+          </div>
+        </dl>
+      </section>
     </div>
   );
 }

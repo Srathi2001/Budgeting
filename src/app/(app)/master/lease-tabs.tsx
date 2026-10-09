@@ -1,15 +1,15 @@
-import Link from 'next/link';
+import { RoutedTabs } from '@/components/ui/tabs';
 
 /** The Lease Budget's tabs: the summary for Finance, then the input grid. */
 export function LeaseTabs({ tab }: { tab: 'summary' | 'grid' }) {
+  void tab; // the current tab comes from the address (RoutedTabs reads ?tab=)
   return (
-    <nav className="seg" aria-label="Lease Budget tabs">
-      <Link href="/master?tab=summary" aria-current={tab === 'summary' ? 'page' : undefined} className={tab === 'summary' ? 'on' : undefined}>
-        Summary
-      </Link>
-      <Link href="/master" aria-current={tab === 'grid' ? 'page' : undefined} className={tab === 'grid' ? 'on' : undefined}>
-        Lease Budget
-      </Link>
-    </nav>
+    <RoutedTabs
+      ariaLabel="Lease Budget tabs"
+      tabs={[
+        { href: '/master?tab=summary', label: 'Summary', param: { name: 'tab', value: 'summary' } },
+        { href: '/master', label: 'Lease Budget', param: { name: 'tab', value: null } },
+      ]}
+    />
   );
 }

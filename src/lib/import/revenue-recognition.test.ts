@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
-import { parseRevenueRecognition } from './revenue-recognition';
+import { parseRevenueRecognition, replaceWindow } from './revenue-recognition';
 
 // the report's layout: parameters, a band over the month columns, the header, one row per property
 function report() {
@@ -34,5 +34,17 @@ describe('Revenue Recognition Summary', () => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Unit No', 'Lease Number']]), 'x');
     expect(() => parseRevenueRecognition(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer)).toThrow(/Revenue Recognition Summary/);
+  });
+  it('replaces only the months the report covers, never earlier years', () => {
+    // a Jan–Sep 2026 report: 2024 and 2025 actuals must survive the import
+    const rows = [
+      { month: '2026-01', kind: 'A' },
+      { month: '2026-09', kind: 'A' },
+      { month: '2026-03', kind: 'A' },
+      { month: '2026-10', kind: 'F' },
+    ];
+    expect(replaceWindow(rows)).toEqual({ actual: { from: '2026-01', to: '2026-09' }, forecast: true });
+    expect(replaceWindow([{ month: '2026-10', kind: 'F' }])).toEqual({ actual: null, forecast: true });
+    expect(replaceWindow([])).toEqual({ actual: null, forecast: false });
   });
 });

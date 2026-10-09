@@ -12,6 +12,7 @@ import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, FM_KIND_LABEL, WORK_TYPE, WORK_TYPE
 import type { FmFacilityDetail, FmLineRow, FmPageData } from '@/lib/budget/fm-page';
 import { fmTransition, saveFmLines } from './actions';
 import { FmImport } from './fm-import';
+import { useConfirm } from '@/components/ui/dialog';
 
 type Msg = { error?: string; ok?: string } | null;
 const zoneLabel = (z: string | null) => z?.replace('ZONE_', 'Zone ') ?? '';
@@ -206,17 +207,18 @@ function FacilityForm({ data, d, onClose, onPrev, onNext }: { data: FmPageData; 
     };
     run(() => saveFmLines(version.id, d.id, { lines: [line], deleted: [] }), () => setEntry(null));
   };
-  const remove = (l: FmLineRow) => {
-    if (!confirm(`Remove ${l.workType} ${l.description ?? elementLabel(l.element)} (${fmt(l.amount)})?`)) return;
+  const { confirm, element: confirmEl } = useConfirm();
+  const remove = async (l: FmLineRow) => {
+    if (!(await confirm({ title: `Remove ${l.workType} ${l.description ?? elementLabel(l.element)}?`, body: `${fmt(l.amount)} leaves the FM budget of ${d.code} · ${d.name}.`, confirmLabel: 'Remove', destructive: true }))) return;
     run(() => saveFmLines(version.id, d.id, { lines: [], deleted: [l.id] }));
   };
   const transition = (action: 'submit' | 'approve' | 'return') => {
     if (action === 'submit' && entry) return setMsg({ error: 'Save or cancel the cost being entered first' });
     run(() => fmTransition(version.id, d.id, action, note));
   };
-  const leave = (fn?: () => void) => () => {
+  const leave = (fn?: () => void) => async () => {
     if (!fn) return;
-    if (entry && !confirm('Discard the cost being entered?')) return;
+    if (entry && !(await confirm({ title: 'Discard the cost being entered?', body: 'The line has not been saved.', confirmLabel: 'Discard', destructive: true }))) return;
     fn();
   };
   const set = (patch: Partial<Entry>) => setEntry((e) => (e ? { ...e, ...patch } : e));
@@ -224,6 +226,7 @@ function FacilityForm({ data, d, onClose, onPrev, onNext }: { data: FmPageData; 
 
   return (
     <aside aria-label="Facility form" className="lease-form flex h-full min-h-0 w-1/2 shrink-0 flex-col border-l-2 border-sky-700 bg-slate-50 text-[13px]">
+      {confirmEl}
       <div className="flex items-start gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <div className="min-w-0">
           <div className="truncate text-sm font-bold">

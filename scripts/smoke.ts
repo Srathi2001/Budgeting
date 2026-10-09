@@ -8,7 +8,8 @@ import { db, schema } from '../src/db';
 import { signSession } from '../src/lib/auth/session';
 
 const base = process.argv[2] ?? 'http://localhost:3000';
-const password = process.env.SEED_PASSWORD ?? 'ChangeMe!2027';
+const password = process.env.SEED_PASSWORD ?? '';
+if (!password) throw new Error('Set SEED_PASSWORD to the seeded users\' password');
 
 async function signIn(email: string): Promise<string> {
   const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));

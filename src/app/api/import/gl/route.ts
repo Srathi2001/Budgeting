@@ -5,6 +5,7 @@
 // `ledger`: the ledger the upload is for (MJN HOLDING / MJN PRIVATE OFFICE); the report must be that ledger's.
 // Not behind the proxy: the proxy buffers request bodies and cuts them at 10 MB.
 import { getCurrentUser, isFinance } from '@/lib/auth/dal';
+import { db, schema } from '@/db';
 import { scanAccountAnalysis } from '@/lib/import/gl-analysis';
 import { isAdminAccount, planAdminActuals } from '@/lib/import/gl-admin';
 import { isBohAccount, planBohActuals } from '@/lib/import/gl-boh';
@@ -26,7 +27,14 @@ export async function POST(request: Request) {
     const boh = await planBohActuals(scan);
     const ga = await planAdminActuals(scan);
     scan.months = scan.months.filter((m) => isOtherIncome(m.account));
-    return Response.json({ ...(await planGlImport(versionId, scan, ledger ?? undefined)), fm, boh, ga });
+    const oi = await planGlImport(versionId, scan, ledger ?? undefined);
+    const file = params.get('file');
+    // the rows stay on the server: the apply reads this plan back, never what the browser posts
+    const [plan] = await db
+      .insert(schema.importPlans)
+      .values({ kind: 'gl', versionId, userId: user.id, file, payload: { values: oi.values, preview: oi.preview, fm, boh, ga } })
+      .returning({ id: schema.importPlans.id });
+    return Response.json({ planId: plan.id, preview: oi.preview, fm: fm && { preview: fm.preview }, boh: boh && { preview: boh.preview }, ga: ga && { preview: ga.preview } });
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 400 });
   }

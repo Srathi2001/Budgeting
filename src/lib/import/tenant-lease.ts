@@ -759,12 +759,11 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
       },
     });
     await recalcLines(tx, versionId);
+    // every property with lines needs a submission row in this version (inside the import's transaction)
+    await tx.execute(sql`
+      insert into submissions (version_id, property_id, status)
+      select distinct ${versionId}::int, property_id, 'DRAFT'::submission_status from lease_lines where version_id = ${versionId}
+      on conflict do nothing`);
   });
-
-  // every property with lines needs a submission row in this version
-  await db.execute(sql`
-    insert into submissions (version_id, property_id, status)
-    select distinct ${versionId}::int, property_id, 'DRAFT'::submission_status from lease_lines where version_id = ${versionId}
-    on conflict do nothing`);
   return preview;
 }

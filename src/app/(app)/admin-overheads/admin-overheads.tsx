@@ -475,8 +475,17 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                           {four(r)}
                           {PAYERS.map((p) =>
                             r.schedule || r.items[p.code] !== null ? (
-                              <td key={p.code} className="anh-num locked" title={r.schedule ? `Entered in the ${ITEM_KIND.get(r.schedule)!.label} tab` : 'From the back-up schedules (tabs above)'}>
+                              <td
+                                key={p.code}
+                                className="anh-num locked"
+                                title={`${r.schedule ? `Entered in the ${ITEM_KIND.get(r.schedule)!.label} tab` : 'From the back-up schedules (tabs above)'}${r.b[p.code] !== null ? ` · a typed amount of ${fmt(r.b[p.code])} is kept but not used while the schedule applies` : ''}`}
+                              >
                                 {fmt(r.items[p.code])}
+                                {r.b[p.code] !== null && (
+                                  <span className="ml-1 text-[9px] font-bold uppercase tracking-wider" aria-label="A typed amount is hidden by the schedule">
+                                    typed
+                                  </span>
+                                )}
                               </td>
                             ) : (
                             <Cell

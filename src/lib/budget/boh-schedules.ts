@@ -202,68 +202,71 @@ export async function saveContractsAs(user: Actor, versionId: number, kind: Cont
   };
   const errors: string[] = [];
   let saved = 0;
-  for (const id of deleted) {
-    const r = existing.get(id);
-    if (!r || r.kind !== kind) {
-      errors.push('A removed row is not in this schedule');
-      continue;
-    }
-    if (r.source === 'PO') {
-      errors.push(`${props.get(r.propertyId)} PO ${r.poNumber}: rows from Oracle purchase orders can’t be removed; set the quantity or rate to 0`);
-      continue;
-    }
-    const c = await may(r.propertyId);
-    if (!c.ok) {
-      errors.push(`${props.get(r.propertyId)}: ${c.reason}`);
-      continue;
-    }
-    await db.delete(schema.bohContracts).where(eq(schema.bohContracts.id, id));
-    saved++;
-  }
-  for (const l of lines) {
-    const code = props.get(l.propertyId);
-    if (!code) {
-      errors.push('Unknown building');
-      continue;
-    }
-    if (!info.accounts.includes(l.account)) {
-      errors.push(`${code}: account ${l.account} is not in the ${info.label} schedule`);
-      continue;
-    }
-    const before = l.id === null ? null : existing.get(l.id);
-    if (l.id !== null && (!before || before.kind !== kind)) {
-      errors.push(`${code}: a row is not in this schedule`);
-      continue;
-    }
-    const c = await may(before?.propertyId ?? l.propertyId);
-    if (!c.ok) {
-      errors.push(`${code}: ${c.reason}`);
-      continue;
-    }
-    const values = {
-      account: l.account,
-      supplier: l.supplier,
-      description: l.description,
-      terms: l.terms,
-      quantity: l.quantity,
-      rate: l.rate,
-      startMonth: l.startMonth,
-      remarks: l.remarks,
-    };
-    if (!before) {
-      await db.insert(schema.bohContracts).values({ versionId, propertyId: l.propertyId, kind, source: 'PM', ...values, updatedBy: user.id });
+  // deletes, inserts, updates and the audit row land together or not at all
+  await db.transaction(async (tx) => {
+    for (const id of deleted) {
+      const r = existing.get(id);
+      if (!r || r.kind !== kind) {
+        errors.push('A removed row is not in this schedule');
+        continue;
+      }
+      if (r.source === 'PO') {
+        errors.push(`${props.get(r.propertyId)} PO ${r.poNumber}: rows from Oracle purchase orders can’t be removed; set the quantity or rate to 0`);
+        continue;
+      }
+      const c = await may(r.propertyId);
+      if (!c.ok) {
+        errors.push(`${props.get(r.propertyId)}: ${c.reason}`);
+        continue;
+      }
+      await tx.delete(schema.bohContracts).where(eq(schema.bohContracts.id, id));
       saved++;
-      continue;
     }
-    // a PO row stays on its building; an entered row can move
-    const set = before.source === 'PO' ? values : { ...values, propertyId: l.propertyId };
-    if (Object.entries(set).every(([k, v]) => (before as Record<string, unknown>)[k] === v)) continue;
-    await db
-      .update(schema.bohContracts)
-      .set({ ...set, updatedAt: new Date(), updatedBy: user.id })
-      .where(eq(schema.bohContracts.id, before.id));
-    saved++;
-  }
-  if (saved) await db.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'boh_contracts', action: 'save', changes: { kind, saved, deleted } });
+    for (const l of lines) {
+      const code = props.get(l.propertyId);
+      if (!code) {
+        errors.push('Unknown building');
+        continue;
+      }
+      if (!info.accounts.includes(l.account)) {
+        errors.push(`${code}: account ${l.account} is not in the ${info.label} schedule`);
+        continue;
+      }
+      const before = l.id === null ? null : existing.get(l.id);
+      if (l.id !== null && (!before || before.kind !== kind)) {
+        errors.push(`${code}: a row is not in this schedule`);
+        continue;
+      }
+      const c = await may(before?.propertyId ?? l.propertyId);
+      if (!c.ok) {
+        errors.push(`${code}: ${c.reason}`);
+        continue;
+      }
+      const values = {
+        account: l.account,
+        supplier: l.supplier,
+        description: l.description,
+        terms: l.terms,
+        quantity: l.quantity,
+        rate: l.rate,
+        startMonth: l.startMonth,
+        remarks: l.remarks,
+      };
+      if (!before) {
+        await tx.insert(schema.bohContracts).values({ versionId, propertyId: l.propertyId, kind, source: 'PM', ...values, updatedBy: user.id });
+        saved++;
+        continue;
+      }
+      // a PO row stays on its building; an entered row can move
+      const set = before.source === 'PO' ? values : { ...values, propertyId: l.propertyId };
+      if (Object.entries(set).every(([k, v]) => (before as Record<string, unknown>)[k] === v)) continue;
+      await tx
+        .update(schema.bohContracts)
+        .set({ ...set, updatedAt: new Date(), updatedBy: user.id })
+        .where(eq(schema.bohContracts.id, before.id));
+      saved++;
+    }
+    if (saved) await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'boh_contracts', action: 'save', changes: { kind, saved, deleted } });
+  });
   return { saved, errors };
 }

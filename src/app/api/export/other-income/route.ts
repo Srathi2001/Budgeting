@@ -1,5 +1,6 @@
 // Other Income to Excel, for the page filters: every row × account with its actuals, forecast and
 // budget, and the by-account totals with the group adjustments (as on the tab).
+import { withDefaults } from '@/lib/engine/assumptions';
 import { getCurrentUser, getActiveVersion, visibleProperties } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { loadOtherIncome } from '@/lib/budget/other-income';
@@ -26,7 +27,8 @@ export async function GET() {
     // as on the tab: property rows follow every filter, a General row only the business unit one
     b.kind === 'P' ? ids.has(b.propertyId!) : (!f.bu.length || f.bu.includes(b.buCode)) && !f.pm.length && !f.cat.length && !f.prop.length,
   );
-  const heads = OI_COLUMNS.map((c) => oiLabel(c, version.year));
+  const cutoff = withDefaults(version.assumptions).actualsCutoffMonth;
+  const heads = OI_COLUMNS.map((c) => oiLabel(c, version.year, cutoff));
   const hasData = (b: OiBlock, a: string) => OI_COLUMNS.some((c) => oiCell(b, a, c) !== null);
 
   const detail = [
