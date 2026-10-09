@@ -28,6 +28,7 @@ import {
   type FeeKind,
   type FeeRow,
   type PayrollRow,
+  type SplitEntity,
 } from './admin-types';
 import { isMall, type EntityKey } from './group';
 import { CAPEX, ITEM_KIND, SCHEDULE_ACCOUNT, cleanItem, isItemKind, type AdminItem, type ItemData, type ItemKind, type Posting } from './admin-items';
@@ -48,6 +49,19 @@ export async function landlordRent(versionId: number): Promise<Record<FeeEntity,
     .groupBy(schema.properties.code, schema.properties.buCode, schema.lineMonthly.month);
   const out: Record<FeeEntity, number[]> = { '501': z12(), '502': z12(), MALL: z12() };
   for (const r of rows) out[isMall(r.code) ? 'MALL' : (r.bu as '501' | '502')][r.month - 1] += r.revenue;
+  return out;
+}
+
+/** budget rent of REHL, REHL-MJN (without the mall) and the PMC: ANPM's G&A is shared on it (2026 PayrollxCost row 12) */
+async function splitRevenue(versionId: number): Promise<Record<SplitEntity, number>> {
+  const rows = await db
+    .select({ code: schema.properties.code, bu: schema.properties.buCode, revenue: sql<number>`sum(${schema.lineMonthly.revenue})::float` })
+    .from(schema.lineMonthly)
+    .innerJoin(schema.properties, eq(schema.properties.id, schema.lineMonthly.propertyId))
+    .where(and(eq(schema.lineMonthly.versionId, versionId), inArray(schema.properties.buCode, ['501', '502', '522'])))
+    .groupBy(schema.properties.code, schema.properties.buCode);
+  const out: Record<SplitEntity, number> = { '501': 0, '502': 0, '522': 0 };
+  for (const r of rows) if (!isMall(r.code)) out[r.bu as SplitEntity] += r.revenue;
   return out;
 }
 
@@ -104,7 +118,7 @@ export async function managementFees(version: schema.BudgetVersion): Promise<{ r
 
 export async function loadAdminOverheads(version: schema.BudgetVersion): Promise<AdminData> {
   const Y = version.year;
-  const [actuals, [top], payroll, budget, fees, itemRows] = await Promise.all([
+  const [actuals, [top], payroll, budget, fees, itemRows, revenue] = await Promise.all([
     db
       .select()
       .from(schema.adminActuals)
@@ -114,6 +128,7 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
     db.select().from(schema.adminBudget).where(eq(schema.adminBudget.versionId, version.id)),
     managementFees(version),
     db.select().from(schema.adminItems).where(eq(schema.adminItems.versionId, version.id)).orderBy(schema.adminItems.id),
+    splitRevenue(version.id),
   ]);
   const items = itemRows.filter((r) => isItemKind(r.kind)).map((r) => ({ id: r.id, kind: r.kind as ItemKind, dept: r.dept, payer: r.payer, data: r.data as ItemData }));
   // what the schedules post, by department × account × payer (capex is not an account: cash only)
@@ -161,6 +176,7 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
       capPct: p?.capPct ?? null,
       mjnhPct: p?.mjnhPct ?? null,
       asrePct: p?.asrePct ?? null,
+      seniorCtc: p?.seniorCtc ?? null,
     };
   });
 
@@ -204,6 +220,7 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
     allocation: four('alloc'),
     fees: fees.rows,
     feesPrior: fees.prior,
+    revenue,
     items,
   };
 }
@@ -252,7 +269,7 @@ export async function deleteAdminItem(user: Actor, versionId: number, id: number
   return {};
 }
 
-const PAYROLL_FIELDS = { headcount: 'int', ctc: 'amount', newHeadcount: 'int', newCtc: 'amount', capPct: 'pct', mjnhPct: 'pct', asrePct: 'pct' } as const;
+const PAYROLL_FIELDS = { headcount: 'int', ctc: 'amount', newHeadcount: 'int', newCtc: 'amount', capPct: 'pct', mjnhPct: 'pct', asrePct: 'pct', seniorCtc: 'amount' } as const;
 
 /** Saves admin overhead inputs: Finance only. */
 export async function saveAdminOverheads(user: Actor, versionId: number, changes: AdminChange[]): Promise<{ saved: number; errors: string[] }> {
@@ -345,34 +362,19 @@ export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{
   ]);
   const costs: EntityCost[] = [];
   const lines = new Set<string>();
-  // payroll: ANPM's, less what is capitalised (still paid) and what is recharged (received back)
-  let gross = 0;
-  let cap = 0;
-  let recharged = 0;
-  for (const p of payroll) {
-    const s = payrollSplit(p);
-    gross += s.total;
-    cap += s.cap;
-    recharged += s.mjnh + s.asre;
-  }
-  if (payroll.some((p) => (p.ctc ?? 0) + (p.newCtc ?? 0) !== 0)) {
-    lines.add('payroll').add('payrollCap').add('payrollRecharge');
-    costs.push(
-      { entity: '521', line: 'payroll', months: flat(gross) },
-      { entity: '521', line: 'payrollCap', months: flat(-cap), cash: z12() },
-      { entity: '521', line: 'payrollRecharge', months: flat(-recharged) },
-    );
-  }
   // admin overheads, by the company that pays them: the back-up schedules (in the month paid, or evenly),
   // and the typed amount of each department × account without a schedule; office & IT capex is paid,
   // not expensed (cash flow only)
   const oh = new Map<string, number[]>();
   const capex = new Map<string, number[]>();
   const scheduled = new Set<string>();
-  const into = (m: Map<string, number[]>, payer: string, months: number[]) => {
+  // what ANPM pays for each department: the 2026 rules capitalise and recharge a share of it too
+  const anpmOh = new Map<string, number>();
+  const into = (m: Map<string, number[]>, payer: string, months: number[], dept?: string) => {
     const a = m.get(payer) ?? z12();
     months.forEach((v, i) => (a[i] += v));
     m.set(payer, a);
+    if (dept && payer === '521') anpmOh.set(dept, (anpmOh.get(dept) ?? 0) + months.reduce((s, v) => s + v, 0));
   };
   for (const r of itemRows) {
     if (!isItemKind(r.kind)) continue;
@@ -380,12 +382,31 @@ export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{
       const months = p.month ? z12().map((_, i) => (i === p.month! - 1 ? p.amount : 0)) : flat(p.amount);
       if (p.account === CAPEX) into(capex, r.payer, months);
       else {
-        into(oh, r.payer, months);
+        into(oh, r.payer, months, p.dept);
         scheduled.add(`${p.dept}|${p.account}|${r.payer}`);
       }
     }
   }
-  for (const b of budget) if (!SCHEDULE_ACCOUNT.has(b.account) && !scheduled.has(`${b.dept}|${b.account}|${b.entity}`)) into(oh, b.entity, flat(b.amount));
+  for (const b of budget) if (!SCHEDULE_ACCOUNT.has(b.account) && !scheduled.has(`${b.dept}|${b.account}|${b.entity}`)) into(oh, b.entity, flat(b.amount), b.dept);
+  // payroll: ANPM's, less what is capitalised (still paid) and what is recharged (received back), both
+  // taken on payroll and the department's overheads as the 2026 rules
+  let gross = 0;
+  let cap = 0;
+  let recharged = 0;
+  for (const p of payroll) {
+    const s = payrollSplit(p, anpmOh.get(p.dept) ?? 0);
+    gross += s.total;
+    cap += s.cap;
+    recharged += s.mjnh + s.asre;
+  }
+  if (gross || cap || recharged) {
+    lines.add('payroll').add('payrollCap').add('payrollRecharge');
+    costs.push(
+      { entity: '521', line: 'payroll', months: flat(gross) },
+      { entity: '521', line: 'payrollCap', months: flat(-cap), cash: z12() },
+      { entity: '521', line: 'payrollRecharge', months: flat(-recharged) },
+    );
+  }
   for (const [payer, months] of oh) {
     lines.add('adminOh');
     costs.push({ entity: payer as EntityKey, line: 'adminOh', months });

@@ -17,14 +17,16 @@ import {
   PAYERS,
   deptName,
   feeAmount,
+  SPLIT_ENTITIES,
+  anpmOverheads,
   payrollSplit,
   ruleOf,
   type AdminChange,
   type AdminData,
   type AdminRow,
+  type PayrollField,
   type FeeEntity,
   type FeeKind,
-  type PayrollRow,
 } from '@/lib/budget/admin-types';
 import { ITEM_KIND, SCHEDULE_ACCOUNT } from '@/lib/budget/admin-items';
 import { saveAdminCells } from './actions';
@@ -114,7 +116,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
       });
     });
 
-  const setPayroll = (dept: string, field: keyof PayrollRow & ('headcount' | 'ctc' | 'newHeadcount' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct'), value: number | null) =>
+  const setPayroll = (dept: string, field: PayrollField, value: number | null) =>
     save({ kind: 'payroll', dept, field, value }, (d) => ({ ...d, payroll: d.payroll.map((p) => (p.dept === dept ? { ...p, [field]: value } : p)) }));
 
   const setAdmin = (dept: string, account: string, entity: string, value: number | null) =>
@@ -136,15 +138,6 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
       }),
     }));
 
-  // ---- payroll ------------------------------------------------------------------------------------------
-  const splits = data.payroll.map((p) => ({ p, s: payrollSplit(p) }));
-  const pay = {
-    total: sum(splits.map(({ p, s }) => (p.ctc === null && p.newCtc === null ? null : s.total))),
-    cap: sum(splits.map(({ s }) => s.cap)),
-    mjnh: sum(splits.map(({ s }) => s.mjnh)),
-    asre: sum(splits.map(({ s }) => s.asre)),
-    net: sum(splits.map(({ s }) => s.net)),
-  };
 
   // ---- admin overheads by department ---------------------------------------------------------------------
   const byDept = useMemo(() => {
@@ -170,13 +163,27 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
   const allRows = byDept.flatMap((d) => d.rows);
   const enterable = (dept: string) => !locked && !DEPT.get(dept)?.elsewhere;
 
+  // ---- payroll and the 2026 rules: capitalised and ASRE on payroll + what ANPM pays for the department ----
+  const anpm = anpmOverheads(allRows);
+  const splits = data.payroll.map((p) => ({ p, s: payrollSplit(p, anpm.get(p.dept) ?? 0) }));
+  const pay = {
+    total: sum(splits.map(({ p, s }) => (p.ctc === null && p.newCtc === null ? null : s.total))),
+    oh: sum(splits.map(({ s }) => s.oh || null)),
+    cap: sum(splits.map(({ s }) => s.cap || null)),
+    mjnh: sum(splits.map(({ s }) => s.mjnh || null)),
+    asre: sum(splits.map(({ s }) => s.asre || null)),
+    net: sum(splits.map(({ s }) => (s.base ? s.net : null))),
+  };
+  const revTotal = SPLIT_ENTITIES.reduce((t, e) => t + data.revenue[e.key], 0);
+  const shareOf = (k: (typeof SPLIT_ENTITIES)[number]['key']) => (revTotal ? data.revenue[k] / revTotal : 0);
+
   // ---- fees ------------------------------------------------------------------------------------------------
   const feeTotal = (fee: FeeKind) => sum(data.fees.filter((r) => r.fee === fee).map((r) => r.amount));
   const pma = feeTotal('PMA');
   const amaTotal = feeTotal('AMA');
   const P = data.feesPrior;
   const ohByPayer = PAYERS.map((p) => ({ ...p, amount: ohBudget(allRows, p.code) }));
-  const ga = sum([pay.net, ...ohByPayer.map((p) => p.amount), amaTotal]);
+  const ga = sum([pay.total, pay.cap === null ? null : -pay.cap, pay.mjnh === null ? null : -pay.mjnh, pay.asre === null ? null : -pay.asre, ...ohByPayer.map((p) => p.amount), amaTotal]);
 
   const head4 = (
     <>
@@ -233,9 +240,9 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
       <section className="space-y-2">
         <h2 className="text-[15px] font-bold">Payroll by department</h2>
         <p className="text-xs text-slate-500">
-          Totals from HR: headcount and annual cost to company (salary, allowances, bonus, gratuity, leave, air fare, medical), current staff and new hires. 2026 rules:
-          PDD capitalised to projects with 10% of Finance, 5% of HR, 10% of PM and 5% of General; 21% of HR recharged to MJNH, 5% of Senior Management to ASRE; the rest
-          is ANPM&apos;s G&amp;A.
+          Totals from HR: headcount and annual cost to company (salary, allowances, bonus, gratuity, leave, air fare, medical), current staff and new hires. 2026 rules, on
+          payroll plus the overheads ANPM pays for the department: PDD in full, 10% of Finance and PM, 5% of HR and General capitalised to projects; 21% of HR payroll
+          recharged to MJNH; 5% of each department&apos;s senior staff to ASRE (Senior Management in full).
         </p>
         <div className="anh-grid-wrap">
           <table className="anh-grid">
@@ -249,10 +256,9 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <th colSpan={5} style={{ textAlign: 'center' }}>
                   Budget {L.b}
                 </th>
-                <th colSpan={3} style={{ textAlign: 'center' }}>
+                <th colSpan={4} style={{ textAlign: 'center' }}>
                   Rules
                 </th>
-                <th className="anh-num" />
               </tr>
               <tr className="h1">
                 <th>Department</th>
@@ -262,10 +268,12 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <th className="anh-num">New hires</th>
                 <th className="anh-num">New hires cost</th>
                 <th className="anh-num">Total</th>
-                <th className="anh-num">Capitalised</th>
-                <th className="anh-num">To MJNH</th>
-                <th className="anh-num">To ASRE</th>
-                <th className="anh-num">ANPM G&amp;A</th>
+                <th className="anh-num">Capitalised %</th>
+                <th className="anh-num">To MJNH %</th>
+                <th className="anh-num">To ASRE %</th>
+                <th className="anh-num" title="Cost to company of the senior staff: ASRE takes its share of it">
+                  Senior staff cost
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -288,7 +296,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                     <Cell value={p.capPct} kind="pct" placeholder={show(rule.cap, 'pct')} label={lbl('% capitalised')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'capPct', v)} />
                     <Cell value={p.mjnhPct} kind="pct" placeholder={show(rule.mjnh, 'pct')} label={lbl('% to MJNH')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'mjnhPct', v)} />
                     <Cell value={p.asrePct} kind="pct" placeholder={show(rule.asre, 'pct')} label={lbl('% to ASRE')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'asrePct', v)} />
-                    <td className="anh-num calc">{has ? fmt(s.net) : ''}</td>
+                    <Cell value={p.seniorCtc} kind="amount" placeholder={rule.asreWhole ? 'Whole department' : undefined} label={lbl('senior staff cost')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'seniorCtc', v)} />
                   </tr>
                 );
               })}
@@ -303,10 +311,8 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <td className="anh-num">{fmt(sum(data.payroll.map((p) => p.newHeadcount)))}</td>
                 <td className="anh-num">{fmt(sum(data.payroll.map((p) => p.newCtc)))}</td>
                 <td className="anh-num">{fmt(pay.total)}</td>
-                <td className="anh-num">{fmt(pay.cap === null ? null : -pay.cap)}</td>
-                <td className="anh-num">{fmt(pay.mjnh === null ? null : -pay.mjnh)}</td>
-                <td className="anh-num">{fmt(pay.asre === null ? null : -pay.asre)}</td>
-                <td className="anh-num">{fmt(pay.net)}</td>
+                <td colSpan={3} />
+                <td className="anh-num">{fmt(sum(data.payroll.map((p) => p.seniorCtc)))}</td>
               </tr>
               {data.elsewhere.map((e) => (
                 <tr key={e.dept} className="child">
@@ -323,6 +329,76 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <td>Salary allocated to buildings (63112: FM staff, watchmen)</td>
                 {four(data.allocation)}
                 <td colSpan={9} />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* ---- allocation: the PayrollxCost table of the 2026 budget ---- */}
+      <section className="space-y-2">
+        <h2 className="text-[15px] font-bold">Allocation · 2026 rules</h2>
+        <p className="text-xs text-slate-500">
+          As PayrollxCost in the 2026 budget: each department&apos;s payroll and the admin overheads ANPM pays for it, less what is capitalised to projects and recharged to MJNH and
+          ASRE; the net is ANPM&apos;s G&amp;A, shared over REHL, REHL-MJN (without the mall) and the PMC by {L.b} revenue (
+          {SPLIT_ENTITIES.map((e) => `${e.key} ${pctOf(shareOf(e.key))}`).join(' · ')}).
+        </p>
+        <div className="anh-grid-wrap">
+          <table className="anh-grid">
+            <thead>
+              <tr className="h1">
+                <th>Department</th>
+                <th className="anh-num">Payroll</th>
+                <th className="anh-num">Admin overheads (ANPM)</th>
+                <th className="anh-num">Total</th>
+                <th className="anh-num">Capitalised (PDD)</th>
+                <th className="anh-num">MJNH</th>
+                <th className="anh-num">ASRE</th>
+                <th className="anh-num">Net</th>
+                {SPLIT_ENTITIES.map((e) => (
+                  <th key={e.key} className="anh-num">
+                    {e.key === '502' ? 'REHL-MJN' : e.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {splits
+                .filter(({ s }) => s.base)
+                .map(({ p, s }) => (
+                  <tr key={p.dept} className="child">
+                    <td>
+                      <span className="anh-code mr-2">{p.dept}</span>
+                      {deptName(p.dept)}
+                    </td>
+                    <td className="anh-num calc">{fmt(s.total)}</td>
+                    <td className="anh-num calc">{fmt(s.oh)}</td>
+                    <td className="anh-num calc">{fmt(s.base)}</td>
+                    <td className="anh-num calc">{fmt(-s.cap)}</td>
+                    <td className="anh-num calc">{fmt(-s.mjnh)}</td>
+                    <td className="anh-num calc">{fmt(-s.asre)}</td>
+                    <td className="anh-num calc">{fmt(s.net)}</td>
+                    {SPLIT_ENTITIES.map((e) => (
+                      <td key={e.key} className="anh-num calc">
+                        {fmt(s.net * shareOf(e.key))}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              <tr className="total">
+                <td>Total</td>
+                <td className="anh-num">{fmt(pay.total)}</td>
+                <td className="anh-num">{fmt(pay.oh)}</td>
+                <td className="anh-num">{fmt(sum([pay.total, pay.oh]))}</td>
+                <td className="anh-num">{fmt(pay.cap === null ? null : -pay.cap)}</td>
+                <td className="anh-num">{fmt(pay.mjnh === null ? null : -pay.mjnh)}</td>
+                <td className="anh-num">{fmt(pay.asre === null ? null : -pay.asre)}</td>
+                <td className="anh-num">{fmt(pay.net)}</td>
+                {SPLIT_ENTITIES.map((e) => (
+                  <td key={e.key} className="anh-num">
+                    {fmt(pay.net === null ? null : pay.net * shareOf(e.key))}
+                  </td>
+                ))}
               </tr>
             </tbody>
           </table>
@@ -566,12 +642,12 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                   <td className="anh-num calc">{fmt(pay.total)}</td>
                 </tr>
                 <tr className="child">
-                  <td>Payroll capitalised to projects (PDD)</td>
+                  <td>Capitalised to projects (PDD)</td>
                   <td>ANPM</td>
                   <td className="anh-num calc">{fmt(pay.cap === null ? null : -pay.cap)}</td>
                 </tr>
                 <tr className="child">
-                  <td>Payroll recharged to MJNH / ASRE</td>
+                  <td>Recharged to MJNH / ASRE</td>
                   <td>ANPM</td>
                   <td className="anh-num calc">{fmt(pay.mjnh === null && pay.asre === null ? null : -((pay.mjnh ?? 0) + (pay.asre ?? 0)))}</td>
                 </tr>

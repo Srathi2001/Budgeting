@@ -12,7 +12,7 @@ const Changes = z
       z.object({
         kind: z.literal('payroll'),
         dept: z.string().regex(/^\d{3}$/),
-        field: z.enum(['headcount', 'ctc', 'newHeadcount', 'newCtc', 'capPct', 'mjnhPct', 'asrePct']),
+        field: z.enum(['headcount', 'ctc', 'newHeadcount', 'newCtc', 'capPct', 'mjnhPct', 'asrePct', 'seniorCtc']),
         value,
       }),
       z.object({ kind: z.literal('admin'), dept: z.string().regex(/^\d{3}$/), account: z.string().regex(/^\d{5}$/), entity: z.enum(['521', '501', '502']), value }),

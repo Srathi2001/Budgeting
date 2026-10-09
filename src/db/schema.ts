@@ -503,8 +503,8 @@ export const adminActuals = pgTable(
 
 /**
  * Payroll budget per department (totals from HR, no employee data): current staff and new hires, and
- * the 2026 allocation rules: % capitalised to projects (PDD), % recharged to MJNH and to ASRE.
- * Null % = the default rule for the department.
+ * the 2026 allocation rules: % capitalised to projects (PDD), % recharged to MJNH and to ASRE, and the
+ * senior staff cost ASRE's share is taken on. Null % = the default rule for the department.
  */
 export const adminPayroll = pgTable(
   'admin_payroll',
@@ -518,6 +518,7 @@ export const adminPayroll = pgTable(
     capPct: decimal('cap_pct'),
     mjnhPct: decimal('mjnh_pct'),
     asrePct: decimal('asre_pct'),
+    seniorCtc: money('senior_ctc'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: integer('updated_by'),
   },

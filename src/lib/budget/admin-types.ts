@@ -35,16 +35,21 @@ export const DEPTS: Dept[] = [
 export const DEPT = new Map(DEPTS.map((d) => [d.code, d]));
 export const deptName = (code: string) => DEPT.get(code)?.name ?? `Cost centre ${code}`;
 
-/** 2026 rules (PayrollxCost): share of a department's payroll capitalised to projects, and recharged out of the group */
-export const DEFAULT_RULES: Record<string, { cap: number; mjnh: number; asre: number }> = {
-  '212': { cap: 1, mjnh: 0, asre: 0 },
-  '201': { cap: 0.1, mjnh: 0, asre: 0 },
-  '207': { cap: 0.05, mjnh: 0.21, asre: 0 },
-  '206': { cap: 0.1, mjnh: 0, asre: 0 },
-  '000': { cap: 0.05, mjnh: 0, asre: 0 },
-  '214': { cap: 0, mjnh: 0, asre: 0.05 },
+/**
+ * 2026 rules (PayrollxCost F:I and note B33). Capitalised to projects (PDD) and ASRE are shares of the
+ * department's payroll plus the admin overheads ANPM pays for it; MJNH (SMAH) of its payroll only. ASRE
+ * takes 5% of the senior staff of each department (PM 2026: 5% × 1,471,280.67), Senior Management in
+ * full (`asreWhole`). Exco (family members) was nil in 2026: their payroll stays in G&A.
+ */
+export const DEFAULT_RULES: Record<string, { cap: number; mjnh: number; asre: number; asreWhole?: boolean }> = {
+  '212': { cap: 1, mjnh: 0, asre: 0.05 },
+  '201': { cap: 0.1, mjnh: 0, asre: 0.05 },
+  '207': { cap: 0.05, mjnh: 0.21, asre: 0.05 },
+  '206': { cap: 0.1, mjnh: 0, asre: 0.05 },
+  '000': { cap: 0.05, mjnh: 0, asre: 0.05 },
+  '214': { cap: 0, mjnh: 0, asre: 0.05, asreWhole: true },
 };
-export const ruleOf = (dept: string) => DEFAULT_RULES[dept] ?? { cap: 0, mjnh: 0, asre: 0 };
+export const ruleOf = (dept: string) => DEFAULT_RULES[dept] ?? { cap: 0, mjnh: 0, asre: 0.05 };
 
 export type AdminGroup = 'Payroll' | 'Staff costs' | 'Office & admin' | 'Vehicles' | 'IT & communication' | 'Professional fees' | 'Insurance' | 'Depreciation' | 'Bank charges';
 
@@ -243,6 +248,8 @@ export interface PayrollRow extends Actual4 {
   capPct: number | null;
   mjnhPct: number | null;
   asrePct: number | null;
+  /** cost to company of the department's senior staff: ASRE's share is taken on it (null: none; Senior Management: the whole department) */
+  seniorCtc: number | null;
 }
 
 export interface AdminRow extends Actual4 {
@@ -269,21 +276,37 @@ export interface AdminData {
   fees: FeeRow[];
   /** the budget the fee defaults come from (e.g. 2026B), if any */
   feesPrior: string | null;
+  /** budget rent by company, the base ANPM's G&A is shared on (REHL-MJN without the mall) */
+  revenue: Record<SplitEntity, number>;
   /** back-up schedule items (vehicles, telephones, training, events, IT, capex, other) */
   items: AdminItem[];
 }
 
+export type PayrollField = 'headcount' | 'ctc' | 'newHeadcount' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct' | 'seniorCtc';
 export type AdminChange =
-  | { kind: 'payroll'; dept: string; field: 'headcount' | 'ctc' | 'newHeadcount' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct'; value: number | null }
+  | { kind: 'payroll'; dept: string; field: PayrollField; value: number | null }
   | { kind: 'admin'; dept: string; account: string; entity: string; value: number | null }
   | { kind: 'fee'; fee: FeeKind; entity: FeeEntity; field: 'rate' | 'base'; value: number | null };
 
-/** total payroll budget of a department and how it splits (2026 rules) */
-export function payrollSplit(r: Pick<PayrollRow, 'dept' | 'ctc' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct'>) {
+/**
+ * A department's payroll budget and how it splits under the 2026 rules (PayrollxCost): `oh` is the admin
+ * overheads ANPM pays for the department. Capitalised (PDD) and ASRE come off payroll + overheads, MJNH
+ * off payroll; `net` is what stays in ANPM's G&A of the two together.
+ */
+export function payrollSplit(r: Pick<PayrollRow, 'dept' | 'ctc' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct' | 'seniorCtc'>, oh = 0) {
   const total = (r.ctc ?? 0) + (r.newCtc ?? 0);
   const rule = ruleOf(r.dept);
-  const cap = total * (r.capPct ?? rule.cap);
+  const base = total + oh;
+  const cap = base * (r.capPct ?? rule.cap);
   const mjnh = total * (r.mjnhPct ?? rule.mjnh);
-  const asre = total * (r.asrePct ?? rule.asre);
-  return { total, cap, mjnh, asre, net: total - cap - mjnh - asre };
+  const asreBase = r.seniorCtc ?? (rule.asreWhole ? base : 0);
+  const asre = asreBase * (r.asrePct ?? rule.asre);
+  return { total, oh, base, cap, mjnh, asre, asreBase, net: base - cap - mjnh - asre };
+}
+
+/** the admin overheads ANPM pays, by department (the schedules' amount where there is one) */
+export function anpmOverheads(rows: Pick<AdminRow, 'dept' | 'b' | 'items'>[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of rows) out.set(r.dept, (out.get(r.dept) ?? 0) + (r.items['521'] ?? r.b['521'] ?? 0));
+  return out;
 }

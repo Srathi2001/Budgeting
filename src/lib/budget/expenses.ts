@@ -34,8 +34,8 @@ export const EXPENSE_LINES: ExpenseLine[] = [
   { key: 'repairs', label: 'Major repairs & refurbishment', short: 'Major repairs', section: 'belowGp' },
   // general & administration: entity level (ANPM's payroll and the companies' admin overheads), not by building
   { key: 'payroll', label: 'Payroll & staff costs', short: 'Payroll', section: 'ga' },
-  { key: 'payrollCap', label: 'Payroll capitalised to projects', short: 'Capitalised', section: 'ga' },
-  { key: 'payrollRecharge', label: 'Payroll recharged to MJNH / ASRE', short: 'Recharged', section: 'ga' },
+  { key: 'payrollCap', label: 'Capitalised to projects (PDD)', short: 'Capitalised', section: 'ga' },
+  { key: 'payrollRecharge', label: 'Recharged to MJNH / ASRE', short: 'Recharged', section: 'ga' },
   { key: 'adminOh', label: 'Admin overheads', short: 'Admin OH', section: 'ga' },
   { key: 'ama', label: 'AMA fee to MJNH', short: 'AMA fee', section: 'ga' },
   { key: 'capexItems', label: 'Capex items', short: 'Capex items', section: 'cashOnly' },

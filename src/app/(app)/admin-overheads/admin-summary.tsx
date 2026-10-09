@@ -8,7 +8,7 @@ import { ChartCard, Columns, Legend, StatTile, compact } from '@/components/char
 import { Card, CheckList, SummaryHead, SummaryTable, change, sum } from '@/components/summary-kit';
 import { MONTHS, pct, pctSigned } from '@/lib/format';
 import { MEASURE } from '@/lib/segments';
-import { ADMIN_ACCOUNT, ADMIN_GROUPS, DEPTS, SPLIT_ENTITIES, FEES, FEE_ENTITIES, PAYERS, deptName, feeBase, feeRate, payrollSplit, type AdminRow } from '@/lib/budget/admin-types';
+import { ADMIN_ACCOUNT, ADMIN_GROUPS, DEPTS, SPLIT_ENTITIES, FEES, FEE_ENTITIES, PAYERS, deptName, feeBase, feeRate, anpmOverheads, payrollSplit, type AdminRow } from '@/lib/budget/admin-types';
 import { ITEM_KINDS, itemTotal } from '@/lib/budget/admin-items';
 import type { AdminSummary as Data } from '@/lib/budget/admin-summary';
 
@@ -27,18 +27,19 @@ export function AdminSummary({ data: s }: { data: Data }) {
   const own = DEPTS.filter((x) => !x.elsewhere);
   const ohRows = d.admin.filter((r) => !DEPTS.find((x) => x.code === r.dept)?.elsewhere);
 
-  // payroll and its 2026 rules
-  const splits = d.payroll.map((p) => ({ p, s: payrollSplit(p), entered: p.ctc !== null || p.newCtc !== null }));
-  const pay = { b: sum(splits.map((x) => x.s.total)), f: sum(d.payroll.map((p) => p.f)), cap: sum(splits.map((x) => x.s.cap)), rech: sum(splits.map((x) => x.s.mjnh + x.s.asre)), net: sum(splits.map((x) => x.s.net)) };
+  // payroll and its 2026 rules: capitalised and ASRE on payroll + what ANPM pays for the department
+  const anpm = anpmOverheads(ohRows);
+  const splits = d.payroll.map((p) => ({ p, s: payrollSplit(p, anpm.get(p.dept) ?? 0), entered: p.ctc !== null || p.newCtc !== null }));
+  const pay = { b: sum(splits.map((x) => x.s.total)), f: sum(d.payroll.map((p) => p.f)), cap: sum(splits.map((x) => x.s.cap)), rech: sum(splits.map((x) => x.s.mjnh + x.s.asre)) };
   const hc = sum(d.payroll.map((p) => (p.headcount ?? 0) + (p.newHeadcount ?? 0)));
   const oh = { b: sum(ohRows.map(rowB)), f: sum(ohRows.map((r) => r.f)), anpm: sum(ohRows.map((r) => cell(r, '521'))) };
   const ama = sum(d.fees.filter((r) => r.fee === 'AMA').map((r) => r.amount));
   const pma = sum(d.fees.filter((r) => r.fee === 'PMA').map((r) => r.amount));
-  const ga = pay.net + oh.b + ama;
+  const ga = pay.b + oh.b - pay.cap - pay.rech + ama;
   // ANPM's G&A shared by revenue (2026: PayrollxCost J25 → K25:M25)
-  const net = pay.net + oh.anpm;
-  const revTotal = sum(SPLIT_ENTITIES.map((e) => s.revenue[e.key]));
-  const share = (k: (typeof SPLIT_ENTITIES)[number]['key']) => (revTotal ? s.revenue[k] / revTotal : 0);
+  const net = pay.b + oh.anpm - pay.cap - pay.rech;
+  const revTotal = sum(SPLIT_ENTITIES.map((e) => d.revenue[e.key]));
+  const share = (k: (typeof SPLIT_ENTITIES)[number]['key']) => (revTotal ? d.revenue[k] / revTotal : 0);
   const pastNet = s.past?.net ?? null;
 
   const depts = own.map((x) => {
@@ -53,7 +54,7 @@ export function AdminSummary({ data: s }: { data: Data }) {
       hc: p ? (p.headcount ?? 0) + (p.newHeadcount ?? 0) : 0,
       payF: p?.f ?? null,
       payB,
-      out: sp?.entered ? sp.s.cap + sp.s.mjnh + sp.s.asre : null,
+      out: sp && sp.s.cap + sp.s.mjnh + sp.s.asre ? sp.s.cap + sp.s.mjnh + sp.s.asre : null,
       ohF: nullSum(rows.map((r) => r.f)),
       ohB,
       f: nullSum([p?.f ?? null, ...rows.map((r) => r.f)]),
@@ -74,8 +75,8 @@ export function AdminSummary({ data: s }: { data: Data }) {
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <StatTile label={`Payroll ${B}`} value={compact(pay.b)} sub={`${hc.toLocaleString('en-US')} staff · ${F}: ${compact(pay.f)}`} {...(pay.f && pay.b ? { delta: pctSigned((pay.b - pay.f) / pay.f), deltaDir: pay.b >= pay.f ? ('up' as const) : ('down' as const) } : {})} />
         <StatTile label={`Admin overheads ${B}`} value={compact(oh.b)} sub={`${F}: ${compact(oh.f)}`} {...(oh.f && oh.b ? { delta: pctSigned((oh.b - oh.f) / oh.f), deltaDir: oh.b >= oh.f ? ('up' as const) : ('down' as const) } : {})} />
-        <StatTile label={`G&A in the P&L ${B}`} value={compact(ga)} sub="Net of capitalised and recharged payroll, with the AMA fee" />
-        <StatTile label="ANPM G&A to share" value={compact(net)} sub={pastNet ? `${P}: ${compact(pastNet)}` : 'Net payroll + ANPM overheads'} />
+        <StatTile label={`G&A in the P&L ${B}`} value={compact(ga)} sub="Net of capitalised and recharged costs, with the AMA fee" />
+        <StatTile label="ANPM G&A to share" value={compact(net)} sub={pastNet ? `${P}: ${compact(pastNet)}` : 'Payroll + ANPM overheads, net'} />
         <StatTile label="PMA fee income" value={compact(pma)} sub={net ? `${pct(pma / net)} of ANPM's G&A` : 'From the landlords'} />
         <StatTile label="AMA fee to MJNH" value={compact(ama)} sub="REHL, REHL-MJN, the mall" />
       </section>
@@ -116,16 +117,16 @@ export function AdminSummary({ data: s }: { data: Data }) {
         </ChartCard>
       </div>
 
-      <Card title={`ANPM's G&A shared by revenue · ${B}`} sub={`As the ${P} budget: ANPM's payroll net of capitalised and recharged payroll, plus the overheads ANPM pays, shared over REHL, REHL-MJN (without the mall) and the PMC by budget revenue`}>
+      <Card title={`ANPM's G&A shared by revenue · ${B}`} sub={`As the ${P} budget: ANPM's payroll and the overheads it pays, less what is capitalised and recharged, shared over REHL, REHL-MJN (without the mall) and the PMC by budget revenue`}>
         <div className="grid gap-4 2xl:grid-cols-[2fr_3fr]">
           <SummaryTable
             className=""
             head={['ANPM G&A', B, ...(s.past ? [P] : [])]}
             rows={[
-              { cells: ['Payroll', pay.b, ...(s.past ? [null] : [])] },
-              { cells: ['Less capitalised to projects (PDD)', -pay.cap, ...(s.past ? [null] : [])] },
-              { cells: ['Less recharged to MJNH / ASRE', -pay.rech, ...(s.past ? [null] : [])] },
-              { cells: ['Admin overheads paid by ANPM', oh.anpm, ...(s.past ? [null] : [])] },
+              { cells: ['Payroll', pay.b, ...(s.past ? [16832729.88] : [])] },
+              { cells: ['Admin overheads paid by ANPM', oh.anpm, ...(s.past ? [2111481.59] : [])] },
+              { cells: ['Less capitalised to projects (PDD)', -pay.cap, ...(s.past ? [-3963867.03] : [])] },
+              { cells: ['Less recharged to MJNH / ASRE', -pay.rech, ...(s.past ? [-541284.95] : [])] },
               { kind: 'total', cells: ['To share', net, ...(s.past ? [s.past.net] : [])] },
             ]}
           />
@@ -134,7 +135,7 @@ export function AdminSummary({ data: s }: { data: Data }) {
             head={['Company', `Revenue ${B}`, 'Share', `Allocated ${B}`, ...(s.past ? [`Allocated ${P}`, 'Change'] : [])]}
             rows={[
               ...SPLIT_ENTITIES.map((e) => ({
-                cells: [e.name, s.revenue[e.key], pct(share(e.key)), net * share(e.key), ...(s.past ? [s.past.allocated[e.key], net ? change(net * share(e.key), s.past.allocated[e.key]) : '–'] : [])],
+                cells: [e.name, d.revenue[e.key], pct(share(e.key)), net * share(e.key), ...(s.past ? [s.past.allocated[e.key], net ? change(net * share(e.key), s.past.allocated[e.key]) : '–'] : [])],
               })),
               { kind: 'total' as const, cells: ['Total', revTotal, revTotal ? '100.00%' : '–', net, ...(s.past ? [sum(Object.values(s.past.allocated)), net ? change(net, sum(Object.values(s.past.allocated))) : '–'] : [])] },
             ]}
