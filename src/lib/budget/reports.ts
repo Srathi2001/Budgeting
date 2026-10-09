@@ -3,9 +3,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { categoryOf, type Category } from './category';
 import { OI_ACCOUNT, OI_ACCOUNTS } from './other-income-types';
-import { withDefaults } from '@/lib/engine/assumptions';
-import { landlordRent } from './admin';
-import { PMA_FEE } from './group';
+import { managementFees } from './admin';
+import { PMA_FEE, type EntityKey } from './group';
 
 export interface PropertyRollup {
   propertyId: number;
@@ -142,6 +141,8 @@ export interface OiMonthly {
   propertyCode: string | null;
   account: string;
   months: number[];
+  /** an intergroup fee: what each paying entity is charged, by month (the PMA fee) */
+  payers?: { entity: EntityKey; months: number[] }[];
 }
 
 /**
@@ -178,12 +179,16 @@ export async function otherIncomeMonthly(
     for (let i = 0; i < 12; i++) add(r.scope, r.buCode, r.propertyId, r.account, i, Number(r.amount) / 12);
   }
 
-  // ANPM's PMA fee: the PMA rate × the landlords' budget rent, by month
+  // ANPM's PMA fee: each landlord's rate × base (Admin overheads), by month as its rent
   if (generalBus('521')) {
     const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-    const rate = withDefaults(version?.assumptions).pmaRate;
-    const rent = await landlordRent(versionId);
-    rent.forEach((v, i) => v && add(PMA_FEE.scope, '521', null, PMA_FEE.account, i, v * rate));
+    const pma = version ? (await managementFees(version)).months.PMA : null;
+    if (pma) {
+      const payers = (Object.entries(pma) as [EntityKey, number[]][]).filter(([, m]) => m.some((v) => v));
+      payers.forEach(([, m]) => m.forEach((v, i) => v && add(PMA_FEE.scope, '521', null, PMA_FEE.account, i, v)));
+      const row = out.get(`${PMA_FEE.scope}|${PMA_FEE.account}`);
+      if (row) row.payers = payers.map(([entity, months]) => ({ entity, months }));
+    }
   }
 
   const mfAccount = OI_ACCOUNTS.find((a) => a.calc === 'MF')!.code;

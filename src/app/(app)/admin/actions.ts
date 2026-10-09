@@ -75,8 +75,6 @@ const AssumptionsSchema = z.object({
   vatRate: z.number().min(0).max(1),
   depositPct: z.number().min(0).max(1),
   mfPct: z.number().min(0).max(1),
-  pmaRate: z.number().min(0).max(1),
-  amaRate: z.number().min(0).max(1),
 }) satisfies z.ZodType<AdminAssumptions>;
 
 export async function saveAssumptions(versionId: number, input: AdminAssumptions): Promise<Result> {

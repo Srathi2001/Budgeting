@@ -1,7 +1,7 @@
 'use client';
 
 // Admin overheads (G&A), Finance only: payroll by department (totals from HR), admin overheads by
-// department × GL account and the company that pays them, the AMA fee base, and what reaches the P&L
+// department × GL account and the company that pays them, the PMA and AMA fees per landlord, and what reaches the P&L
 // under the 2026 rules. GL actuals by cost centre are reference only; nothing is pre-filled.
 
 import { Fragment, useMemo, useState, useTransition } from 'react';
@@ -10,16 +10,20 @@ import { fmt, MONTHS, pct as pctOf } from '@/lib/format';
 import {
   ADMIN_ACCOUNT,
   ADMIN_ACCOUNTS,
-  AMA_ENTITIES,
   DEPT,
   DEPTS,
+  FEES,
+  FEE_ENTITIES,
   PAYERS,
   deptName,
+  feeAmount,
   payrollSplit,
   ruleOf,
   type AdminChange,
   type AdminData,
   type AdminRow,
+  type FeeEntity,
+  type FeeKind,
   type PayrollRow,
 } from '@/lib/budget/admin-types';
 import { ITEM_KIND, SCHEDULE_ACCOUNT } from '@/lib/budget/admin-items';
@@ -44,7 +48,7 @@ const pct = (b: number | null, f: number | null) => (b === null || !f ? '' : pct
 function Cell({ value, kind, placeholder, label, disabled, onCommit }: { value: number | null; kind: Kind; placeholder?: string; label: string; disabled: boolean; onCommit: (v: number | null) => Promise<boolean> }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [state, setState] = useState<'' | 'dirty' | 'error'>('');
-  if (disabled) return <td className="anh-num locked">{show(value, kind)}</td>;
+  if (disabled) return <td className="anh-num locked">{value === null ? (placeholder ?? '') : show(value, kind)}</td>;
   return (
     <td className={`anh-num input${state === 'dirty' ? ' is-dirty' : state === 'error' ? ' is-error' : ''}`}>
       <input
@@ -122,7 +126,15 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
       return { ...d, admin: rows };
     });
 
-  const setAsset = (entity: string, value: number | null) => save({ kind: 'asset', entity, value }, (d) => ({ ...d, assets: d.assets.map((a) => (a.entity === entity ? { ...a, assetValue: value } : a)) }));
+  const setFee = (fee: FeeKind, entity: FeeEntity, field: 'rate' | 'base', value: number | null) =>
+    save({ kind: 'fee', fee, entity, field, value }, (d) => ({
+      ...d,
+      fees: d.fees.map((r) => {
+        if (r.fee !== fee || r.entity !== entity) return r;
+        const next = { ...r, [field]: value };
+        return { ...next, amount: feeAmount(next) };
+      }),
+    }));
 
   // ---- payroll ------------------------------------------------------------------------------------------
   const splits = data.payroll.map((p) => ({ p, s: payrollSplit(p) }));
@@ -159,9 +171,10 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
   const enterable = (dept: string) => !locked && !DEPT.get(dept)?.elsewhere;
 
   // ---- fees ------------------------------------------------------------------------------------------------
-  const pma = data.pmaBase * data.pmaRate;
-  const ama = data.assets.map((a) => ({ ...a, fee: a.assetValue === null ? null : a.assetValue * data.amaRate }));
-  const amaTotal = sum(ama.map((a) => a.fee));
+  const feeTotal = (fee: FeeKind) => sum(data.fees.filter((r) => r.fee === fee).map((r) => r.amount));
+  const pma = feeTotal('PMA');
+  const amaTotal = feeTotal('AMA');
+  const P = data.feesPrior;
   const ohByPayer = PAYERS.map((p) => ({ ...p, amount: ohBudget(allRows, p.code) }));
   const ga = sum([pay.net, ...ohByPayer.map((p) => p.amount), amaTotal]);
 
@@ -457,47 +470,78 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
       </section>
 
       {/* ---- fees and what reaches the P&L ---- */}
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid gap-6 xl:grid-cols-[3fr_2fr]">
         <section className="space-y-2">
           <h2 className="text-[15px] font-bold">Management fees</h2>
           <p className="text-xs text-slate-500">
-            Rates in{' '}
-            <Link href="/admin?tab=assumptions" className="underline">
-              Admin → Assumptions
-            </Link>
-            . PMA: ANPM&apos;s income from the landlords, eliminated in the group. AMA: paid to MJNH, outside the group.
+            PMA: ANPM&apos;s income from the landlords, eliminated in the group. AMA: paid to MJNH, outside the group. An empty cell takes the default:
+            {P ? ` the ${P} rate;` : ' the standard rate;'} PMA base: the {L.b} rent from the Lease Budget; AMA base: {P ? `the ${P} asset value` : 'none'}.
           </p>
           <div className="anh-grid-wrap">
             <table className="anh-grid">
               <thead>
+                <tr className="h2">
+                  <th colSpan={2} />
+                  {P && <th colSpan={3}>{P}</th>}
+                  <th colSpan={3}>{L.b}</th>
+                </tr>
                 <tr className="h1">
                   <th>Fee</th>
+                  <th>Landlord</th>
+                  {P && (
+                    <>
+                      <th className="anh-num">Base</th>
+                      <th className="anh-num">Rate</th>
+                      <th className="anh-num">Fee</th>
+                    </>
+                  )}
                   <th className="anh-num">Base</th>
                   <th className="anh-num">Rate</th>
-                  <th className="anh-num">{L.b}</th>
+                  <th className="anh-num">Fee</th>
                 </tr>
               </thead>
               <tbody>
-                <tr className="child">
-                  <td>PMA fee to ANPM · landlords&apos; rent (REHL, REHL-MJN incl. the mall)</td>
-                  <td className="anh-num calc">{fmt(data.pmaBase)}</td>
-                  <td className="anh-num calc">{show(data.pmaRate, 'pct')}</td>
-                  <td className="anh-num calc">{fmt(pma)}</td>
-                </tr>
-                {ama.map((a) => (
-                  <tr key={a.entity} className="child">
-                    <td>AMA fee to MJNH · asset value of {AMA_ENTITIES.find((e) => e.key === a.entity)?.name}</td>
-                    <Cell value={a.assetValue} kind="amount" label={`Asset value ${a.entity}`} disabled={locked} onCommit={(v) => setAsset(a.entity, v)} />
-                    <td className="anh-num calc">{show(data.amaRate, 'pct')}</td>
-                    <td className="anh-num calc">{fmt(a.fee)}</td>
-                  </tr>
-                ))}
-                <tr className="subtotal">
-                  <td>Total AMA fee</td>
-                  <td className="anh-num">{fmt(sum(data.assets.map((a) => a.assetValue)))}</td>
-                  <td />
-                  <td className="anh-num">{fmt(amaTotal)}</td>
-                </tr>
+                {FEES.map((f) => {
+                  const rows = data.fees.filter((r) => r.fee === f.key);
+                  return (
+                    <Fragment key={f.key}>
+                      {rows.map((r) => {
+                        const who = FEE_ENTITIES.find((e) => e.key === r.entity)!.name;
+                        return (
+                          <tr key={r.entity} className="child">
+                            <td>
+                              {f.name} · {f.base.toLowerCase()}
+                            </td>
+                            <td>{who}</td>
+                            {P && (
+                              <>
+                                <td className="anh-num calc">{fmt(r.prior?.base ?? null)}</td>
+                                <td className="anh-num calc">{r.prior ? pctOf(r.prior.rate) : ''}</td>
+                                <td className="anh-num calc">{fmt(r.prior?.amount ?? null)}</td>
+                              </>
+                            )}
+                            <Cell value={r.base} kind="amount" placeholder={r.defaultBase === null ? undefined : fmt(r.defaultBase)} label={`${f.key} base ${who}`} disabled={locked} onCommit={(v) => setFee(f.key, r.entity, 'base', v)} />
+                            <Cell value={r.rate} kind="pct" placeholder={pctOf(r.defaultRate)} label={`${f.key} rate ${who}`} disabled={locked} onCommit={(v) => setFee(f.key, r.entity, 'rate', v)} />
+                            <td className="anh-num calc">{fmt(r.amount)}</td>
+                          </tr>
+                        );
+                      })}
+                      <tr className="subtotal">
+                        <td colSpan={2}>Total {f.name}</td>
+                        {P && (
+                          <>
+                            <td className="anh-num">{fmt(sum(rows.map((r) => r.prior?.base ?? null)))}</td>
+                            <td />
+                            <td className="anh-num">{fmt(sum(rows.map((r) => r.prior?.amount ?? null)))}</td>
+                          </>
+                        )}
+                        <td className="anh-num">{fmt(sum(rows.map((r) => r.base ?? r.defaultBase)))}</td>
+                        <td />
+                        <td className="anh-num">{fmt(feeTotal(f.key))}</td>
+                      </tr>
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

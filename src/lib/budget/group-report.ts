@@ -51,10 +51,16 @@ export function groupAtoms(rolls: PropertyRollup[], oi: OiMonthly[], costs: Prop
     atoms.push({ line: `oi:${o.account}`, entity, cls, months: o.months }, { line: 'cash:oi', entity, cls, months: o.months });
   }
 
-  // intergroup income: its payers carry the same amount as a cost, split by their group rent
+  // intergroup income: its payers carry the same amount as a cost, as charged to each (the PMA fee per
+  // landlord), or else split by their group rent
   for (const rule of INTERGROUP) {
     const income = oi.filter((o) => o.scope === rule.scope && o.account === rule.account);
     if (!income.length) continue;
+    if (income.every((o) => o.payers)) {
+      for (const p of income.flatMap((o) => o.payers!))
+        atoms.push({ line: `exp:${PMA_EXPENSE.key}`, entity: p.entity, cls: 'intergroup', months: p.months }, { line: `cash:exp:${PMA_EXPENSE.key}`, entity: p.entity, cls: 'intergroup', months: p.months });
+      continue;
+    }
     const months = Array.from({ length: 12 }, (_, i) => income.reduce((s, o) => s + o.months[i], 0));
     const rentBy = new Map<EntityKey, number>();
     for (const a of atoms)

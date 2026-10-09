@@ -169,12 +169,53 @@ export const PAYERS = [
   { code: '501', name: 'REHL' },
   { code: '502', name: 'REHL-MJN' },
 ] as const;
-/** landlord entities that pay the AMA fee */
-export const AMA_ENTITIES = [
+/** landlord entities that pay the PMA and AMA fees */
+export const FEE_ENTITIES = [
   { key: '501', name: 'REHL' },
   { key: '502', name: 'REHL-MJN' },
   { key: 'MALL', name: 'Mall' },
 ] as const;
+export type FeeEntity = (typeof FEE_ENTITIES)[number]['key'];
+
+/** the management fees: PMA to ANPM on the landlord's rent, AMA to MJNH on the asset value */
+export const FEES = [
+  { key: 'PMA', name: 'PMA fee to ANPM', base: 'Rent' },
+  { key: 'AMA', name: 'AMA fee to MJNH', base: 'Asset value' },
+] as const;
+export type FeeKind = (typeof FEES)[number]['key'];
+
+/**
+ * Fees of past budgets kept outside the tool, by year: the 2026 final budget (H.E. MJN_Budget 2026.xlsm,
+ * PnLxREHLxANPM row 31 "General Admin Cost (PMA@6%)" and row 33 "AMA … 0.5% on properties valuation").
+ * The base is the fee ÷ the rate.
+ */
+export const PAST_FEES: Record<number, Record<FeeKind, { rate: number; fee: Record<FeeEntity, number> }>> = {
+  2026: {
+    PMA: { rate: 0.06, fee: { '501': 4046489.17, '502': 7975681.6, MALL: 3051000 } },
+    AMA: { rate: 0.005, fee: { '501': 5638982.08, '502': 7332500, MALL: 3520000 } },
+  },
+};
+
+export interface FeeRow {
+  fee: FeeKind;
+  entity: FeeEntity;
+  /** last budget's rate, base and fee (the defaults), if known */
+  prior: { rate: number; base: number | null; amount: number | null } | null;
+  /** as entered (null = the default) */
+  rate: number | null;
+  base: number | null;
+  /** the defaults: last budget's rate; PMA: this budget's rent, AMA: last budget's asset value */
+  defaultRate: number;
+  defaultBase: number | null;
+  /** the fee: the rate × the base applied */
+  amount: number | null;
+}
+export const feeRate = (r: Pick<FeeRow, 'rate' | 'defaultRate'>) => r.rate ?? r.defaultRate;
+export const feeBase = (r: Pick<FeeRow, 'base' | 'defaultBase'>) => r.base ?? r.defaultBase;
+export const feeAmount = (r: Pick<FeeRow, 'rate' | 'defaultRate' | 'base' | 'defaultBase'>) => {
+  const b = feeBase(r);
+  return b === null ? null : Math.round(b * feeRate(r) * 100) / 100;
+};
 
 /** actuals of Y-3, Y-2, Y-1 to date, and the Y-1 run-rate */
 export interface Actual4 {
@@ -216,11 +257,10 @@ export interface AdminData {
   elsewhere: { dept: string; budget: number | null }[];
   /** salary allocated to buildings (63112), actuals */
   allocation: Actual4;
-  assets: { entity: string; assetValue: number | null }[];
-  pmaRate: number;
-  amaRate: number;
-  /** PMA fee: the rate × the landlords' budget rent */
-  pmaBase: number;
+  /** PMA and AMA fees per landlord entity */
+  fees: FeeRow[];
+  /** the budget the fee defaults come from (e.g. 2026B), if any */
+  feesPrior: string | null;
   /** back-up schedule items (vehicles, telephones, training, events, IT, capex, other) */
   items: AdminItem[];
 }
@@ -228,7 +268,7 @@ export interface AdminData {
 export type AdminChange =
   | { kind: 'payroll'; dept: string; field: 'headcount' | 'ctc' | 'newHeadcount' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct'; value: number | null }
   | { kind: 'admin'; dept: string; account: string; entity: string; value: number | null }
-  | { kind: 'asset'; entity: string; value: number | null };
+  | { kind: 'fee'; fee: FeeKind; entity: FeeEntity; field: 'rate' | 'base'; value: number | null };
 
 /** total payroll budget of a department and how it splits (2026 rules) */
 export function payrollSplit(r: Pick<PayrollRow, 'dept' | 'ctc' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct'>) {

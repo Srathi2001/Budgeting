@@ -47,6 +47,14 @@ describe('group atoms', () => {
     expect(income).toBeCloseTo(480);
     expect(mirrored).toBeCloseTo(480);
   });
+  it('mirrors the PMA fee as charged to each landlord when the fee is set per landlord', () => {
+    const fee = { ...oi('G:521', '521', '52801', 30), payers: [{ entity: '501' as const, months: m12(10) }, { entity: 'MALL' as const, months: m12(20) }] };
+    const atoms = groupAtoms([roll('501', '30B101', 100), roll('502', '10B131N', 100)], [fee]);
+    const cost = (e: string) => sum12(sumAtoms(atoms, (a) => a.line === 'exp:pma' && a.entity === e));
+    expect(cost('501')).toBeCloseTo(120);
+    expect(cost('MALL')).toBeCloseTo(240);
+    expect(cost('502')).toBe(0);
+  });
 });
 
 const sum12 = (m: number[]) => m.reduce((s, v) => s + v, 0);

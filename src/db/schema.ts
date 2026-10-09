@@ -562,17 +562,23 @@ export const adminItems = pgTable(
   (t) => [index('admin_items_version_idx').on(t.versionId, t.kind)],
 );
 
-/** Asset value per landlord entity (501, 502, MALL), for the AMA fee to MJNH. */
-export const adminAssets = pgTable(
-  'admin_assets',
+/**
+ * Management fees per landlord entity (501, 502, MALL): the PMA fee to ANPM (rate × rent) and the AMA fee
+ * to MJNH (rate × asset value). Null = the default (last budget's rate; PMA: this budget's rent, AMA: last
+ * budget's asset value).
+ */
+export const adminFees = pgTable(
+  'admin_fees',
   {
     versionId: integer('version_id').notNull().references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    fee: text('fee').notNull(),
     entity: text('entity').notNull(),
-    assetValue: money('asset_value').notNull(),
+    rate: numeric('rate', { precision: 16, scale: 10, mode: 'number' }),
+    base: money('base'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: integer('updated_by'),
   },
-  (t) => [primaryKey({ columns: [t.versionId, t.entity] })],
+  (t) => [primaryKey({ columns: [t.versionId, t.fee, t.entity] })],
 );
 
 export const auditLog = pgTable(

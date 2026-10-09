@@ -11,7 +11,7 @@ import { BOH_ACCOUNT, BOH_LINE_LABEL, CONTRACT_KIND, CONTRACT_TERMS, paidInOneMo
 import { contractAmount } from '@/lib/budget/boh-calc';
 import { loadContracts, saveContractsAs } from '@/lib/budget/boh-schedules';
 import { loadAdminOverheads, saveAdminOverheads } from '@/lib/budget/admin';
-import { ADMIN_ACCOUNTS, ADMIN_ACCOUNT, AMA_ENTITIES, DEPTS, PAYERS, deptName, isPayrollAccount, type AdminChange } from '@/lib/budget/admin-types';
+import { ADMIN_ACCOUNTS, ADMIN_ACCOUNT, DEPTS, FEES, FEE_ENTITIES, PAYERS, deptName, isPayrollAccount, type AdminChange, type FeeEntity, type FeeKind } from '@/lib/budget/admin-types';
 import { ITEM_KIND, SCHEDULE_ACCOUNT } from '@/lib/budget/admin-items';
 import { loadFmPage } from '@/lib/budget/fm-page';
 import { saveFmStaffAs } from '@/lib/budget/fm-save';
@@ -195,7 +195,7 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
       instructions: [
         '4. Payroll: headcount and cost to company per department (existing and new staff). The three shares are the 2026 rules; blank = the default rule.',
         '5. Admin costs: the budget per department and account by paying company. To add an account for a department, use a blank row at the bottom of the sheet. Accounts with their own schedule in the tool (vehicles, telephones, training, events) are entered there.',
-        '6. Assets: the landlords’ asset values the AMA fee is calculated on.',
+        '6. Management fees: the PMA fee (to ANPM, on rent) and the AMA fee (to MJNH, on the asset value) per landlord. Blank = the default shown.',
       ],
       sheets: [
         {
@@ -249,12 +249,37 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
           },
         },
         {
-          name: 'Assets (AMA)',
+          name: 'Management fees',
           columns: [
-            { key: 'entity', header: 'Landlord', width: 20, kind: 'text', label: true },
-            { key: 'value', header: 'Asset value', width: 16, kind: 'money', input: true, help: 'The AMA fee is the rate × this value.' },
+            { key: 'fee', header: 'Fee', width: 22, kind: 'text', label: true },
+            { key: 'entity', header: 'Landlord', width: 14, kind: 'text', label: true },
+            ...(d.feesPrior
+              ? [
+                  { key: 'pbase', header: `${d.feesPrior} base`, width: 16, kind: 'money' as const },
+                  { key: 'prate', header: `${d.feesPrior} rate`, width: 10, kind: 'pct' as const },
+                  { key: 'pfee', header: `${d.feesPrior} fee`, width: 14, kind: 'money' as const },
+                ]
+              : []),
+            { key: 'dbase', header: 'Default base', width: 16, kind: 'money' },
+            { key: 'drate', header: 'Default rate', width: 10, kind: 'pct' },
+            { key: 'base', header: `${Y}B base`, width: 16, kind: 'money', input: true, help: 'PMA: rent; AMA: asset value. Blank = the default.' },
+            { key: 'rate', header: `${Y}B rate`, width: 10, kind: 'pct', input: true, help: 'Blank = the default.' },
           ],
-          rows: d.assets.map((a) => ({ key: `ast|${a.entity}`, values: { entity: AMA_ENTITIES.find((e) => e.key === a.entity)?.name ?? a.entity, value: a.assetValue }, open: ['value'] })),
+          rows: d.fees.map((r) => ({
+            key: `fee|${r.fee}|${r.entity}`,
+            values: {
+              fee: FEES.find((x) => x.key === r.fee)!.name,
+              entity: FEE_ENTITIES.find((e) => e.key === r.entity)!.name,
+              pbase: r.prior?.base ?? null,
+              prate: r.prior?.rate ?? null,
+              pfee: r.prior?.amount ?? null,
+              dbase: r.defaultBase,
+              drate: r.defaultRate,
+              base: r.base,
+              rate: r.rate,
+            },
+            open: ['base', 'rate'],
+          })),
         },
       ],
     };
@@ -400,7 +425,7 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
       const [k, a, b] = c.key.split('|');
       if (k === 'pay') return { kind: 'payroll', dept: a, field: c.column as Extract<AdminChange, { kind: 'payroll' }>['field'], value: num(c.to) };
       if (k === 'adm') return { kind: 'admin', dept: a, account: b, entity: c.column.slice(1), value: num(c.to) };
-      return { kind: 'asset', entity: a, value: num(c.to) };
+      return { kind: 'fee', fee: a as FeeKind, entity: b as FeeEntity, field: c.column as 'rate' | 'base', value: num(c.to) };
     });
     return chunks(list, (p) => saveAdminOverheads(user, version.id, p));
   }

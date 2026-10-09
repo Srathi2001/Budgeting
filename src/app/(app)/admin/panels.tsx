@@ -153,8 +153,6 @@ export function AssumptionsPanel({
             vatRate: n(f.get('vatRate')) / 100,
             depositPct: n(f.get('depositPct')) / 100,
             mfPct: n(f.get('mfPct')) / 100,
-            pmaRate: n(f.get('pmaRate')) / 100,
-            amaRate: n(f.get('amaRate')) / 100,
           }),
         )
       }
@@ -169,8 +167,6 @@ export function AssumptionsPanel({
       {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. Included in cash inflow', 100, '%')}
       {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
       {field('mfPct', 'Maintenance service fee', a.mfPct, 'Of the renewal / new-tenant rent, residential leases with MF: other income, in the month the contract starts', 100, '%')}
-      {field('pmaRate', 'PMA fee (ANPM)', a.pmaRate, "ANPM's property management fee: of the landlords' rent (REHL, REHL-MJN incl. the mall); eliminated in the group", 100, '%')}
-      {field('amaRate', 'AMA fee (MJNH)', a.amaRate, 'Asset management fee to MJNH: of the asset value entered per entity on Admin Overheads', 100, '%')}
 
       <div className="pt-3">
         <div className="text-sm font-medium text-slate-700">RERA increase bands</div>

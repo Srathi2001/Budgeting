@@ -16,7 +16,7 @@ const Changes = z
         value,
       }),
       z.object({ kind: z.literal('admin'), dept: z.string().regex(/^\d{3}$/), account: z.string().regex(/^\d{5}$/), entity: z.enum(['521', '501', '502']), value }),
-      z.object({ kind: z.literal('asset'), entity: z.enum(['501', '502', 'MALL']), value }),
+      z.object({ kind: z.literal('fee'), fee: z.enum(['PMA', 'AMA']), entity: z.enum(['501', '502', 'MALL']), field: z.enum(['rate', 'base']), value }),
     ]),
   )
   .max(500);

@@ -2,48 +2,109 @@
 // actuals by cost centre as reference, and the 2026 rules (PDD capitalised, recharges to MJNH / ASRE,
 // PMA and AMA fees). Finance only: it holds payroll. Phased evenly over 12 months, as in 2026.
 import 'server-only';
-import { and, eq, gte, inArray, like, lte, max, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, like, lte, max, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { isFinance, type Actor } from '@/lib/auth/permissions';
 import { withDefaults } from '@/lib/engine/assumptions';
+import { bohAccountBudget } from './boh';
 import {
   ADMIN_ACCOUNT,
-  AMA_ENTITIES,
   DEPTS,
+  FEES,
+  FEE_ENTITIES,
+  PAST_FEES,
   PAYERS,
   SALARY_ALLOCATION,
+  feeAmount,
+  feeBase,
+  feeRate,
   isPayrollAccount,
   payrollSplit,
   type Actual4,
   type AdminChange,
   type AdminData,
   type AdminRow,
+  type FeeEntity,
+  type FeeKind,
+  type FeeRow,
   type PayrollRow,
 } from './admin-types';
-import type { EntityKey } from './group';
+import { isMall, type EntityKey } from './group';
 import { CAPEX, ITEM_KIND, SCHEDULE_ACCOUNT, cleanItem, isItemKind, type AdminItem, type ItemData, type ItemKind, type Posting } from './admin-items';
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const flat = (amount: number) => z12().map(() => amount / 12);
+/** watchmen's salaries in Building Overheads: the security department's payroll */
+const WATCHMEN_ACCOUNT = '62603';
 
-/** the landlords' (REHL, REHL-MJN incl. the mall) budget rent of a version, by month: the PMA fee base */
-export async function landlordRent(versionId: number): Promise<number[]> {
+/** the landlords' (REHL, REHL-MJN, the mall) budget rent of a version, by entity and month: the PMA fee base */
+export async function landlordRent(versionId: number): Promise<Record<FeeEntity, number[]>> {
   const rows = await db
-    .select({ month: schema.lineMonthly.month, revenue: sql<number>`sum(${schema.lineMonthly.revenue})::float` })
+    .select({ code: schema.properties.code, bu: schema.properties.buCode, month: schema.lineMonthly.month, revenue: sql<number>`sum(${schema.lineMonthly.revenue})::float` })
     .from(schema.lineMonthly)
     .innerJoin(schema.properties, eq(schema.properties.id, schema.lineMonthly.propertyId))
     .where(and(eq(schema.lineMonthly.versionId, versionId), inArray(schema.properties.buCode, ['501', '502'])))
-    .groupBy(schema.lineMonthly.month);
-  const out = z12();
-  for (const r of rows) out[r.month - 1] = r.revenue;
+    .groupBy(schema.properties.code, schema.properties.buCode, schema.lineMonthly.month);
+  const out: Record<FeeEntity, number[]> = { '501': z12(), '502': z12(), MALL: z12() };
+  for (const r of rows) out[isMall(r.code) ? 'MALL' : (r.bu as '501' | '502')][r.month - 1] += r.revenue;
   return out;
+}
+
+type PriorFee = { fee: FeeKind; entity: FeeEntity; rate: number; base: number | null; amount: number | null };
+
+/** last budget's fees: a past budget kept outside the tool, or the fees of last year's version */
+async function priorFees(version: schema.BudgetVersion): Promise<{ label: string; rows: PriorFee[] } | null> {
+  const Y = version.year - 1;
+  const past = PAST_FEES[Y];
+  if (past)
+    return {
+      label: `${Y}B`,
+      rows: FEES.flatMap((f) => FEE_ENTITIES.map((e) => ({ fee: f.key, entity: e.key, rate: past[f.key].rate, base: r2(past[f.key].fee[e.key] / past[f.key].rate), amount: past[f.key].fee[e.key] }))),
+    };
+  // the budget of last year (a working version before an imported one)
+  const [pv] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.year, Y)).orderBy(schema.budgetVersions.isBaseline, desc(schema.budgetVersions.id)).limit(1);
+  if (!pv) return null;
+  const { rows } = await managementFees(pv);
+  return { label: `${Y}B`, rows: rows.map((r) => ({ fee: r.fee, entity: r.entity, rate: feeRate(r), base: feeBase(r), amount: r.amount })) };
+}
+
+/**
+ * The PMA and AMA fees of a version per landlord entity, and by month: the PMA fee follows the entity's
+ * rent month by month, the AMA fee is even. Unset rates and bases take the defaults (see FeeRow).
+ */
+export async function managementFees(version: schema.BudgetVersion): Promise<{ rows: FeeRow[]; prior: string | null; months: Record<FeeKind, Record<FeeEntity, number[]>> }> {
+  const a = withDefaults(version.assumptions);
+  const [stored, rent, prior] = await Promise.all([db.select().from(schema.adminFees).where(eq(schema.adminFees.versionId, version.id)), landlordRent(version.id), priorFees(version)]);
+  const fallback: Record<FeeKind, number> = { PMA: a.pmaRate, AMA: a.amaRate };
+  const rows: FeeRow[] = [];
+  const months = { PMA: {}, AMA: {} } as Record<FeeKind, Record<FeeEntity, number[]>>;
+  for (const f of FEES)
+    for (const e of FEE_ENTITIES) {
+      const s = stored.find((x) => x.fee === f.key && x.entity === e.key);
+      const p = prior?.rows.find((x) => x.fee === f.key && x.entity === e.key) ?? null;
+      const rentTotal = rent[e.key].reduce((t, v) => t + v, 0);
+      const row: FeeRow = {
+        fee: f.key,
+        entity: e.key,
+        prior: p && { rate: p.rate, base: p.base, amount: p.amount },
+        rate: s?.rate ?? null,
+        base: s?.base ?? null,
+        defaultRate: p?.rate ?? fallback[f.key],
+        defaultBase: f.key === 'PMA' ? r2(rentTotal) : version.isBaseline ? null : (p?.base ?? null),
+        amount: null,
+      };
+      row.amount = feeAmount(row);
+      rows.push(row);
+      const fee = row.amount ?? 0;
+      months[f.key][e.key] = f.key === 'PMA' && rentTotal > 0 ? rent[e.key].map((v) => (fee * v) / rentTotal) : flat(fee);
+    }
+  return { rows, prior: prior?.label ?? null, months };
 }
 
 export async function loadAdminOverheads(version: schema.BudgetVersion): Promise<AdminData> {
   const Y = version.year;
-  const a = withDefaults(version.assumptions);
-  const [actuals, [top], payroll, budget, assets, rent, itemRows] = await Promise.all([
+  const [actuals, [top], payroll, budget, fees, itemRows] = await Promise.all([
     db
       .select()
       .from(schema.adminActuals)
@@ -51,8 +112,7 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
     db.select({ m: max(schema.adminActuals.month) }).from(schema.adminActuals).where(like(schema.adminActuals.month, `${Y - 1}-%`)),
     db.select().from(schema.adminPayroll).where(eq(schema.adminPayroll.versionId, version.id)),
     db.select().from(schema.adminBudget).where(eq(schema.adminBudget.versionId, version.id)),
-    db.select().from(schema.adminAssets).where(eq(schema.adminAssets.versionId, version.id)),
-    landlordRent(version.id),
+    managementFees(version),
     db.select().from(schema.adminItems).where(eq(schema.adminItems.versionId, version.id)).orderBy(schema.adminItems.id),
   ]);
   const items = itemRows.filter((r) => isItemKind(r.kind)).map((r) => ({ id: r.id, kind: r.kind as ItemKind, dept: r.dept, payer: r.payer, data: r.data as ItemData }));
@@ -129,10 +189,8 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
     .select({ total: sql<number | null>`sum(${schema.fmStaff.ctc} + ${schema.fmStaff.overtime})::float` })
     .from(schema.fmStaff)
     .where(eq(schema.fmStaff.versionId, version.id));
-  const [watch] = await db
-    .select({ total: sql<number | null>`sum(${schema.bohBudget.amount})::float` })
-    .from(schema.bohBudget)
-    .where(and(eq(schema.bohBudget.versionId, version.id), eq(schema.bohBudget.account, '62603')));
+  // watchmen: Building Overheads' security allocation (share × cost per watchman) or the amount entered
+  const watch = await bohAccountBudget(version, WATCHMEN_ACCOUNT);
 
   return {
     year: Y,
@@ -141,13 +199,11 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
     admin,
     elsewhere: [
       { dept: '209', budget: fmStaff?.total ?? null },
-      { dept: '211', budget: watch?.total ?? null },
+      { dept: '211', budget: watch },
     ],
     allocation: four('alloc'),
-    assets: AMA_ENTITIES.map((e) => ({ entity: e.key, assetValue: assets.find((x) => x.entity === e.key)?.assetValue ?? null })),
-    pmaRate: a.pmaRate,
-    amaRate: a.amaRate,
-    pmaBase: r2(rent.reduce((s, v) => s + v, 0)),
+    fees: fees.rows,
+    feesPrior: fees.prior,
     items,
   };
 }
@@ -247,17 +303,21 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
             set: { amount: v, updatedAt: new Date(), updatedBy: user.id },
           });
     } else {
-      if (!AMA_ENTITIES.some((e) => e.key === c.entity)) {
-        errors.push(`${c.entity}: not a landlord entity`);
+      if (!FEES.some((f) => f.key === c.fee) || !FEE_ENTITIES.some((e) => e.key === c.entity) || (c.field !== 'rate' && c.field !== 'base')) {
+        errors.push(`${c.fee} ${c.entity}: not a management fee input`);
         continue;
       }
-      const where = and(eq(schema.adminAssets.versionId, versionId), eq(schema.adminAssets.entity, c.entity));
-      if (v === null) await db.delete(schema.adminAssets).where(where);
-      else
-        await db
-          .insert(schema.adminAssets)
-          .values({ versionId, entity: c.entity, assetValue: v, updatedBy: user.id })
-          .onConflictDoUpdate({ target: [schema.adminAssets.versionId, schema.adminAssets.entity], set: { assetValue: v, updatedAt: new Date(), updatedBy: user.id } });
+      if (v !== null && (v < 0 || (c.field === 'rate' && v > 1))) {
+        errors.push(`${c.fee} ${c.entity}: ${c.field === 'rate' ? 'a rate 0–100%' : 'not a negative base'}`);
+        continue;
+      }
+      const where = and(eq(schema.adminFees.versionId, versionId), eq(schema.adminFees.fee, c.fee), eq(schema.adminFees.entity, c.entity));
+      await db
+        .insert(schema.adminFees)
+        .values({ versionId, fee: c.fee, entity: c.entity, [c.field]: v, updatedBy: user.id })
+        .onConflictDoUpdate({ target: [schema.adminFees.versionId, schema.adminFees.fee, schema.adminFees.entity], set: { [c.field]: v, updatedAt: new Date(), updatedBy: user.id } });
+      // both back to the defaults: nothing to keep
+      await db.delete(schema.adminFees).where(and(where, isNull(schema.adminFees.rate), isNull(schema.adminFees.base)));
     }
     await db.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId: JSON.stringify({ ...c, value: undefined }), action: 'update', changes: { to: v } });
     saved++;
@@ -277,11 +337,10 @@ export interface EntityCost {
 
 /** G&A of a version for the statements, by entity and month; `lines`: the G&A lines budgeted. */
 export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{ costs: EntityCost[]; lines: Set<string> }> {
-  const a = withDefaults(version.assumptions);
-  const [payroll, budget, assets, itemRows] = await Promise.all([
+  const [payroll, budget, fees, itemRows] = await Promise.all([
     db.select().from(schema.adminPayroll).where(eq(schema.adminPayroll.versionId, version.id)),
     db.select().from(schema.adminBudget).where(eq(schema.adminBudget.versionId, version.id)),
-    db.select().from(schema.adminAssets).where(eq(schema.adminAssets.versionId, version.id)),
+    managementFees(version),
     db.select().from(schema.adminItems).where(eq(schema.adminItems.versionId, version.id)),
   ]);
   const costs: EntityCost[] = [];
@@ -336,9 +395,10 @@ export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{
     costs.push({ entity: payer as EntityKey, line: 'gaCapex', months });
   }
   // AMA fee to MJNH: the rate × each landlord entity's asset value
-  for (const x of assets) {
-    lines.add('ama');
-    costs.push({ entity: x.entity as EntityKey, line: 'ama', months: flat(x.assetValue * a.amaRate) });
-  }
+  for (const r of fees.rows)
+    if (r.fee === 'AMA' && r.amount) {
+      lines.add('ama');
+      costs.push({ entity: r.entity, line: 'ama', months: fees.months.AMA[r.entity] });
+    }
   return { costs, lines };
 }

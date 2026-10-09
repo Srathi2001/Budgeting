@@ -175,6 +175,14 @@ function cellOf(ctx: BohContext, propertyId: number, account: string): BohCell {
   };
 }
 
+/** A version's budget of one account over all buildings, entered or calculated (null: none). */
+export async function bohAccountBudget(version: schema.BudgetVersion, account: string): Promise<number | null> {
+  const ids = (await db.select({ id: schema.properties.id }).from(schema.properties)).map((p) => p.id);
+  const ctx = await bohContext(version, ids);
+  const bs = ids.map((id) => cellOf(ctx, id, account).row.b).filter((b): b is number => b !== null);
+  return bs.length ? r2(bs.reduce((s, b) => s + b, 0)) : null;
+}
+
 export async function loadBuildingOverheads(version: schema.BudgetVersion, props: schema.Property[], editable: Set<number>) {
   const ids = props.map((p) => p.id);
   const bus = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));

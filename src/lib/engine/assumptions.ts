@@ -29,9 +29,12 @@ export interface Assumptions {
   depositPct: number;
   /** Maintenance service fee on residential leases with MF, % of the contract rent (other income). */
   mfPct: number;
-  /** ANPM's property management fee (PMA), % of the landlords' rent (REHL, REHL-MJN incl. the mall): 6% in the 2026 budget. */
+  /**
+   * ANPM's property management fee (PMA), % of each landlord's rent, and MJNH's asset management fee (AMA),
+   * % of its asset value: the rates when there is no last budget to default to. Set per landlord in Admin
+   * overheads (2026 budget: 6% and 0.5%).
+   */
   pmaRate: number;
-  /** MJNH's asset management fee (AMA), % of the asset value of each landlord entity: 0.5% in the 2026 budget. */
   amaRate: number;
   // Building overheads (set in its Assumptions tab)
   /** water & electricity: forecast and budget increase on the year before (2026 budget: 5%) */
@@ -47,8 +50,8 @@ export interface Assumptions {
 /** set in Building overheads' Assumptions tab, not in Admin */
 export const BOH_ASSUMPTION_KEYS = ['bohUtilitiesPct', 'insParPct', 'insPlPct', 'watchmanCost'] as const;
 export type BohAssumptionKey = (typeof BOH_ASSUMPTION_KEYS)[number];
-/** the assumptions set in Admin */
-export type AdminAssumptions = Omit<Assumptions, BohAssumptionKey>;
+/** the assumptions set in Admin (the fee rates are set per landlord in Admin overheads) */
+export type AdminAssumptions = Omit<Assumptions, BohAssumptionKey | 'pmaRate' | 'amaRate'>;
 
 export const DEFAULT_ASSUMPTIONS: Assumptions = {
   renewalTermDays: 365,
