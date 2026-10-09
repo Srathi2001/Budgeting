@@ -5,18 +5,22 @@ on:
     branches: [main, 'redesign/**']
   pull_request:
 
+# .npmrc sets a Windows PowerShell script shell for local use; npx runs commands through it, so on
+# Linux it must be overridden (an environment setting takes precedence over the project .npmrc)
+env:
+  npm_config_script_shell: bash
+
 jobs:
   checks:
     name: Type-check, lint, unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      # the Windows-only npm script shell in .npmrc is ignored on Linux by calling node directly
       - run: npm ci --ignore-scripts
       - run: npx next typegen
       - run: npx tsc --noEmit
@@ -44,8 +48,8 @@ jobs:
       DATABASE_URL: postgres://budget:budget@localhost:5432/budget
       AUTH_SECRET: ci-only-secret-at-least-32-characters-long
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
