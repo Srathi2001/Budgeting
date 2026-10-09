@@ -10,7 +10,8 @@ import { loadBuildingOverheads, saveBuildingOverheads } from '@/lib/budget/boh';
 import { BOH_ACCOUNT, BOH_LINE_LABEL, CONTRACT_KIND, CONTRACT_TERMS, paidInOneMonth, type BohChange, type ContractKind } from '@/lib/budget/boh-types';
 import { contractAmount } from '@/lib/budget/boh-calc';
 import { loadContracts, saveContractsAs } from '@/lib/budget/boh-schedules';
-import { loadAdminOverheads, saveAdminOverheads } from '@/lib/budget/admin';
+import { loadAdminOverheads, saveAdminItem, saveAdminOverheads } from '@/lib/budget/admin';
+import { itemSheets, itemsFromChanges, scheduleFormula } from './admin-item-sheets';
 import { ADMIN_ACCOUNTS, ADMIN_ACCOUNT, DEPTS, FEES, FEE_ENTITIES, PAYERS, deptName, isPayrollAccount, type AdminChange, type FeeEntity, type FeeKind } from '@/lib/budget/admin-types';
 import { ITEM_KIND, SCHEDULE_ACCOUNT } from '@/lib/budget/admin-items';
 import { loadFmPage } from '@/lib/budget/fm-page';
@@ -188,13 +189,15 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
     const PAY = PAYERS.map((p) => p.code);
     const DEPT_LIST = DEPTS.filter((x) => !x.elsewhere).map((x) => deptText(x.code));
     const ACCT_LIST = ADMIN_ACCOUNTS.filter((a) => typed(a.code)).map((a) => acctText(a.code));
+    const details = itemSheets(d.items, locked);
     return {
       title: 'Admin Overheads',
       scope: 'All cost centres',
       locked,
       instructions: [
         '4. Payroll: headcount and cost to company per department (existing and new staff). The three shares are the 2026 rules; blank = the default rule.',
-        '5. Admin costs: the budget per department and account by paying company. To add an account for a department, use a blank row at the bottom of the sheet. Accounts with their own schedule in the tool (vehicles, telephones, training, events) are entered there.',
+        '5. Admin costs: the budget per department and account by paying company. To add an account for a department, use a blank row at the bottom of the sheet. Accounts with a detail sheet (vehicles, telephones, training, staff welfare) are not typed here: their cells add up the detail sheet and change as you fill it.',
+        `7. Detail sheets (${details.map((x) => x.name).join(', ')}): one line per vehicle, number, training, event, IT request, capex item or other item, as the tabs in the tool. Change a line in place or add one on the blank lines at the bottom (department and who pays it first). Lines are deleted in the tool. IT equipment and office capex are paid, not expensed: cash flow only.`,
         '6. Management fees: the PMA fee (to ANPM, on rent) and the AMA fee (to MJNH, on the asset value) per landlord. Blank = the default shown.',
       ],
       sheets: [
@@ -234,11 +237,18 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
           ],
           rows: d.admin.map((r) => {
             const elsewhere = DEPTS.find((x) => x.code === r.dept)?.elsewhere;
-            const note = r.schedule ? `${ITEM_KIND.get(r.schedule)!.label} tab` : elsewhere ? 'Another module' : isPayrollAccount(r.account) ? 'Payroll' : null;
+            const note = r.schedule ? `${ITEM_KIND.get(r.schedule)!.label} sheet` : elsewhere ? 'Another module' : isPayrollAccount(r.account) ? 'Payroll' : null;
             return {
               key: `adm|${r.dept}|${r.account}`,
               values: { dept: deptText(r.dept), account: acctText(r.account), note, a2: r.a2, a1: r.a1, ytd: r.ytd, f: r.f, ...Object.fromEntries(PAY.map((p) => [`b${p}`, r.schedule ? (r.items[p] ?? null) : (r.b[p] ?? null)])) },
               open: note ? [] : PAY.map((p) => `b${p}`),
+              // the accounts with a detail sheet: its total, live in Excel
+              formulas: r.schedule
+                ? Object.fromEntries(PAY.flatMap((p) => {
+                    const fx = scheduleFormula(details, r.account, r.dept, p);
+                    return fx ? [[`b${p}`, fx]] : [];
+                  }))
+                : undefined,
             };
           }),
           newRows: 60,
@@ -281,6 +291,7 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
             open: ['base', 'rate'],
           })),
         },
+        ...details,
       ],
     };
   }
@@ -421,13 +432,22 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
     return chunks(list, (p) => saveBuildingOverheads(user, version.id, p));
   }
   if (kind === 'admin-overheads') {
-    const list: AdminChange[] = changes.map((c) => {
+    // detail sheet lines: saved one by one as items, as the tabs do
+    const out = { saved: 0, errors: [] as string[] };
+    const { items } = await loadAdminOverheads(version);
+    for (const { label, item } of itemsFromChanges(current.sheets, items, changes)) {
+      const r = await saveAdminItem(user, version.id, item);
+      if (r.error) out.errors.push(`${label}: ${r.error}`);
+      else out.saved++;
+    }
+    const list: AdminChange[] = changes.filter((c) => /^(pay|adm|fee)\|/.test(c.key)).map((c) => {
       const [k, a, b] = c.key.split('|');
       if (k === 'pay') return { kind: 'payroll', dept: a, field: c.column as Extract<AdminChange, { kind: 'payroll' }>['field'], value: num(c.to) };
       if (k === 'adm') return { kind: 'admin', dept: a, account: b, entity: c.column.slice(1), value: num(c.to) };
       return { kind: 'fee', fee: a as FeeKind, entity: b as FeeEntity, field: c.column as 'rate' | 'base', value: num(c.to) };
     });
-    return chunks(list, (p) => saveAdminOverheads(user, version.id, p));
+    const r = await chunks(list, (p) => saveAdminOverheads(user, version.id, p));
+    return { saved: out.saved + r.saved, errors: [...out.errors, ...r.errors] };
   }
   if (kind.startsWith('amc-')) {
     const ck = kind.slice(4) as ContractKind;

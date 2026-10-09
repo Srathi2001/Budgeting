@@ -31,6 +31,8 @@ export interface TplRow {
   values: Record<string, CellValue>;
   /** the input columns this row lets the user change */
   open: string[];
+  /** cells calculated in Excel: a formula by column, `{r}` = this row's number (the value is its result) */
+  formulas?: Record<string, string>;
 }
 export interface TplSheet {
   name: string;
@@ -39,7 +41,20 @@ export interface TplSheet {
   /** blank rows for new entries; `keyOf` builds the key from the identity values (null: not identified) */
   newRows?: number;
   keyOf?: (values: Record<string, unknown>, excelRow: number) => string | null;
+  /** formulas of every row, blank rows included (`{r}` = the row's number) */
+  rowFormulas?: Record<string, string>;
 }
+
+/** the first data row of a sheet (row 1: the input band, row 2: the headers) */
+export const FIRST_ROW = 3;
+/** a column's letter: 1 = A */
+export const colLetter = (n: number): string => (n > 26 ? colLetter(Math.floor((n - 1) / 26)) : '') + String.fromCharCode(65 + ((n - 1) % 26));
+/** the letter of a sheet's column (column A is the hidden key) */
+export const columnOf = (s: Pick<TplSheet, 'columns'>, key: string) => {
+  const i = s.columns.findIndex((c) => c.key === key);
+  if (i < 0) throw new Error(`no column ${key}`);
+  return colLetter(i + 2);
+};
 export interface Template {
   title: string;
   /** what it covers, e.g. "45 properties" */
@@ -69,6 +84,8 @@ export async function buildTemplate(t: Template, ctx: { versionName: string; use
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Budget';
   wb.created = new Date();
+  // formulas (detail sheet totals) are calculated when the file opens
+  wb.calcProperties = { fullCalcOnLoad: true };
 
   // ---- instructions
   const info = wb.addWorksheet('Instructions', { properties: { tabColor: { argb: 'FF1F1F1F' } } });
@@ -160,11 +177,24 @@ export async function buildTemplate(t: Template, ctx: { versionName: string; use
             error: c.kind === 'pct' ? 'A percentage 0–100%' : 'A number',
           };
       });
+    const formulas = (row: ExcelJS.Row, f: Record<string, string>, values: Record<string, CellValue>) => {
+      for (const [k, formula] of Object.entries(f)) {
+        const v = values[k];
+        row.getCell(s.columns.findIndex((c) => c.key === k) + 2).value = { formula: formula.replaceAll('{r}', String(row.number)), result: typeof v === 'number' ? v : undefined } as ExcelJS.CellFormulaValue;
+      }
+    };
     for (const r of s.rows) {
       const row = ws.addRow([r.key, ...s.columns.map((c) => show(c.kind, r.values[c.key] ?? null))]);
-      style(row, (c) => !!c.input && r.open.includes(c.key));
+      const f = { ...s.rowFormulas, ...r.formulas };
+      style(row, (c) => !!c.input && r.open.includes(c.key) && !f[c.key]);
+      formulas(row, f, r.values);
     }
-    if (!t.locked) for (let i = 0; i < (s.newRows ?? 0); i++) style(ws.addRow([]), (c) => !!c.input || !!c.identity);
+    if (!t.locked)
+      for (let i = 0; i < (s.newRows ?? 0); i++) {
+        const row = ws.addRow([]);
+        style(row, (c) => (!!c.input || !!c.identity) && !s.rowFormulas?.[c.key]);
+        if (s.rowFormulas) formulas(row, s.rowFormulas, {});
+      }
     ws.autoFilter = { from: { row: HEADER_ROW, column: 2 }, to: { row: HEADER_ROW, column: cols.length } };
     await ws.protect(PASSWORD, { selectLockedCells: true, selectUnlockedCells: true, formatColumns: true, autoFilter: true, sort: false });
   }
@@ -286,6 +316,8 @@ export async function diffTemplate(data: ArrayBuffer, current: Template): Promis
       const label = cur ? nameOf(s, cur.values) : nameOf(s, raw);
       for (const c of inputs) {
         if (!at.has(c.key)) continue;
+        // calculated in Excel (e.g. the total of a detail sheet): not an input
+        if (cur?.formulas?.[c.key] || s.rowFormulas?.[c.key]) continue;
         const v = parse(c.kind, raw[c.key], c.list);
         if (v === 'bad') {
           errors.push({ excelRow: n, sheet: s.name, row: label, message: `${c.header}: can’t read “${String(raw[c.key])}”` });
