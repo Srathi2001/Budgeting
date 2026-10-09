@@ -44,6 +44,17 @@ export const OI_ACCOUNTS: OiAccount[] = [
 ];
 export const OI_ACCOUNT = new Map(OI_ACCOUNTS.map((a) => [a.code, a]));
 
+/** reporting type of an account: landlord charges, ANPM's fees, the PMA fee, interest & company income */
+export const OI_TYPES = ['Landlord charges', 'ANPM fees', 'Management fee (PMA)', 'Interest & company income'] as const;
+export type OiType = (typeof OI_TYPES)[number];
+export function oiType(account: string): OiType {
+  const a = OI_ACCOUNT.get(account);
+  if (account === '52801') return 'Management fee (PMA)';
+  if (a?.side === 'ANPM') return 'ANPM fees';
+  if (a?.general || !a?.side) return 'Interest & company income';
+  return 'Landlord charges';
+}
+
 /**
  * Stored periods, relative to the version year Y: A2 = Y-3 actual, A1 = Y-2 actual, YTD = Y-1 Jan–Sep
  * actual (GL), OD = Y-1 Oct–Dec (input), B = budget Y (input). F = YTD + OD is calculated.

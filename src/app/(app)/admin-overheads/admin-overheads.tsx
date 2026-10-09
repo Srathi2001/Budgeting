@@ -385,6 +385,11 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                     ))}
                   </tr>
                 ))}
+              {!splits.some(({ s }) => s.base) && (
+                <tr className="child">
+                  <td colSpan={8 + SPLIT_ENTITIES.length}>No payroll or ANPM overheads entered yet</td>
+                </tr>
+              )}
               <tr className="total">
                 <td>Total</td>
                 <td className="anh-num">{fmt(pay.total)}</td>

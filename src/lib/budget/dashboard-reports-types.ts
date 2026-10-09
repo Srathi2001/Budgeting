@@ -3,8 +3,8 @@
 import type { WorkType } from './fm-types';
 
 /** other income types, by the account's side in the 2026 OtherxIncome split */
-export const OI_TYPES = ['Landlord charges', 'ANPM fees', 'Management fee (PMA)', 'Interest & company income'] as const;
-export type OiType = (typeof OI_TYPES)[number];
+import type { OiType } from './other-income-types';
+export { OI_TYPES, type OiType } from './other-income-types';
 
 /** building elements grouped for the capex view */
 export const CAPEX_GROUPS = ['AC / HVAC', 'Fire, security & FFE', 'Civil & structure', 'Finishes & refurbishment', 'MEP & services', 'Other'] as const;

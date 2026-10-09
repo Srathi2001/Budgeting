@@ -16,9 +16,9 @@ import { propertyRollups } from './reports';
 import { loadFmBudget } from './fm';
 import { BUILDING_LINES, budgetedExpenseLines, propertyExpenseTotals } from './expenses';
 import { FM_KIND_LABEL, STAFF_TEAMS, WORK_TYPES, type FmKind, type WorkType } from './fm-types';
-import { OI_ACCOUNT } from './other-income-types';
+import { OI_ACCOUNT, oiType } from './other-income-types';
 import { OUTSIDE_BUS } from './group';
-import { CAPEX_GROUPS, OI_TYPES, type CapexGroup, type DashboardReports, type OiType } from './dashboard-reports-types';
+import { CAPEX_GROUPS, OI_TYPES, type CapexGroup, type DashboardReports } from './dashboard-reports-types';
 
 const CAPEX_OF: Record<string, CapexGroup> = {
   ...Object.fromEntries(['12', '13', '14'].map((e) => [e, 'AC / HVAC'])),
@@ -31,13 +31,6 @@ const capexGroup = (element: string): CapexGroup => CAPEX_OF[element] ?? 'Other'
 const CAPEX_TYPES = WORK_TYPES.filter((w) => w.line === 'capex').map((w) => w.code);
 const isCapex = (workType: string) => CAPEX_TYPES.includes(workType as WorkType);
 
-function oiType(account: string): OiType {
-  const a = OI_ACCOUNT.get(account);
-  if (account === '52801') return 'Management fee (PMA)';
-  if (a?.side === 'ANPM') return 'ANPM fees';
-  if (a?.general || !a?.side) return 'Interest & company income';
-  return 'Landlord charges';
-}
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
 const monthsOf = (yy: number) => MONTHS.map((_, i) => `${yy}-${String(i + 1).padStart(2, '0')}`);
