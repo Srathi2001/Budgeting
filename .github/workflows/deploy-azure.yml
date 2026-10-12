@@ -1,0 +1,56 @@
+name: Deploy to Azure
+
+# Started by hand (Actions → Deploy to Azure → Run workflow) once IT has set up the App Service and the
+# repository's Azure settings:
+#   variables  AZURE_WEBAPP_NAME, AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   App Service settings  NODE_ENV=production, MIGRATE_ON_START=1, DATABASE_URL (sslmode=require),
+#                         AUTH_SECRET, FUSION_* (from Key Vault); start command: node server.js;
+#                         health check path: /api/health
+# The sign-in to Azure uses OIDC (an app registration with a federated credential for this repository):
+# no password is stored here.
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: Deployment slot (blank = production)
+        required: false
+        default: ''
+
+env:
+  npm_config_script_shell: bash
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      - run: npx next build
+        env:
+          BUILD_STANDALONE: '1'
+      # the self-contained server needs the static files, the public folder and the migrations next to it
+      - run: |
+          cp -r public .next/standalone/ 2>/dev/null || true
+          mkdir -p .next/standalone/.next && cp -r .next/static .next/standalone/.next/
+          cp -r drizzle .next/standalone/
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          slot-name: ${{ inputs.slot || 'production' }}
+          package: .next/standalone

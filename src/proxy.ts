@@ -28,6 +28,7 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // api/import: large uploads read as a stream; the route checks the user itself
-  matcher: ['/((?!login|api/import|_next/static|_next/image|favicon.ico).*)'],
+  // api/import: large uploads read as a stream; the route checks the user itself. api/health: the hosting's
+  // health check (no sign-in, no data)
+  matcher: ['/((?!login|api/import|api/health|_next/static|_next/image|favicon.ico).*)'],
 };
