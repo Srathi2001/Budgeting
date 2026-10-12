@@ -126,7 +126,8 @@ export async function loadHome(user: Actor, version: schema.BudgetVersion): Prom
     .leftJoin(schema.users, eq(schema.users.id, schema.auditLog.userId))
     .leftJoin(schema.properties, eq(schema.properties.id, schema.auditLog.propertyId))
     .where(and(eq(schema.auditLog.versionId, version.id), inArray(schema.auditLog.propertyId, ids.length ? ids : [-1])))
-    .orderBy(desc(schema.auditLog.at))
+    // changes saved together share their time: the last one written first
+    .orderBy(desc(schema.auditLog.at), desc(schema.auditLog.id))
     .limit(8);
   const activity: HomeActivity[] = rows.map(({ a, user: who, property }) => ({ id: a.id, at: a.at.toISOString(), who, property, entity: a.entity, action: a.action }));
 

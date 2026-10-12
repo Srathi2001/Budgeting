@@ -1,18 +1,21 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
+import { dataChanged, onFirstCacheUse } from '@/lib/request-memo';
 import * as schema from './schema';
 
-const globalForDb = globalThis as unknown as { pool?: Pool };
+const globalForDb = globalThis as unknown as { pool?: Pool; listening?: boolean };
 
 // how long a save waits for another user's save of the same figures before giving up
 export const LOCK_WAIT_MS = 10_000;
+const production = process.env.NODE_ENV === 'production';
 
 function createPool() {
   const p = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: Number(process.env.DB_POOL_MAX ?? 10),
-    // keep connections open between requests: a new one costs a TLS handshake and a login (Azure)
-    idleTimeoutMillis: 60_000,
+    // keep connections open between requests: a new one costs a TLS handshake and a login (Azure). Locally
+    // they close sooner: the PGlite dev database jams when the app stops while connections are open
+    idleTimeoutMillis: production ? 60_000 : 10_000,
     // a database that can't be reached fails the request instead of hanging it
     connectionTimeoutMillis: 10_000,
     keepAlive: true,
@@ -45,13 +48,42 @@ const COLLIDED: Record<string, string> = {
   '40P01': 'This save collided with another one: nothing was saved, please save again',
   '40001': 'This save collided with another one: nothing was saved, please save again',
 };
+// A committed save changes the data: the figures kept for the pages (request-memo.ts) are dropped here, and
+// in production every other app instance is told (NOTIFY; a script writing to the database tells them too).
+const CHANGED = 'budget_data_changed';
 const begin = db.transaction.bind(db);
 db.transaction = (async (fn: Parameters<typeof begin>[0], config?: Parameters<typeof begin>[1]) => {
   try {
-    return await begin(fn, config);
+    const out = await begin(fn, config);
+    dataChanged();
+    if (production) pool.query(`NOTIFY ${CHANGED}`).catch(() => {});
+    return out;
   } catch (e) {
     const msg = COLLIDED[pgCode(e) ?? ''];
     if (msg) throw new Error(msg, { cause: e });
     throw e;
   }
 }) as typeof db.transaction;
+
+/** production: one connection per app instance listens for the other instances' (and scripts') changes */
+function listenForChanges() {
+  if (!production || globalForDb.listening || !process.env.DATABASE_URL) return;
+  globalForDb.listening = true;
+  const connect = () => {
+    const c = new Client({ connectionString: process.env.DATABASE_URL, keepAlive: true });
+    const retry = () => {
+      // while not listening, nothing kept can be trusted
+      dataChanged();
+      c.removeAllListeners();
+      c.end().catch(() => {});
+      setTimeout(connect, 5_000);
+    };
+    c.on('notification', () => dataChanged());
+    c.on('error', retry);
+    c.connect()
+      .then(() => c.query(`LISTEN ${CHANGED}`))
+      .catch(retry);
+  };
+  connect();
+}
+onFirstCacheUse(listenForChanges);

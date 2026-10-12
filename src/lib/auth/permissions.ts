@@ -14,6 +14,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { Exec } from '@/lib/write-guard';
+import { perRequest } from '@/lib/request-memo';
 
 export type Actor = Pick<schema.User, 'id' | 'name' | 'email' | 'role' | 'coordinator'>;
 
@@ -44,8 +45,10 @@ export function entersData(user: Actor, owner: InputOwner | 'FM'): boolean {
 const OWNER_NAME: Record<InputOwner, string> = { PM: 'the property manager', FIN: 'Finance' };
 const frozen = (status: string, what: string) => `This ${what} is ${status.toLowerCase()}; Admin returns it for changes`;
 
-/** Properties the user may see. PMs see their own (coordinator); finance and FM (facilities management) see all. */
-export async function visibleProperties(user: Actor) {
+/** Properties the user may see. PMs see their own (coordinator); finance and FM (facilities management) see all. (Once per request.) */
+export const visibleProperties = perRequest('visibleProperties', (user: Actor) => `${user.id}|${user.role}|${user.coordinator}`, visiblePropertiesNow);
+
+async function visiblePropertiesNow(user: Actor) {
   const p = schema.properties;
   const rows = await db.select().from(p).where(eq(p.active, true)).orderBy(p.buCode, p.code);
   return isFinance(user) || isFm(user) ? rows : rows.filter((r) => r.coordinator === user.coordinator);

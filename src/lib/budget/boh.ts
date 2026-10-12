@@ -5,8 +5,8 @@
 // charges (last year's forecast until entered). The budget is phased by month for the P&L: flat, the
 // seasonal pattern (water & electricity), the month paid, or the contracts' terms.
 import 'server-only';
-import { cache } from 'react';
-import { and, eq, gte, inArray, like, lte, max, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, max, sql } from 'drizzle-orm';
+import { perRequest } from '@/lib/request-memo';
 import { db, schema } from '@/db';
 import { canEditProperty, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { writeGuard } from '@/lib/write-guard';
@@ -51,7 +51,7 @@ async function actualsFor(year: number, propertyIds: number[]) {
   const [top] = await db
     .select({ month: max(schema.bohActuals.month) })
     .from(schema.bohActuals)
-    .where(like(schema.bohActuals.month, `${year - 1}-%`));
+    .where(and(gte(schema.bohActuals.month, `${year - 1}-01`), lte(schema.bohActuals.month, `${year - 1}-12`)));
   return { m, cutoff: top?.month ? Number(top.month.slice(5)) : last };
 }
 
@@ -131,8 +131,11 @@ type BohContext = Awaited<ReturnType<typeof bohContext>>;
  * version and set of buildings is worked out once however many loaders ask for it. Writes keep
  * calling bohContext directly so they never see a stale copy.
  */
-const bohContextRead = cache((version: schema.BudgetVersion, idsKey: string) => bohContext(version, idsKey ? idsKey.split(',').map(Number) : []));
+// keyed by the version's id and status (callers load their own copy of the version row), not the object
 const readCtx = (version: schema.BudgetVersion, ids: number[]) => bohContextRead(version, [...new Set(ids)].sort((a, b) => a - b).join(','));
+const bohContextRead = perRequest('bohContext', (version: schema.BudgetVersion, idsKey: string) => `${version.id}|${version.status}|${idsKey}`, (version: schema.BudgetVersion, idsKey: string) =>
+  bohContext(version, idsKey ? idsKey.split(',').map(Number) : []),
+);
 
 interface BohCell {
   row: BohRow;

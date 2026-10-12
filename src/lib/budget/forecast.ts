@@ -1,9 +1,10 @@
 // The current-year rent forecast (2026F for the 2027 budget) read from the database: the one rule in
 // forecast-rules.ts, used by Revenue Analysis, the Dashboard, the Lease Budget summary and the exports.
 import 'server-only';
-import { and, eq, inArray, like } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { withDefaults } from '@/lib/engine/assumptions';
+import { perRequest } from '@/lib/request-memo';
 import type { StoredCalc } from './calc';
 import { buildForecast, type PropertyForecast } from './forecast-rules';
 import { frozen } from './snapshot-store';
@@ -32,7 +33,10 @@ export interface ForecastSnapshot {
   lines: [number, number, number[]][];
 }
 
-export async function loadPriorForecast(version: schema.BudgetVersion, propertyIds: number[]): Promise<PriorForecast> {
+/** The current-year forecast of the properties (worked out once per request: request-memo.ts). */
+export const loadPriorForecast = perRequest('forecast', (v: schema.BudgetVersion, ids: number[]) => `${v.id}|${v.status}|${ids.join(',')}`, priorForecastNow);
+
+async function priorForecastNow(version: schema.BudgetVersion, propertyIds: number[]): Promise<PriorForecast> {
   // a locked version keeps the forecast it was approved with, whatever actuals arrive later
   const snap = await frozen<ForecastSnapshot>(version, 'forecast');
   if (snap) {
@@ -61,7 +65,8 @@ export async function liveForecast(version: schema.BudgetVersion, propertyIds: n
     db
       .select({ p: schema.revenueActuals.propertyId, m: schema.revenueActuals.month, a: schema.revenueActuals.amount })
       .from(schema.revenueActuals)
-      .where(and(eq(schema.revenueActuals.kind, 'A'), inArray(schema.revenueActuals.propertyId, ids), like(schema.revenueActuals.month, `${year}-%`))),
+      // the year's months as a range (an index can serve it; LIKE 'YYYY-%' it can't)
+      .where(and(eq(schema.revenueActuals.kind, 'A'), inArray(schema.revenueActuals.propertyId, ids), gte(schema.revenueActuals.month, `${year}-01`), lte(schema.revenueActuals.month, `${year}-12`))),
   ]);
   const actuals = new Map<number, Map<number, number>>();
   for (const x of acts) {

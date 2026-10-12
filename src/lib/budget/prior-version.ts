@@ -3,8 +3,12 @@
 // time); the imported baseline counts as approved. No approved version: no prior budget.
 import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import { perRequest } from '@/lib/request-memo';
 
-export async function priorVersion(version: Pick<schema.BudgetVersion, 'year'>): Promise<schema.BudgetVersion | null> {
+/** (once per request: request-memo.ts) */
+export const priorVersion = perRequest('priorVersion', (version: Pick<schema.BudgetVersion, 'year'>) => String(version.year), priorVersionNow);
+
+async function priorVersionNow(version: Pick<schema.BudgetVersion, 'year'>): Promise<schema.BudgetVersion | null> {
   const rows = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.year, version.year - 1));
   return approvedOf(rows);
 }

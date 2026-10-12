@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db, schema } from '@/db';
 import { canEditProperty, editablePropertyIds, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { writeGuard, type Tx } from '@/lib/write-guard';
+import { bulkUpdate } from '@/lib/bulk';
 import { recalcLines } from './calc';
 import { loadMasterRows } from './master';
 import { clash } from '@/lib/conflict';
@@ -111,6 +112,10 @@ export async function applyLineChangesIn(tx: Tx, user: Actor, versionId: number,
   const ids = parsed.data.map((c) => c.lineId);
   const errors: SaveResult['errors'] = [];
   const touched: number[] = [];
+  const now = new Date();
+  const lineUpdates: { id: number; set: Record<string, unknown> }[] = [];
+  const unitUpdates: { id: number; set: Record<string, unknown> }[] = [];
+  const trail: (typeof schema.auditLog.$inferInsert)[] = [];
   {
     const current = await tx
       .select({ l: schema.leaseLines, u: schema.units })
@@ -185,16 +190,9 @@ export async function applyLineChangesIn(tx: Tx, user: Actor, versionId: number,
         }
       }
       if (!Object.keys(diff).length) continue;
-      if (Object.keys(linePatch).length) {
-        await tx
-          .update(schema.leaseLines)
-          .set({ ...linePatch, updatedAt: new Date(), updatedBy: user.id })
-          .where(eq(schema.leaseLines.id, lineId));
-      }
-      if (Object.keys(unitPatch).length) {
-        await tx.update(schema.units).set(unitPatch).where(eq(schema.units.id, row.u.id));
-      }
-      await tx.insert(schema.auditLog).values({
+      if (Object.keys(linePatch).length) lineUpdates.push({ id: lineId, set: { ...linePatch, updatedAt: now, updatedBy: user.id } });
+      if (Object.keys(unitPatch).length) unitUpdates.push({ id: row.u.id, set: unitPatch });
+      trail.push({
         userId: user.id,
         versionId,
         propertyId: row.l.propertyId,
@@ -205,6 +203,10 @@ export async function applyLineChangesIn(tx: Tx, user: Actor, versionId: number,
       });
       touched.push(lineId);
     }
+    // the lines, their units and the audit rows in a few statements, not a round trip per line
+    await bulkUpdate(tx, schema.leaseLines, lineUpdates);
+    await bulkUpdate(tx, schema.units, unitUpdates);
+    for (let i = 0; i < trail.length; i += 500) await tx.insert(schema.auditLog).values(trail.slice(i, i + 500));
     if (touched.length) await recalcLines(tx, versionId, touched);
   }
   return errors;

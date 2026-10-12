@@ -14,6 +14,7 @@ import * as XLSX from 'xlsx';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { writeGuard, type Exec } from '@/lib/write-guard';
+import { bulkUpdate } from '@/lib/bulk';
 import { dayFromExcelSerial, dayFromYMD, formatDay } from '@/lib/engine/dates';
 import { recalcLines } from '@/lib/budget/calc';
 import { changedFields } from '@/lib/audit-diff';
@@ -813,29 +814,47 @@ export async function applyImport(
     const unitByKey = new Map((await tx.select().from(schema.units)).map((u) => [unitKey(u.unitCode), u]));
     const audits: (typeof schema.auditLog.$inferInsert)[] = [];
 
+    // the writes go in a few statements each (archive, units, lines), not one round trip per line
     // 1. lines no longer in the report: archived with their inputs, then removed
-    for (const l of plan.removed) {
-      const { calc: _calc, ...line } = l;
-      void _calc;
-      const [a] = await tx
+    if (plan.removed.length) {
+      const archived = await tx
         .insert(schema.leaseLineArchive)
-        .values({ versionId, lineId: l.id, propertyId: l.propertyId, unitCode: plan.unitCodeOf(l), line: line as Record<string, unknown>, hadInputs: hasLineInputs(l), planId: opts.planId ?? null, removedBy: userId })
-        .returning({ id: schema.leaseLineArchive.id });
-      audits.push({ userId, versionId, propertyId: l.propertyId, entity: 'lease_line', entityId: String(l.id), action: 'import_remove', changes: { unit: plan.unitCodeOf(l), tenant: l.tenant, archive: a.id } });
+        .values(
+          plan.removed.map((l) => {
+            const { calc: _calc, ...line } = l;
+            void _calc;
+            return { versionId, lineId: l.id, propertyId: l.propertyId, unitCode: plan.unitCodeOf(l), line: line as Record<string, unknown>, hadInputs: hasLineInputs(l), planId: opts.planId ?? null, removedBy: userId };
+          }),
+        )
+        .returning({ id: schema.leaseLineArchive.id, lineId: schema.leaseLineArchive.lineId });
+      const archiveOf = new Map(archived.map((a) => [a.lineId, a.id]));
+      for (const l of plan.removed) audits.push({ userId, versionId, propertyId: l.propertyId, entity: 'lease_line', entityId: String(l.id), action: 'import_remove', changes: { unit: plan.unitCodeOf(l), tenant: l.tenant, archive: archiveOf.get(l.id) } });
+      await tx.delete(schema.leaseLines).where(inArray(schema.leaseLines.id, plan.removed.map((l) => l.id)));
     }
-    if (plan.removed.length) await tx.delete(schema.leaseLines).where(inArray(schema.leaseLines.id, plan.removed.map((l) => l.id)));
 
     // 2. the report's lines: updated in place where the unit has a line, else added
+    // unit details come from the reports only; beds (capacity) have no source there and stay as entered.
+    // Landlord / merged no. / usage come from the Unit Dump: without one, the unit keeps what it has.
+    const unitAttrs = plan.lines.map((p) => ({ ...p.attrs, propertyId: propByKey.get(p.propertyKey)!.id, ...(p.dump ?? {}) }));
+    await bulkUpdate(
+      tx,
+      schema.units,
+      plan.lines.flatMap((p, i) => {
+        const u = unitByKey.get(p.unit.key);
+        return u ? [{ id: u.id, set: unitAttrs[i] as Record<string, unknown> }] : [];
+      }),
+    );
+    const fresh = plan.lines.flatMap((p, i) => (unitByKey.has(p.unit.key) ? [] : [{ unitCode: p.unit.code, ...unitAttrs[i] }]));
+    for (let i = 0; i < fresh.length; i += 500) for (const u of await tx.insert(schema.units).values(fresh.slice(i, i + 500)).returning()) unitByKey.set(unitKey(u.unitCode), u);
+
     const touched: number[] = [];
     const claimed = new Set<number>();
+    const updates: { id: number; set: Record<string, unknown> }[] = [];
+    const adds: (typeof schema.leaseLines.$inferInsert)[] = [];
+    const steps: ({ kind: 'update'; id: number; propertyId: number; diff: Record<string, unknown> } | { kind: 'add'; unitId: number; propertyId: number; p: (typeof plan.lines)[number] })[] = [];
     for (const p of plan.lines) {
       const prop = propByKey.get(p.propertyKey)!;
-      // unit details come from the reports only; beds (capacity) have no source there and stay as entered.
-      // Landlord / merged no. / usage come from the Unit Dump: without one, the unit keeps what it has.
-      const attrs = { ...p.attrs, propertyId: prop.id, ...(p.dump ?? {}) };
-      let unit = unitByKey.get(p.unit.key);
-      if (unit) await tx.update(schema.units).set(attrs).where(eq(schema.units.id, unit.id));
-      else [unit] = await tx.insert(schema.units).values({ unitCode: p.unit.code, ...attrs }).returning();
+      const unit = unitByKey.get(p.unit.key)!;
       const old = p.carryFrom && !claimed.has(p.carryFrom.id) ? p.carryFrom : null;
       const values = {
         unitId: unit.id,
@@ -850,16 +869,25 @@ export async function applyImport(
       if (old) {
         claimed.add(old.id);
         const diff = changedFields(old as unknown as Record<string, unknown>, values, ['leaseSyncedAt', 'updatedBy']);
-        await tx
-          .update(schema.leaseLines)
-          .set({ ...values, ...(Object.keys(diff).length ? { updatedAt: now } : {}) })
-          .where(eq(schema.leaseLines.id, old.id));
-        touched.push(old.id);
-        if (Object.keys(diff).length) audits.push({ userId, versionId, propertyId: prop.id, entity: 'lease_line', entityId: String(old.id), action: 'import_update', changes: diff });
+        updates.push({ id: old.id, set: { ...values, ...(Object.keys(diff).length ? { updatedAt: now } : {}) } });
+        steps.push({ kind: 'update', id: old.id, propertyId: prop.id, diff });
       } else {
-        const [line] = await tx.insert(schema.leaseLines).values({ versionId, ...values }).returning({ id: schema.leaseLines.id });
-        touched.push(line.id);
-        audits.push({ userId, versionId, propertyId: prop.id, entity: 'lease_line', entityId: String(line.id), action: 'import_add', changes: { unit: p.unit.code, tenant: p.facts?.tenant ?? null, lease: p.facts?.leaseNumber ?? null, rent: p.facts?.currentRent ?? null } });
+        adds.push({ versionId, ...values });
+        steps.push({ kind: 'add', unitId: unit.id, propertyId: prop.id, p });
+      }
+    }
+    await bulkUpdate(tx, schema.leaseLines, updates);
+    const added = new Map<number, number>();
+    for (let i = 0; i < adds.length; i += 300) for (const l of await tx.insert(schema.leaseLines).values(adds.slice(i, i + 300)).returning({ id: schema.leaseLines.id, unitId: schema.leaseLines.unitId })) added.set(l.unitId, l.id);
+    // the audit rows in the report's order, as before
+    for (const s of steps) {
+      if (s.kind === 'update') {
+        touched.push(s.id);
+        if (Object.keys(s.diff).length) audits.push({ userId, versionId, propertyId: s.propertyId, entity: 'lease_line', entityId: String(s.id), action: 'import_update', changes: s.diff });
+      } else {
+        const id = added.get(s.unitId)!;
+        touched.push(id);
+        audits.push({ userId, versionId, propertyId: s.propertyId, entity: 'lease_line', entityId: String(id), action: 'import_add', changes: { unit: s.p.unit.code, tenant: s.p.facts?.tenant ?? null, lease: s.p.facts?.leaseNumber ?? null, rent: s.p.facts?.currentRent ?? null } });
       }
     }
     for (let i = 0; i < audits.length; i += 500) await tx.insert(schema.auditLog).values(audits.slice(i, i + 500));

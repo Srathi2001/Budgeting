@@ -11,6 +11,7 @@ import { loadFmBudget } from './fm';
 import { bohMonthly } from './boh';
 import { adminEntityCosts } from './admin';
 import { treasuryForStatements } from './treasury';
+import { perRequest } from '@/lib/request-memo';
 
 export interface ExpenseLine {
   key: string;
@@ -118,7 +119,9 @@ export async function propertyExpenseTotals(versionId: number, propertyIds: numb
  * Lines budgeted in the tool for this version (the others show as not budgeted): the FM lines once the
  * FM budget has an entry, a building overhead line once any amount is entered for it.
  */
-export async function budgetedExpenseLines(versionId: number): Promise<Set<string>> {
+export const budgetedExpenseLines = perRequest('budgetedExpenseLines', (versionId: number) => String(versionId), budgetedExpenseLinesNow);
+
+async function budgetedExpenseLinesNow(versionId: number): Promise<Set<string>> {
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   const out = new Set<string>((await loadFmBudget(versionId)).budgeted ? FM_EXPENSE_KEYS : []);
   if (version) for (const l of (await bohMonthly(version)).lines) out.add(l);

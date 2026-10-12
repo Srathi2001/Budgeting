@@ -44,7 +44,7 @@ export default async function SubmissionsPage() {
     .leftJoin(schema.users, eq(schema.users.id, schema.auditLog.userId))
     .leftJoin(schema.properties, eq(schema.properties.id, schema.auditLog.propertyId))
     .where(and(eq(schema.auditLog.versionId, v.id), inArray(schema.auditLog.propertyId, ids.length ? ids : [-1])))
-    .orderBy(desc(schema.auditLog.at))
+    .orderBy(desc(schema.auditLog.at), desc(schema.auditLog.id))
     .limit(60);
 
   return (

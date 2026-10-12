@@ -105,7 +105,7 @@ export async function propertyActivity(versionId: number, propertyId: number): P
     .from(schema.auditLog)
     .leftJoin(schema.users, eq(schema.users.id, schema.auditLog.userId))
     .where(and(eq(schema.auditLog.versionId, versionId), eq(schema.auditLog.propertyId, propertyId)))
-    .orderBy(desc(schema.auditLog.at))
+    .orderBy(desc(schema.auditLog.at), desc(schema.auditLog.id))
     .limit(100);
   return { rows: rows.map(({ a, who }) => ({ id: a.id, at: a.at.toISOString(), who, entity: a.entity, action: a.action, changes: a.changes })) };
 }

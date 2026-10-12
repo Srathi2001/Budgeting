@@ -15,10 +15,13 @@ export default async function PnlPage() {
   const version = await requireVersion();
   // the shared page filters (BU, PM, category, property)
   const scope = await filteredScope(user);
-  const rolls = await propertyRollups(version.id, scope.propertyIds, scope.categories);
   // cost lines of the Buildingwise P&L sheet: FM costs from the FM budget, the others not budgeted yet
-  const budgeted = await budgetedExpenseLines(version.id);
-  const costs = await propertyExpenseTotals(version.id, scope.propertyIds);
+  // (independent of each other: worked out at the same time)
+  const [rolls, budgeted, costs] = await Promise.all([
+    propertyRollups(version.id, scope.propertyIds, scope.categories),
+    budgetedExpenseLines(version.id),
+    propertyExpenseTotals(version.id, scope.propertyIds),
+  ]);
 
   // as the 2026 Buildingwise P&L: gross profit after operating costs; major repairs below it; capex
   // items are paid (cash) but not expensed

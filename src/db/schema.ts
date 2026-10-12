@@ -380,7 +380,8 @@ export const fmActuals = pgTable(
     month: text('month').notNull(), // YYYY-MM
     amount: money('amount').notNull(),
   },
-  (t) => [uniqueIndex('fm_actuals_uq').on(t.company, t.propertyId, t.workType, t.element, t.month)],
+  // the reports read months across all buildings (Dashboard, FM pages): the unique index starts with company
+  (t) => [uniqueIndex('fm_actuals_uq').on(t.company, t.propertyId, t.workType, t.element, t.month), index('fm_actuals_month_idx').on(t.month), index('fm_actuals_property_month_idx').on(t.propertyId, t.month)],
 );
 
 /**
@@ -398,7 +399,8 @@ export const bohActuals = pgTable(
     month: text('month').notNull(), // YYYY-MM
     amount: money('amount').notNull(),
   },
-  (t) => [uniqueIndex('boh_actuals_uq').on(t.company, t.propertyId, t.account, t.month), index('boh_actuals_month_idx').on(t.month)],
+  // Building Overheads reads the buildings' months: by building, then month
+  (t) => [uniqueIndex('boh_actuals_uq').on(t.company, t.propertyId, t.account, t.month), index('boh_actuals_month_idx').on(t.month), index('boh_actuals_property_month_idx').on(t.propertyId, t.month)],
 );
 
 /**
@@ -875,7 +877,8 @@ export const auditLog = pgTable(
     action: text('action').notNull(),
     changes: jsonb('changes'),
   },
-  (t) => [index('audit_version_property_idx').on(t.versionId, t.propertyId)],
+  // the latest changes (home page, submissions, imports, "last updated by", conflicts) are read by entity or by version
+  (t) => [index('audit_version_property_idx').on(t.versionId, t.propertyId), index('audit_entity_idx').on(t.entity, t.entityId), index('audit_version_at_idx').on(t.versionId, t.at)],
 );
 
 export type User = typeof users.$inferSelect;

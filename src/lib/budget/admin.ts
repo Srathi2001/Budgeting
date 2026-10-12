@@ -2,12 +2,13 @@
 // actuals by cost centre as reference, and the 2026 rules (PDD capitalised, recharges to MJNH / ASRE,
 // PMA and AMA fees). Finance only: it holds payroll. Phased evenly over 12 months, as in 2026.
 import 'server-only';
-import { and, eq, gte, inArray, isNull, like, lte, max, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lte, max, sql } from 'drizzle-orm';
 import { priorVersion } from './prior-version';
 import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import { isFinance, type Actor } from '@/lib/auth/permissions';
 import { writeGuard } from '@/lib/write-guard';
+import { perRequest } from '@/lib/request-memo';
 import { clash } from '@/lib/conflict';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { bohAccountBudget } from './boh';
@@ -44,8 +45,10 @@ const flat = (amount: number) => z12().map(() => amount / 12);
 /** watchmen's salaries in Building Overheads: the security department's payroll */
 const WATCHMEN_ACCOUNT = '62603';
 
-/** the landlords' (REHL, REHL-MJN, the mall) budget rent of a version, by entity and month: the PMA fee base */
-export async function landlordRent(versionId: number): Promise<Record<FeeEntity, number[]>> {
+/** the landlords' (REHL, REHL-MJN, the mall) budget rent of a version, by entity and month: the PMA fee base (once per request) */
+export const landlordRent = perRequest('landlordRent', (versionId: number) => String(versionId), landlordRentNow);
+
+async function landlordRentNow(versionId: number): Promise<Record<FeeEntity, number[]>> {
   await getSettings(); // the mappings (e.g. the Mall's codes) before any property is classified
   const rows = await db
     .select({ code: schema.properties.code, bu: schema.properties.buCode, month: schema.lineMonthly.month, revenue: sql<number>`sum(${schema.lineMonthly.revenue})::float` })
@@ -105,7 +108,10 @@ async function priorFees(version: schema.BudgetVersion): Promise<{ label: string
  * rent month by month, the AMA fee is even. Unset rates and bases take the defaults (see FeeRow).
  */
 export type ManagementFees = { rows: FeeRow[]; prior: string | null; months: Record<FeeKind, Record<FeeEntity, number[]>> };
-export async function managementFees(version: schema.BudgetVersion): Promise<ManagementFees> {
+/** (worked out once per request: request-memo.ts) */
+export const managementFees = perRequest('managementFees', (v: schema.BudgetVersion) => `${v.id}|${v.status}`, managementFeesNow);
+
+async function managementFeesNow(version: schema.BudgetVersion): Promise<ManagementFees> {
   // a locked version keeps the fees it was locked with (the defaults read last year's budget and the rent)
   const snap = await frozen<ManagementFees>(version, 'fees');
   if (snap) return snap;
@@ -144,7 +150,7 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
       .select()
       .from(schema.adminActuals)
       .where(and(gte(schema.adminActuals.month, `${Y - 3}-01`), lte(schema.adminActuals.month, `${Y - 1}-12`))),
-    db.select({ m: max(schema.adminActuals.month) }).from(schema.adminActuals).where(like(schema.adminActuals.month, `${Y - 1}-%`)),
+    db.select({ m: max(schema.adminActuals.month) }).from(schema.adminActuals).where(and(gte(schema.adminActuals.month, `${Y - 1}-01`), lte(schema.adminActuals.month, `${Y - 1}-12`))),
     db.select().from(schema.adminPayroll).where(eq(schema.adminPayroll.versionId, version.id)),
     db.select().from(schema.adminBudget).where(eq(schema.adminBudget.versionId, version.id)),
     managementFees(version),
@@ -422,7 +428,9 @@ export interface EntityCost {
 }
 
 /** G&A of a version for the statements, by entity and month; `lines`: the G&A lines budgeted. */
-export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{ costs: EntityCost[]; lines: Set<string> }> {
+export const adminEntityCosts = perRequest('adminEntityCosts', (v: schema.BudgetVersion) => `${v.id}|${v.status}`, adminEntityCostsNow);
+
+async function adminEntityCostsNow(version: schema.BudgetVersion): Promise<{ costs: EntityCost[]; lines: Set<string> }> {
   const [payroll, budget, fees, itemRows] = await Promise.all([
     db.select().from(schema.adminPayroll).where(eq(schema.adminPayroll.versionId, version.id)),
     db.select().from(schema.adminBudget).where(eq(schema.adminBudget.versionId, version.id)),

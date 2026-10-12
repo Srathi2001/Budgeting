@@ -61,9 +61,12 @@ export async function summaryData(
   const general = finance && !f.pm.length && !f.cat.length && !f.prop.length;
   // a company-level entity (BU or MALL) is in view: Finance, no PM / category / property filter, the BU filter
   const entityInView = (e: string) => general && (!f.bu.length || f.bu.includes(e));
-  const oi = await otherIncomeMonthly(versionId, scope.propertyIds, scope.categories, entityInView);
-  const costs = await propertyExpenses(versionId, scope.propertyIds);
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  // independent reads: sent at the same time
+  const [oi, costs, [version]] = await Promise.all([
+    otherIncomeMonthly(versionId, scope.propertyIds, scope.categories, entityInView),
+    propertyExpenses(versionId, scope.propertyIds),
+    db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId)),
+  ]);
   // general & administration: company level, like the General rows
   const ga = general && version ? (await adminEntityCosts(version)).costs.filter((c) => entityInView(c.entity)) : [];
   // Finance's tabs: loan interest and contingencies (below EBITDA), deposit interest (other income 52201)

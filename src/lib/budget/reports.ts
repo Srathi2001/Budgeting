@@ -51,7 +51,9 @@ export async function propertyRollups(versionId: number, propertyIds?: number[],
   const lineIds = categories.length ? await linesInCategories(versionId, categories) : null;
   const onLines = (col: string) => (lineIds ? sql` and ${sql.raw(col)} = any(${`{${lineIds.join(',') || '-1'}}`}::int[])` : sql``);
   const p = schema.properties;
-  const props = await db
+  // the three reads don't depend on each other: sent at the same time
+  const [props, monthly, lineStats] = await Promise.all([
+    db
     .select({
       id: p.id,
       code: p.code,
@@ -66,7 +68,21 @@ export async function propertyRollups(versionId: number, propertyIds?: number[],
     .innerJoin(schema.businessUnits, eq(schema.businessUnits.code, p.buCode))
     .leftJoin(schema.submissions, and(eq(schema.submissions.propertyId, p.id), eq(schema.submissions.versionId, versionId)))
     .where(propertyIds ? inArray(p.id, propertyIds.length ? propertyIds : [-1]) : eq(p.active, true))
-    .orderBy(p.buCode, p.code);
+    .orderBy(p.buCode, p.code),
+    db.execute(sql`
+    select property_id, month,
+      sum(revenue)::float as revenue, sum(cash)::float as cash,
+      sum(vat)::float as vat, sum(deposit_in)::float as deposit_in, sum(deposit_out)::float as deposit_out
+    from line_monthly where version_id = ${versionId}${onLines('line_id')}
+    group by property_id, month`),
+    db.execute(sql`
+    select property_id, count(*)::int as units,
+      count(*) filter (where vacant)::int as vacant,
+      count(*) filter (where current_end is not null)::int as leased,
+      coalesce(sum(jsonb_array_length(coalesce(calc->'warnings','[]'::jsonb))),0)::int as warnings,
+      coalesce(sum((calc->>'vacancyLoss')::float),0)::float as vacancy_loss
+    from lease_lines where version_id = ${versionId}${onLines('id')} group by property_id`),
+  ]);
 
   const map = new Map<number, PropertyRollup>();
   for (const r of props) {
@@ -92,12 +108,6 @@ export async function propertyRollups(versionId: number, propertyIds?: number[],
     });
   }
 
-  const monthly = await db.execute(sql`
-    select property_id, month,
-      sum(revenue)::float as revenue, sum(cash)::float as cash,
-      sum(vat)::float as vat, sum(deposit_in)::float as deposit_in, sum(deposit_out)::float as deposit_out
-    from line_monthly where version_id = ${versionId}${onLines('line_id')}
-    group by property_id, month`);
   for (const r of monthly.rows as Record<string, number>[]) {
     const roll = map.get(r.property_id);
     if (!roll) continue;
@@ -109,13 +119,6 @@ export async function propertyRollups(versionId: number, propertyIds?: number[],
     roll.depositOut[i] = r.deposit_out;
   }
 
-  const lineStats = await db.execute(sql`
-    select property_id, count(*)::int as units,
-      count(*) filter (where vacant)::int as vacant,
-      count(*) filter (where current_end is not null)::int as leased,
-      coalesce(sum(jsonb_array_length(coalesce(calc->'warnings','[]'::jsonb))),0)::int as warnings,
-      coalesce(sum((calc->>'vacancyLoss')::float),0)::float as vacancy_loss
-    from lease_lines where version_id = ${versionId}${onLines('id')} group by property_id`);
   for (const r of lineStats.rows as Record<string, number>[]) {
     const roll = map.get(r.property_id);
     if (!roll) continue;

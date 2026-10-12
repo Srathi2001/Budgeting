@@ -20,6 +20,7 @@ import { visibleProperties, editablePropertyIds, isFinance, type Actor } from '.
 import { FILTER_COOKIE, NO_FILTERS, type Filters } from '../src/lib/filters';
 import { filterBusinessUnits, filterUniverse, filteredScope } from '../src/lib/filters-server';
 import { getSettings } from '../src/lib/settings';
+import { scriptScope } from '../src/lib/request-memo';
 import { loadHome } from '../src/lib/budget/home';
 import { loadDashboardData } from '../src/lib/budget/dashboard';
 import { loadDashboardReports } from '../src/lib/budget/dashboard-reports';
@@ -106,6 +107,8 @@ async function main() {
       }
       for (const run of runs) {
         setRequestCookies({ [SESSION_COOKIE]: token, [VERSION_COOKIE]: String(v.id), [FILTER_COOKIE]: JSON.stringify(run.filters) });
+        // every loader of this run shares results as one page request does (request-memo.ts), more widely
+        scriptScope.map = process.env.FIGURES_NO_MEMO ? null : new Map();
         const prefix = `v${v.id}-${u.role}-${run.tag}`;
         const record = async (name: string, f: () => Promise<unknown>) => {
           const file = `${prefix}-${name}.json`;

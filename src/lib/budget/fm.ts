@@ -1,13 +1,14 @@
 // FM cost budget of a version, calculated over the whole portfolio (the staff allocation needs every
 // building's works), then read per building by the reports.
 import 'server-only';
-import { cache } from 'react';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { computeFm } from './fm-calc';
 import { withDefaults } from '@/lib/engine/assumptions';
+import { perRequest } from '@/lib/request-memo';
 
-export const loadFmBudget = cache(async (versionId: number) => {
+// worked out once and shared until the data changes (request-memo.ts)
+export const loadFmBudget = perRequest('fmBudget', (versionId: number) => String(versionId), async (versionId: number) => {
   const [[version], props, lines, staff] = await Promise.all([
     db.select({ assumptions: schema.budgetVersions.assumptions }).from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId)),
     db.select({ id: schema.properties.id, bu: schema.properties.buCode, zone: schema.properties.fmZone }).from(schema.properties).where(eq(schema.properties.active, true)),

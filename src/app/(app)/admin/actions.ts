@@ -364,13 +364,16 @@ export async function importComparatives(versionId: number, form: FormData): Pro
       // the version stays open until this commits (a lock waits for it)
       const cur = await writeGuard(tx, versionId);
       if (!cur || cur.status === 'LOCKED') throw new Error('This version is locked: reopen it first');
-      for (const x of values)
+      // a few statements, not one per value; a value given twice in the file: the last one counts, as before
+      const last = new Map(values.map((x) => [`${x.propertyId}|${x.label}`, x]));
+      const rows = [...last.values()];
+      for (let i = 0; i < rows.length; i += 500)
         await tx
           .insert(schema.comparatives)
-          .values(x)
+          .values(rows.slice(i, i + 500))
           .onConflictDoUpdate({
             target: [schema.comparatives.versionId, schema.comparatives.propertyId, schema.comparatives.label],
-            set: { amount: x.amount },
+            set: { amount: sql`excluded.amount` },
           });
       await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'comparative', action: 'import', changes: { file: file.name, values: saved, unknown } });
     });

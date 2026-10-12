@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { type DB, schema } from '@/db';
 import {
   computeLease,
@@ -144,7 +144,7 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
   for (let i = 0; i < monthly.length; i += 2000) {
     await tx.insert(lineMonthly).values(monthly.slice(i, i + 2000));
   }
-  for (const [id, res] of results) {
+  const calcs = [...results].map(([id, res]) => {
     const stored: StoredCalc = {
       contracts: res.contracts,
       increasePct: res.increasePct,
@@ -160,7 +160,14 @@ export async function recalcLines(tx: Tx, versionId: number, lineIds?: number[])
       cashFlow: res.revenue.map((_, i) => Math.round(cashFlowOf(res, i) * 100) / 100),
       priorRevenue: prior.get(id),
     };
-    await tx.update(leaseLines).set({ calc: stored }).where(eq(leaseLines.id, id));
+    return { id, calc: stored };
+  });
+  // a few statements for the whole version instead of one per line (each one a round trip to the database)
+  for (let i = 0; i < calcs.length; i += 300) {
+    await tx.execute(sql`
+      update ${leaseLines} as l set calc = v.calc
+      from jsonb_to_recordset(${JSON.stringify(calcs.slice(i, i + 300))}::jsonb) as v(id int, calc jsonb)
+      where l.id = v.id`);
   }
   return results;
 }
