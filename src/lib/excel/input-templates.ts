@@ -3,7 +3,9 @@
 import { withDefaults } from '@/lib/engine/assumptions';
 import 'server-only';
 import { entersData, isFm, visibleProperties, editablePropertyIds, type CurrentUser } from '@/lib/auth/dal';
+import { db } from '@/db';
 import type { schema } from '@/db';
+import { writeGuard } from '@/lib/write-guard';
 import { getFilters, filteredScope } from '@/lib/filters-server';
 import { loadOtherIncome, saveOtherIncome } from '@/lib/budget/other-income';
 import { OI_ACCOUNTS, oiCell, oiInput, oiLabel, type OiChange } from '@/lib/budget/other-income-types';
@@ -436,21 +438,26 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
     return list.length ? saveBuildingOverheads(user, version.id, list) : { saved: 0, errors: [] };
   }
   if (kind === 'admin-overheads') {
-    // detail sheet lines: saved one by one as items, as the tabs do
+    // detail sheet lines are saved as items, as the tabs do, and the cells as on the Overview; all of it in
+    // one transaction: the upload lands completely or not at all
     const out = { saved: 0, errors: [] as string[] };
     const { items } = await loadAdminOverheads(version);
-    for (const { label, item } of itemsFromChanges(current.sheets, items, changes)) {
-      const r = await saveAdminItem(user, version.id, item);
-      if (r.error) out.errors.push(`${label}: ${r.error}`);
-      else out.saved++;
-    }
     const list: AdminChange[] = changes.filter((c) => /^(pay|adm|fee)\|/.test(c.key)).map((c) => {
       const [k, a, b] = c.key.split('|');
       if (k === 'pay') return { kind: 'payroll', dept: a, field: c.column as Extract<AdminChange, { kind: 'payroll' }>['field'], value: num(c.to) };
       if (k === 'adm') return { kind: 'admin', dept: a, account: b, entity: c.column.slice(1), value: num(c.to) };
       return { kind: 'fee', fee: a as FeeKind, entity: b as FeeEntity, field: c.column as 'rate' | 'base', value: num(c.to) };
     });
-    const r = list.length ? await saveAdminOverheads(user, version.id, list) : { saved: 0, errors: [] };
+    const r = await db.transaction(async (tx) => {
+      // the version stays open until this commits (a lock waits for it)
+      await writeGuard(tx, version.id);
+      for (const { label, item } of itemsFromChanges(current.sheets, items, changes)) {
+        const s = await saveAdminItem(user, version.id, item, tx);
+        if (s.error) out.errors.push(`${label}: ${s.error}`);
+        else out.saved++;
+      }
+      return list.length ? saveAdminOverheads(user, version.id, list, tx) : { saved: 0, errors: [] };
+    });
     return { saved: out.saved + r.saved, errors: [...out.errors, ...r.errors] };
   }
   if (kind.startsWith('amc-')) {

@@ -6,7 +6,7 @@ import { canEditFm, entersData, isAdmin, type Actor } from '@/lib/auth/permissio
 import { changedFields, pick } from '@/lib/audit-diff';
 import { fmtDateTime } from '@/lib/format';
 import { clash, sameValue } from '@/lib/conflict';
-import { writeGuard } from '@/lib/write-guard';
+import { writeGuard, type Tx } from '@/lib/write-guard';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, WORK_TYPE, isWorkType, type StaffTeam, type WorkType } from './fm-types';
 
 export type FmResult = { error?: string; ok?: string };
@@ -52,9 +52,13 @@ class Refused extends Error {}
 
 const spreads = (workType: string) => WORK_TYPE.get(workType as WorkType)?.spread ?? true;
 
-/** Saves a facility's lines: new lines are added, changed ones updated, removed ones deleted. Lines from the tool keep what the work is. */
-export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: number, input: unknown): Promise<FmResult> {
-  const check = await canEditFm(user, versionId, propertyId);
+/**
+ * Saves a facility's lines: new lines are added, changed ones updated, removed ones deleted. Lines from the tool
+ * keep what the work is. `on`: the caller's transaction (a template upload saving every facility together);
+ * the facility then saves in a savepoint of it, so a facility refused leaves the others as they are.
+ */
+export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: number, input: unknown, on?: Tx): Promise<FmResult> {
+  const check = await canEditFm(user, versionId, propertyId, on ?? db);
   if (!check.ok) return { error: check.reason };
   const parsed = Save.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
@@ -67,8 +71,8 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
   const FIELDS = ['workType', 'element', 'subElement', 'description', 'businessNeed', 'kind', 'amount', 'month', 'remarks'] as const;
   const trail: (typeof schema.auditLog.$inferInsert)[] = [];
   const log = (id: number, action: string, changes: unknown) => trail.push({ userId: user.id, versionId, propertyId, entity: 'fm_line', entityId: String(id), action, changes });
-  const refused = await db
-    .transaction(async (tx): Promise<string | null> => {
+  const begin: typeof db.transaction = on ? on.transaction.bind(on) : db.transaction.bind(db);
+  const refused = await begin(async (tx): Promise<string | null> => {
     // the facility's status and lines as they are now, held until this commits (a submission waits)
     await writeGuard(tx, versionId, { facilities: [propertyId] });
     const held = await canEditFm(user, versionId, propertyId, tx);

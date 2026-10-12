@@ -72,11 +72,15 @@ export async function uploadFmTemplate(versionId: number, form: FormData, apply:
 
   const code = new Map(facilities.map((f) => [f.id, f.code]));
   const ok = new Set<string>();
-  for (const [propertyId, s] of saves) {
-    const r = await saveFmLinesAs(user, versionId, propertyId, s);
-    if (r.error) errors.push({ excelRow: 0, facility: code.get(propertyId) ?? '', message: r.error });
-    else ok.add(code.get(propertyId) ?? '');
-  }
+  // every facility in one transaction: the upload lands completely or not at all (a facility refused, e.g.
+  // submitted meanwhile, is listed and the others are saved)
+  await db.transaction(async (tx) => {
+    for (const [propertyId, s] of saves) {
+      const r = await saveFmLinesAs(user, versionId, propertyId, s, tx);
+      if (r.error) errors.push({ excelRow: 0, facility: code.get(propertyId) ?? '', message: r.error });
+      else ok.add(code.get(propertyId) ?? '');
+    }
+  });
   revalidatePath('/fm');
   return { changes, errors, conflicts, kept, saved: { facilities: ok.size, changes: changes.filter((c) => ok.has(c.facility)).length } };
 }

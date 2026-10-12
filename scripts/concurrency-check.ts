@@ -208,6 +208,71 @@ async function main() {
     check('7. upload: changed again since the preview, nothing is saved', !!again.again && (await amountNow()) === 5555, JSON.stringify({ again: again.again, now: await amountNow() }));
   }
 
+  // ---- 8. FM template upload: one transaction; a facility submitted meanwhile is refused, the others saved ----
+  {
+    const ExcelJS = (await import('exceljs')).default;
+    const { ELEMENTS } = await import('../src/lib/budget/fm-types');
+    const [fmUser] = await db.insert(schema.users).values({ email: 'fm@test', name: 'Faisal', passwordHash: 'x', role: 'FM' }).returning();
+    const [prop2] = await db.insert(schema.properties).values({ code: '30B998', name: 'Second building', buCode: '501', coordinator: 'TEST' }).returning();
+    const fl = await db
+      .insert(schema.fmLines)
+      .values([prop, prop2].map((p) => ({ versionId: v, propertyId: p.id, workType: 'M01', element: ELEMENTS[0].code, description: `Works ${p.code}`, kind: 'PLANNED', amount: 1000, source: 'FM', updatedBy: fmUser.id })))
+      .returning();
+    await as(fmUser);
+    const route = (await import('../src/app/api/export/fm-template/route')) as { GET: (r: Request) => Promise<Response> };
+    const file = await (await route.GET(new Request('http://localhost/api/export/fm-template'))).arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(file);
+    const ws = wb.getWorksheet('FM Budget')!;
+    const col: Record<string, number> = {};
+    ws.getRow(2).eachCell((c, n) => (col[String(c.value)] = n));
+    ws.eachRow((row) => {
+      const id = Number(row.getCell(col['Line ID']).value);
+      if (id === fl[0].id) row.getCell(col['Amount (AED)']).value = 1500;
+      if (id === fl[1].id) row.getCell(col['Amount (AED)']).value = 2500;
+    });
+    const upload = new FormData();
+    upload.set('file', new File([new Uint8Array(await wb.xlsx.writeBuffer())], 'fm.xlsx'));
+    const { uploadFmTemplate } = await import('../src/app/(app)/fm/actions');
+    const pre = await uploadFmTemplate(v, upload, false);
+    // the second facility is submitted after the preview
+    await db.insert(schema.fmSubmissions).values({ versionId: v, propertyId: prop2.id, status: 'SUBMITTED', updatedBy: fmUser.id });
+    const res = await uploadFmTemplate(v, upload, true, [], []);
+    const after = new Map((await db.select().from(schema.fmLines).where(eq(schema.fmLines.versionId, v))).map((l) => [l.id, l.amount]));
+    check('8. FM upload: the preview lists both changes', pre.changes.length === 2, JSON.stringify(pre.changes));
+    check('8. FM upload: the open facility is saved', after.get(fl[0].id) === 1500, String(after.get(fl[0].id)));
+    check('8. FM upload: the facility submitted meanwhile is refused and left as it was', after.get(fl[1].id) === 1000 && res.errors.some((e) => e.facility === '30B998'), JSON.stringify(res.errors));
+  }
+
+  // ---- 9. Admin Overheads template upload: one transaction ----
+  {
+    const ExcelJS = (await import('exceljs')).default;
+    await as(admin);
+    const route = (await import('../src/app/api/export/input-template/route')) as { GET: (r: Request) => Promise<Response> };
+    const file = await (await route.GET(new Request('http://localhost/api/export/input-template?kind=admin-overheads'))).arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(file);
+    const ws = wb.getWorksheet('Payroll')!;
+    let col = 0;
+    ws.getRow(2).eachCell((c, n) => {
+      if (String(c.value) === 'Headcount') col = n;
+    });
+    let dept = '';
+    ws.eachRow((row, n) => {
+      const key = String(row.getCell(1).value ?? '');
+      if (n > 2 && !dept && key.startsWith('pay|') && row.getCell(col).protection?.locked === false) {
+        dept = key.slice(4);
+        row.getCell(col).value = 7;
+      }
+    });
+    const upload = new FormData();
+    upload.set('file', new File([new Uint8Array(await wb.xlsx.writeBuffer())], 'admin.xlsx'));
+    const { uploadInputTemplate } = await import('../src/app/(app)/template-actions');
+    const res = await uploadInputTemplate('admin-overheads', v, upload, true, [], []);
+    const [pay] = await db.select().from(schema.adminPayroll).where(and(eq(schema.adminPayroll.versionId, v), eq(schema.adminPayroll.dept, dept)));
+    check('9. Admin upload: the change is saved in one go', !!dept && res.saved === 1 && pay?.headcount === 7, JSON.stringify({ dept, saved: res.saved, refused: res.refused, errors: res.errors, headcount: pay?.headcount }));
+  }
+
   console.log(failures.length ? `\n${failures.length} check(s) failed` : '\nall checks passed');
   if (failures.length) process.exitCode = 1;
 }

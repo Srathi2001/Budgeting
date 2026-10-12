@@ -7,7 +7,7 @@ import { priorVersion } from './prior-version';
 import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import { isFinance, type Actor } from '@/lib/auth/permissions';
-import { writeGuard } from '@/lib/write-guard';
+import { writeGuard, type Tx } from '@/lib/write-guard';
 import { perRequest } from '@/lib/request-memo';
 import { clash } from '@/lib/conflict';
 import { withDefaults } from '@/lib/engine/assumptions';
@@ -263,14 +263,21 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
 /** what an item posts: its schedule's rule */
 const postingsOf = (it: Pick<AdminItem, 'kind' | 'dept' | 'data'>): Posting[] => ITEM_KIND.get(it.kind)!.postings(it.data, it.dept);
 
-/** Adds or changes a back-up schedule item (Finance). Returns the item id. */
+/** runs `fn` in the caller's transaction (`on`, an upload saving everything at once) or in one of its own */
+const inTx = <T>(on: Tx | undefined, fn: (tx: Tx) => Promise<T>) => (on ? fn(on) : db.transaction(fn));
+
+/**
+ * Adds or changes a back-up schedule item (Finance). Returns the item id. `on`: the caller's transaction
+ * (a template upload saving all its items and cells together).
+ */
 export async function saveAdminItem(
   user: Actor,
   versionId: number,
   item: { id: number | null; kind: string; dept: string; payer: string; data: ItemData },
+  on?: Tx,
 ): Promise<{ id?: number; error?: string }> {
   if (!isFinance(user)) return { error: 'Admin overheads are entered by Finance' };
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  const [version] = await (on ?? db).select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') return { error: 'This budget version is locked' };
   if (!isItemKind(item.kind)) return { error: 'Unknown schedule' };
   if (!DEPTS.some((d) => d.code === item.dept && !d.elsewhere)) return { error: 'Choose a department budgeted here' };
@@ -282,7 +289,7 @@ export async function saveAdminItem(
   const values = { versionId, kind: item.kind, dept: item.dept, payer: item.payer, data: clean.data, updatedAt: new Date(), updatedBy: user.id };
   let id = item.id;
   // the item and its audit row (before and after) land together
-  const found = await db.transaction(async (tx) => {
+  const found = await inTx(on, async (tx) => {
     // the version stays open until this commits (a lock waits for it)
     const cur = await writeGuard(tx, versionId);
     if (!cur || cur.status === 'LOCKED') return 'locked' as const;
@@ -320,16 +327,16 @@ export async function deleteAdminItem(user: Actor, versionId: number, id: number
 
 const PAYROLL_FIELDS = { headcount: 'int', ctc: 'amount', newHeadcount: 'int', newCtc: 'amount', capPct: 'pct', mjnhPct: 'pct', asrePct: 'pct', seniorCtc: 'amount' } as const;
 
-/** Saves admin overhead inputs: Finance only. */
-export async function saveAdminOverheads(user: Actor, versionId: number, changes: AdminChange[]): Promise<{ saved: number; errors: string[] }> {
+/** Saves admin overhead inputs: Finance only. `on`: the caller's transaction (a template upload). */
+export async function saveAdminOverheads(user: Actor, versionId: number, changes: AdminChange[], on?: Tx): Promise<{ saved: number; errors: string[] }> {
   if (!isFinance(user)) return { saved: 0, errors: ['Admin overheads are entered by Finance'] };
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  const [version] = await (on ?? db).select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) return { saved: 0, errors: ['Version not found'] };
   if (version.status === 'LOCKED') return { saved: 0, errors: ['This budget version is locked'] };
   const errors: string[] = [];
   let saved = 0;
   // every change and its audit row land together: one transaction for the batch
-  await db.transaction(async (tx) => {
+  await inTx(on, async (tx) => {
     // the version stays open until this commits (a lock waits for it)
     const cur = await writeGuard(tx, versionId);
     if (!cur || cur.status === 'LOCKED') {
