@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db, schema } from '@/db';
 import { requireUser, canEditProperty, editablePropertyIds, visibleProperties } from '@/lib/auth/dal';
 import { recalcLines } from '@/lib/budget/calc';
+import { writeGuard } from '@/lib/write-guard';
 import { loadMasterRows } from '@/lib/budget/master';
 import { applyLineChanges } from '@/lib/budget/save';
 import { saveReraRange } from '@/lib/budget/rera';
@@ -35,6 +36,10 @@ export async function addUnit(
   if (!check.ok) return { error: check.reason };
 
   const lineId = await db.transaction(async (tx) => {
+    // one lease save of the version at a time; the permission check holds until this commits
+    await writeGuard(tx, versionId, { leases: true });
+    const held = await canEditProperty(user, versionId, parsed.data.propertyId, 'PM', tx);
+    if (!held.ok) throw new Error(held.reason);
     let [unit] = await tx.select().from(schema.units).where(eq(schema.units.unitCode, parsed.data.unitCode));
     if (unit && unit.propertyId !== parsed.data.propertyId) throw new Error('That unit code belongs to another property');
     if (!unit) {
@@ -161,8 +166,13 @@ export async function removeLine(versionId: number, lineId: number): Promise<{ e
   if (!line) return { error: 'Row not found' };
   const check = await canEditProperty(user, versionId, line.l.propertyId);
   if (!check.ok) return { error: check.reason };
-  await db.transaction(async (tx) => {
-    await tx.delete(schema.leaseLines).where(eq(schema.leaseLines.id, lineId));
+  const gone = await db.transaction(async (tx) => {
+    // one lease save of the version at a time; the checks hold until this commits
+    await writeGuard(tx, versionId, { leases: true });
+    const held = await canEditProperty(user, versionId, line.l.propertyId, 'PM', tx);
+    if (!held.ok) return held.reason;
+    const [deleted] = await tx.delete(schema.leaseLines).where(eq(schema.leaseLines.id, lineId)).returning();
+    if (!deleted) return 'Row not found';
     await tx.insert(schema.auditLog).values({
       userId: user.id,
       versionId,
@@ -171,8 +181,9 @@ export async function removeLine(versionId: number, lineId: number): Promise<{ e
       entityId: String(lineId),
       action: 'delete',
       // the whole line as it was (its inputs included), without the cached calculation
-      changes: { unit: line.u.unitCode, from: { ...line.l, calc: undefined }, to: null },
+      changes: { unit: line.u.unitCode, from: { ...deleted, calc: undefined }, to: null },
     });
+    return null;
   });
-  return {};
+  return gone ? { error: gone } : {};
 }

@@ -5,6 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { db, schema } from '@/db';
 import { requireUser, isAdmin, isFinance } from '@/lib/auth/dal';
 import { contractYear, type ContractInput } from '@/lib/budget/boh-calc';
+import { fmtDateTime } from '@/lib/format';
+import { writeGuard } from '@/lib/write-guard';
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'RETURNED';
 
@@ -26,31 +28,39 @@ export async function transition(versionId: number, propertyId: number, action: 
   if (t.admin && !isAdmin(user)) return { error: 'Only Admin approves or returns' };
   if (!t.admin && !isAdmin(user) && (user.role !== 'PM' || prop.coordinator !== user.coordinator)) return { error: 'The property manager submits the property' };
   if (action === 'return' && !note?.trim()) return { error: 'Give a reason for returning it' };
-  if (action === 'submit') {
-    // every renewal needs its RERA range (or an increase entered): none means a 0% increase (audit FIN-014)
-    const missing = await db
-      .select({ unit: schema.units.unitCode, bedroom: schema.units.bedroom })
-      .from(schema.leaseLines)
-      .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
-      .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId), sql`${schema.leaseLines.calc}->>'warnings' like '%No RERA index%'`));
-    if (missing.length) {
-      const codes = [...new Set(missing.map((m) => m.bedroom ?? '(no code)'))].join(', ');
-      return { error: `${missing.length} renewal${missing.length === 1 ? ' has' : 's have'} no RERA range (${codes}): enter the ranges in the Lease Budget row form, or an increase for the unit, then submit` };
+
+  // the status and its audit row change together or not at all. The transition waits for the saves running
+  // on the property (its lease lines included) and holds new ones until it commits; the checks below read
+  // the property as it is at that moment
+  const refused = await db.transaction(async (tx): Promise<string | null> => {
+    const cur = await writeGuard(tx, versionId, { leases: true, properties: [propertyId], propertyMode: 'exclusive' });
+    if (!cur || cur.status === 'LOCKED') return 'Version is locked';
+    if (action === 'submit') {
+      // every renewal needs its RERA range (or an increase entered): none means a 0% increase (audit FIN-014)
+      const missing = await tx
+        .select({ unit: schema.units.unitCode, bedroom: schema.units.bedroom })
+        .from(schema.leaseLines)
+        .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
+        .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId), sql`${schema.leaseLines.calc}->>'warnings' like '%No RERA index%'`));
+      if (missing.length) {
+        const codes = [...new Set(missing.map((m) => m.bedroom ?? '(no code)'))].join(', ');
+        return `${missing.length} renewal${missing.length === 1 ? ' has' : 's have'} no RERA range (${codes}): enter the ranges in the Lease Budget row form, or an increase for the unit, then submit`;
+      }
+      // a service contract ending before 31 December needs the property manager's decision (audit FIN-008)
+      const contracts = await tx.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, versionId), eq(schema.bohContracts.propertyId, propertyId)));
+      const open = contracts.filter((c) => contractYear(c as ContractInput, cur.year).needsDecision);
+      if (open.length)
+        return `${open.length} service contract${open.length === 1 ? ' ends' : 's end'} before 31-Dec-${cur.year} without a decision (${open.map((c) => c.supplier ?? c.description ?? c.account).slice(0, 3).join(', ')}): say in Building Overheads whether each is renewed, then submit`;
     }
-    // a service contract ending before 31 December needs the property manager's decision (audit FIN-008)
-    const contracts = await db.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, versionId), eq(schema.bohContracts.propertyId, propertyId)));
-    const open = contracts.filter((c) => contractYear(c as ContractInput, version.year).needsDecision);
-    if (open.length)
-      return { error: `${open.length} service contract${open.length === 1 ? ' ends' : 's end'} before 31-Dec-${version.year} without a decision (${open.map((c) => c.supplier ?? c.description ?? c.account).slice(0, 3).join(', ')}): say in Building Overheads whether each is renewed, then submit` };
-  }
 
-  const where = and(eq(schema.submissions.versionId, versionId), eq(schema.submissions.propertyId, propertyId));
-  const [sub] = await db.select().from(schema.submissions).where(where);
-  const current: Status = sub?.status ?? 'DRAFT';
-  if (!t.from.includes(current)) return { error: `Cannot ${action} a property that is ${current.toLowerCase()}` };
-
-  // the status and its audit row change together or not at all
-  await db.transaction(async (tx) => {
+    const where = and(eq(schema.submissions.versionId, versionId), eq(schema.submissions.propertyId, propertyId));
+    const [sub] = await tx.select({ s: schema.submissions, who: schema.users.name }).from(schema.submissions).leftJoin(schema.users, eq(schema.users.id, schema.submissions.updatedBy)).where(where);
+    const current: Status = sub?.s.status ?? 'DRAFT';
+    if (!t.from.includes(current)) {
+      // someone else got there first: say who and when
+      const by = sub?.who && sub.s.updatedBy !== user.id ? ` (${current.toLowerCase()} by ${sub.who} on ${fmtDateTime(sub.s.updatedAt)})` : '';
+      return `Cannot ${action} a property that is ${current.toLowerCase()}${by}`;
+    }
     await tx
       .insert(schema.submissions)
       .values({ versionId, propertyId, status: t.to, note, updatedBy: user.id })
@@ -66,7 +76,9 @@ export async function transition(versionId: number, propertyId: number, action: 
       action,
       changes: { from: current, to: t.to, note },
     });
+    return null;
   });
+  if (refused) return { error: refused };
   revalidatePath('/submissions');
   revalidatePath('/');
   revalidatePath('/dashboard');

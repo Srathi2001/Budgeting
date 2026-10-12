@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { db, schema } from '@/db';
 import { canEditFm, entersData, isAdmin, type Actor } from '@/lib/auth/permissions';
 import { changedFields, pick } from '@/lib/audit-diff';
+import { fmtDateTime } from '@/lib/format';
+import { writeGuard } from '@/lib/write-guard';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, WORK_TYPE, isWorkType, type StaffTeam, type WorkType } from './fm-types';
 
 export type FmResult = { error?: string; ok?: string };
@@ -40,20 +42,24 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
   const { lines, deleted } = parsed.data;
 
   const where = and(eq(schema.fmLines.versionId, versionId), eq(schema.fmLines.propertyId, propertyId));
-  const existing = new Map((await db.select().from(schema.fmLines).where(where)).map((l) => [l.id, l]));
-  for (const id of deleted) {
-    const l = existing.get(id);
-    if (!l) return { error: 'A removed line is not on this facility' };
-    if (l.source !== 'FM') return { error: 'Lines carried from last year cannot be removed; set the amount to 0' };
-  }
-  for (const l of lines) if (l.id !== null && !existing.has(l.id)) return { error: 'A line is not on this facility' };
   let added = 0;
   let changed = 0;
   // one audit row per line, with its fields before and after
   const FIELDS = ['workType', 'element', 'subElement', 'description', 'businessNeed', 'kind', 'amount', 'month', 'remarks'] as const;
   const trail: (typeof schema.auditLog.$inferInsert)[] = [];
   const log = (id: number, action: string, changes: unknown) => trail.push({ userId: user.id, versionId, propertyId, entity: 'fm_line', entityId: String(id), action, changes });
-  await db.transaction(async (tx) => {
+  const refused = await db.transaction(async (tx): Promise<string | null> => {
+    // the facility's status and lines as they are now, held until this commits (a submission waits)
+    await writeGuard(tx, versionId, { facilities: [propertyId] });
+    const held = await canEditFm(user, versionId, propertyId, tx);
+    if (!held.ok) return held.reason;
+    const existing = new Map((await tx.select().from(schema.fmLines).where(where)).map((l) => [l.id, l]));
+    for (const id of deleted) {
+      const l = existing.get(id);
+      if (!l) return 'A removed line is not on this facility';
+      if (l.source !== 'FM') return 'Lines carried from last year cannot be removed; set the amount to 0';
+    }
+    for (const l of lines) if (l.id !== null && !existing.has(l.id)) return 'A line is not on this facility';
     if (deleted.length) await tx.delete(schema.fmLines).where(and(where, inArray(schema.fmLines.id, deleted)));
     for (const id of deleted) log(id, 'delete', { from: pick(existing.get(id)!, FIELDS), to: null });
     for (const l of lines) {
@@ -90,7 +96,9 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
       changed++;
     }
     for (let i = 0; i < trail.length; i += 500) await tx.insert(schema.auditLog).values(trail.slice(i, i + 500));
+    return null;
   });
+  if (refused) return { error: refused };
   return { ok: added || changed || deleted.length ? `Saved: ${added} added, ${changed} changed, ${deleted.length} removed` : 'No changes' };
 }
 
@@ -124,8 +132,14 @@ export async function saveFmStaffAs(user: Actor, versionId: number, input: unkno
   if (blocked) return { error: blocked };
   const parsed = Staff.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
-  const before = await db.select({ team: schema.fmStaff.team, ctc: schema.fmStaff.ctc, overtime: schema.fmStaff.overtime }).from(schema.fmStaff).where(eq(schema.fmStaff.versionId, versionId));
-  await db.transaction(async (tx) => {
+  const refused = await db.transaction(async (tx): Promise<string | null> => {
+    // one staff save at a time, and no facility submitted until this commits; the checks read it as it is now
+    const cur = await writeGuard(tx, versionId, { fmStaff: 'exclusive' });
+    if (!cur || cur.status === 'LOCKED') return 'This budget version is locked';
+    const subs = await tx.select({ status: schema.fmSubmissions.status }).from(schema.fmSubmissions).where(eq(schema.fmSubmissions.versionId, versionId));
+    const blocked = staffEditBlocked(user, subs.map((s) => s.status));
+    if (blocked) return blocked;
+    const before = await tx.select({ team: schema.fmStaff.team, ctc: schema.fmStaff.ctc, overtime: schema.fmStaff.overtime }).from(schema.fmStaff).where(eq(schema.fmStaff.versionId, versionId));
     for (const s of parsed.data) {
       const row = { versionId, team: s.team as StaffTeam, ctc: s.ctc, overtime: s.team === 'GA' ? 0 : s.overtime, updatedBy: user.id };
       await tx
@@ -134,7 +148,9 @@ export async function saveFmStaffAs(user: Actor, versionId: number, input: unkno
         .onConflictDoUpdate({ target: [schema.fmStaff.versionId, schema.fmStaff.team], set: { ctc: row.ctc, overtime: row.overtime, updatedAt: new Date(), updatedBy: user.id } });
     }
     await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'fm_staff', action: 'save', changes: { before, after: parsed.data, facilitiesSubmittedOrApproved: subs.filter((x) => x.status === 'SUBMITTED' || x.status === 'APPROVED').length } });
+    return null;
   });
+  if (refused) return { error: refused };
   return { ok: 'Staff budget saved' };
 }
 
@@ -154,17 +170,25 @@ export async function fmTransitionAs(user: Actor, versionId: number, propertyId:
   if (t.admin ? !isAdmin(user) : !entersData(user, 'FM')) return { error: t.admin ? 'Only Admin approves or returns' : 'Only facilities management can submit' };
   if (action === 'return' && !note?.trim()) return { error: 'Give a reason for returning it' };
   const where = and(eq(schema.fmSubmissions.versionId, versionId), eq(schema.fmSubmissions.propertyId, propertyId));
-  const [sub] = await db.select().from(schema.fmSubmissions).where(where);
-  const current: Status = sub?.status ?? 'DRAFT';
-  if (!t.from.includes(current)) return { error: `Cannot ${action} a facility that is ${current.toLowerCase()}` };
   const n = note?.trim().slice(0, 2000) || null;
-  // the status and its audit row change together or not at all
-  await db.transaction(async (tx) => {
+  // the status and its audit row change together or not at all; the transition waits for the facility's
+  // saves running now (and a staff save) and reads the status as it is at that moment
+  const refused = await db.transaction(async (tx): Promise<string | null> => {
+    const cur = await writeGuard(tx, versionId, { fmStaff: 'shared', facilities: [propertyId], facilityMode: 'exclusive' });
+    if (!cur || cur.status === 'LOCKED') return 'This budget version is locked';
+    const [sub] = await tx.select({ s: schema.fmSubmissions, who: schema.users.name }).from(schema.fmSubmissions).leftJoin(schema.users, eq(schema.users.id, schema.fmSubmissions.updatedBy)).where(where);
+    const current: Status = sub?.s.status ?? 'DRAFT';
+    if (!t.from.includes(current)) {
+      const by = sub?.who && sub.s.updatedBy !== user.id ? ` (${current.toLowerCase()} by ${sub.who} on ${fmtDateTime(sub.s.updatedAt)})` : '';
+      return `Cannot ${action} a facility that is ${current.toLowerCase()}${by}`;
+    }
     await tx
       .insert(schema.fmSubmissions)
       .values({ versionId, propertyId, status: t.to, note: n, updatedBy: user.id })
       .onConflictDoUpdate({ target: [schema.fmSubmissions.versionId, schema.fmSubmissions.propertyId], set: { status: t.to, note: n, updatedAt: new Date(), updatedBy: user.id } });
     await tx.insert(schema.auditLog).values({ userId: user.id, versionId, propertyId, entity: 'fm_submission', action, changes: { from: current, to: t.to, note: n } });
+    return null;
   });
+  if (refused) return { error: refused };
   return { ok: action === 'submit' ? 'Submitted to Admin' : action === 'approve' ? 'Approved' : 'Returned to facilities management' };
 }

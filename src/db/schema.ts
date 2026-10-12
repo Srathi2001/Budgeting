@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   index,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import type { Assumptions } from '@/lib/engine/assumptions';
 
 /** One cheque: date 'YYYY-MM-DD', amount ex VAT */
@@ -106,7 +107,10 @@ export const budgetVersions = pgTable('budget_versions', {
   sourceVersionId: integer('source_version_id'),
   assumptions: jsonb('assumptions').$type<Partial<Assumptions>>().notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  // one approved (locked) version per year, also when two Admins lock at the same moment
+  uniqueIndex('budget_versions_one_locked_per_year').on(t.year).where(sql`${t.status} = 'LOCKED'`),
+]);
 
 /** One row per unit per budget version: everything the PM enters in the template's Main sheet. */
 export const leaseLines = pgTable(

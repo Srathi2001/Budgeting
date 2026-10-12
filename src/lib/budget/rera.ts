@@ -1,7 +1,8 @@
 // RERA rent range for one property and RERA (bedroom) code in a budget version, entered by PMs.
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import type { Actor } from '@/lib/auth/permissions';
+import { canEditProperty, type Actor } from '@/lib/auth/permissions';
+import { writeGuard } from '@/lib/write-guard';
 import { recalcLines } from './calc';
 
 /**
@@ -24,8 +25,17 @@ export async function saveReraRange(
   const [property] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
   if (!property) return { error: 'Property not found' };
 
+  let refused: string | null = null;
   const lineIds = await db.transaction(async (tx) => {
-    const where = and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
+    // one lease save of the version at a time; the caller's permission check is repeated in here so it
+    // holds until this commits (a lock or a submission waits for it)
+    await writeGuard(tx, versionId, { leases: true });
+    const check = await canEditProperty(user, versionId, propertyId, 'PM', tx);
+    if (!check.ok) {
+      refused = check.reason;
+      return [];
+    }
+    const where =and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
     const [before] = await tx.select().from(schema.reraIndex).where(where);
     await tx.delete(schema.reraIndex).where(where);
     if (min !== null && max !== null) await tx.insert(schema.reraIndex).values({ versionId, propertyCode: property.code, bedroom: code, min, max });
@@ -47,5 +57,6 @@ export async function saveReraRange(
     if (ids.length) await recalcLines(tx, versionId, ids);
     return ids;
   });
+  if (refused) return { error: refused };
   return { lineIds };
 }

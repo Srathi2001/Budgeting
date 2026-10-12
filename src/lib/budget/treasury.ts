@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { db, schema } from '@/db';
 import { entersData, type Actor } from '@/lib/auth/permissions';
 import { changedFields } from '@/lib/audit-diff';
+import { writeGuard } from '@/lib/write-guard';
 import { contingencyMonths, depositYear, loanYear, DAY_BASES, FREQUENCIES, REPAYMENT_TYPES } from './treasury-calc';
 import type { EntityCost } from './admin';
 import type { EntityKey } from './group';
@@ -102,7 +103,7 @@ export async function saveTreasury(user: Actor, versionId: number, kind: Kind, i
   const parsed = SCHEMA[kind].safeParse(input);
   if (!parsed.success) {
     const i = parsed.error.issues[0];
-    return { error: i ? `: ` : 'Invalid input' };
+    return { error: i ? `${i.path.join('.')}: ${i.message}` : 'Invalid input' };
   }
   const { id, ...data } = parsed.data as { id: number | null } & Record<string, unknown>;
   const events = kind === 'loan' ? ((data.events as { date: string; kind: string; amount: number }[]) ?? []) : [];
@@ -110,6 +111,9 @@ export async function saveTreasury(user: Actor, versionId: number, kind: Kind, i
   const table = TABLE[kind];
   let newId = id;
   await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const cur = await writeGuard(tx, versionId);
+    if (!cur || cur.status === 'LOCKED') throw new Error('This budget version is locked');
     let before: Record<string, unknown> | null = null;
     if (id) {
       [before] = (await tx.select().from(table).where(and(eq(table.id, id), eq(table.versionId, versionId)))) as Record<string, unknown>[];
@@ -145,11 +149,15 @@ export async function deleteTreasury(user: Actor, versionId: number, kind: Kind,
   const blocked = await openFor(user, versionId);
   if (blocked) return { error: blocked };
   const table = TABLE[kind];
-  await db.transaction(async (tx) => {
+  const locked = await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const cur = await writeGuard(tx, versionId);
+    if (!cur || cur.status === 'LOCKED') return true;
     const [row] = (await tx.delete(table).where(and(eq(table.id, id), eq(table.versionId, versionId))).returning()) as Record<string, unknown>[];
     if (row) await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: kind === 'loan' ? 'shareholder_loan' : kind === 'deposit' ? 'fixed_deposit' : 'contingency', entityId: String(id), action: 'delete', changes: { from: row, to: null } });
+    return false;
   });
-  return {};
+  return locked ? { error: 'This budget version is locked' } : {};
 }
 
 const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));

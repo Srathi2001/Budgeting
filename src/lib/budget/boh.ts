@@ -6,9 +6,10 @@
 // seasonal pattern (water & electricity), the month paid, or the contracts' terms.
 import 'server-only';
 import { cache } from 'react';
-import { and, eq, gte, inArray, like, lte, max } from 'drizzle-orm';
+import { and, eq, gte, inArray, like, lte, max, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { canEditProperty, type Actor, type EditCheck } from '@/lib/auth/permissions';
+import { writeGuard } from '@/lib/write-guard';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { BOH_ACCOUNT, BOH_ACCOUNTS, CONTRACT_KIND_OF, phase, type BohBlock, type BohCalc, type BohChange, type BohLine, type BohRow } from './boh-types';
 import { referenceBudget } from './reference';
@@ -276,65 +277,86 @@ export async function saveBuildingOverheads(user: Actor, versionId: number, chan
   if (version.status === 'LOCKED') return { saved: 0, errors: ['This budget version is locked'] };
   const props = new Map((await db.select().from(schema.properties)).map((p) => [p.id, p]));
   const ctx = await bohContext(version, [...new Set(changes.map((c) => c.propertyId))].filter((id) => props.has(id)));
-  const checks = new Map<string, EditCheck>();
   const errors: string[] = [];
   let saved = 0;
-  for (const c of changes) {
-    const acct = BOH_ACCOUNT.get(c.account);
-    const p = props.get(c.propertyId);
-    if (!acct || !p) {
-      errors.push(`${c.account}: unknown account or property`);
-      continue;
+  type Cell = { amount: number; dueMonth: number | null } | null;
+  // every value and its audit row land together, in one transaction: the buildings' statuses and the cells
+  // are read in here and held until it commits (a submission or lock waits for it); the cells are read and
+  // written in a few statements, not one round trip per cell
+  await db.transaction(async (tx) => {
+    const cur = await writeGuard(tx, versionId, { properties: changes.map((c) => c.propertyId).filter((id) => props.has(id)) });
+    if (!cur || cur.status === 'LOCKED') {
+      errors.push(cur ? 'This budget version is locked' : 'Version not found');
+      return;
     }
-    if (c.amount !== null && (!Number.isFinite(c.amount) || Math.abs(c.amount) > 1e10)) {
-      errors.push(`${p.code} ${acct.name}: not a valid amount`);
-      continue;
+    const checks = new Map<string, EditCheck>();
+    const todo: { p: schema.Property; c: BohChange; acct: NonNullable<ReturnType<typeof BOH_ACCOUNT.get>>; after: Cell }[] = [];
+    for (const c of changes) {
+      const acct = BOH_ACCOUNT.get(c.account);
+      const p = props.get(c.propertyId);
+      if (!acct || !p) {
+        errors.push(`${c.account}: unknown account or property`);
+        continue;
+      }
+      if (c.amount !== null && (!Number.isFinite(c.amount) || Math.abs(c.amount) > 1e10)) {
+        errors.push(`${p.code} ${acct.name}: not a valid amount`);
+        continue;
+      }
+      if (c.dueMonth !== null && (!Number.isInteger(c.dueMonth) || c.dueMonth < 1 || c.dueMonth > 12)) {
+        errors.push(`${p.code} ${acct.name}: month 1–12`);
+        continue;
+      }
+      const calc = cellOf(ctx, p.id, c.account).row.calc;
+      if (fixedCalc(calc) && c.amount !== null) {
+        errors.push(`${p.code} ${acct.name}: calculated (${calc === 'contracts' ? 'the contract schedule' : calc === 'watchmen' ? 'Security allocation' : 'Assumptions'})`);
+        continue;
+      }
+      // whose input the account is decides who may change it (and when)
+      const key = `${p.id}|${acct.owner}`;
+      if (!checks.has(key)) checks.set(key, await canEditProperty(user, versionId, p.id, acct.owner, tx));
+      const check = checks.get(key)!;
+      if (!check.ok) {
+        errors.push(`${p.code} ${acct.name}: ${check.reason}`);
+        continue;
+      }
+      todo.push({ p, c, acct, after: c.amount === null ? null : { amount: c.amount, dueMonth: acct.phasing === 'due' || acct.paidUpfront ? c.dueMonth : null } });
     }
-    if (c.dueMonth !== null && (!Number.isInteger(c.dueMonth) || c.dueMonth < 1 || c.dueMonth > 12)) {
-      errors.push(`${p.code} ${acct.name}: month 1–12`);
-      continue;
+    if (!todo.length) return;
+    const b = schema.bohBudget;
+    const rows = await tx
+      .select()
+      .from(b)
+      .where(and(eq(b.versionId, versionId), inArray(b.propertyId, [...new Set(todo.map((t) => t.p.id))]), inArray(b.account, [...new Set(todo.map((t) => t.c.account))])));
+    // each cell as it stands while the changes are applied in order (a cell changed twice: the second sees the first)
+    const state = new Map<string, Cell>(rows.map((r) => [`${r.propertyId}|${r.account}`, { amount: r.amount, dueMonth: r.dueMonth }]));
+    const upserts = new Map<string, typeof b.$inferInsert>();
+    const deletes = new Map<string, { propertyId: number; account: string }>();
+    const trail: (typeof schema.auditLog.$inferInsert)[] = [];
+    for (const { p, c, after } of todo) {
+      const k = `${p.id}|${c.account}`;
+      const before = state.get(k) ?? null;
+      if ((before?.amount ?? null) === (after?.amount ?? null) && (before?.dueMonth ?? null) === (after?.dueMonth ?? null)) continue;
+      if (!after) {
+        upserts.delete(k);
+        deletes.set(k, { propertyId: p.id, account: c.account });
+      } else {
+        deletes.delete(k);
+        upserts.set(k, { versionId, propertyId: p.id, account: c.account, ...after, updatedBy: user.id });
+      }
+      state.set(k, after);
+      trail.push({ userId: user.id, versionId, propertyId: p.id, entity: 'boh_budget', entityId: k, action: 'update', changes: { from: before ? { amount: before.amount, dueMonth: before.dueMonth } : null, to: after } });
+      saved++;
     }
-    const calc = cellOf(ctx, p.id, c.account).row.calc;
-    if (fixedCalc(calc) && c.amount !== null) {
-      errors.push(`${p.code} ${acct.name}: calculated (${calc === 'contracts' ? 'the contract schedule' : calc === 'watchmen' ? 'Security allocation' : 'Assumptions'})`);
-      continue;
-    }
-    // whose input the account is decides who may change it (and when)
-    const key = `${p.id}|${acct.owner}`;
-    if (!checks.has(key)) checks.set(key, await canEditProperty(user, versionId, p.id, acct.owner));
-    const check = checks.get(key)!;
-    if (!check.ok) {
-      errors.push(`${p.code} ${acct.name}: ${check.reason}`);
-      continue;
-    }
-    const where = and(eq(schema.bohBudget.versionId, versionId), eq(schema.bohBudget.propertyId, p.id), eq(schema.bohBudget.account, c.account));
-    const after = c.amount === null ? null : { amount: c.amount, dueMonth: acct.phasing === 'due' || acct.paidUpfront ? c.dueMonth : null };
-    // the value and its audit row land together or not at all
-    const written = await db.transaction(async (tx) => {
-      const [before] = await tx.select().from(schema.bohBudget).where(where);
-      if ((before?.amount ?? null) === (after?.amount ?? null) && (before?.dueMonth ?? null) === (after?.dueMonth ?? null)) return false;
-      if (!after) await tx.delete(schema.bohBudget).where(where);
-      else
-        await tx
-          .insert(schema.bohBudget)
-          .values({ versionId, propertyId: p.id, account: c.account, ...after, updatedBy: user.id })
-          .onConflictDoUpdate({
-            target: [schema.bohBudget.versionId, schema.bohBudget.propertyId, schema.bohBudget.account],
-            set: { ...after, updatedAt: new Date(), updatedBy: user.id },
-          });
-      await tx.insert(schema.auditLog).values({
-        userId: user.id,
-        versionId,
-        propertyId: p.id,
-        entity: 'boh_budget',
-        entityId: `${p.id}|${c.account}`,
-        action: 'update',
-        changes: { from: before ? { amount: before.amount, dueMonth: before.dueMonth } : null, to: after },
-      });
-      return true;
-    });
-    if (written) saved++;
-  }
+    if (deletes.size)
+      await tx.delete(b).where(and(eq(b.versionId, versionId), sql`(${b.propertyId}, ${b.account}) in (${sql.join([...deletes.values()].map((d) => sql`(${d.propertyId}::int, ${d.account}::text)`), sql`, `)})`));
+    const ins = [...upserts.values()];
+    for (let i = 0; i < ins.length; i += 500)
+      await tx
+        .insert(b)
+        .values(ins.slice(i, i + 500))
+        .onConflictDoUpdate({ target: [b.versionId, b.propertyId, b.account], set: { amount: sql`excluded.amount`, dueMonth: sql`excluded.due_month`, updatedAt: new Date(), updatedBy: user.id } });
+    for (let i = 0; i < trail.length; i += 500) await tx.insert(schema.auditLog).values(trail.slice(i, i + 500));
+  });
   return { saved, errors };
 }
 

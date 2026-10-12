@@ -6,6 +6,7 @@
 
 import { and, eq, gte, inArray, lte, max } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import { lockJob } from '@/lib/write-guard';
 import { readTables } from './oracle-html';
 import { propertyKey } from './tenant-lease';
 
@@ -161,6 +162,8 @@ export async function applyRevenueImport(report: RrReport, userId: number | null
   if (!rows.length) throw new Error('No property in the report matches the budget');
   const window = replaceWindow(rows);
   await db.transaction(async (tx) => {
+    // one revenue import at a time: two at once would delete each other's rows half way
+    await lockJob(tx, 'revenue');
     const a = schema.revenueActuals;
     if (window.actual) {
       await tx.delete(a).where(and(inArray(a.propertyId, propertyIds), eq(a.kind, 'A'), gte(a.month, window.actual.from), lte(a.month, window.actual.to)));

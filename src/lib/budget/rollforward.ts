@@ -2,23 +2,30 @@
 // lease details or budget inputs (the lease import rebuilds the lines from Oracle and the PMs enter the
 // rest). The comparatives and the RERA index carry over, plus the source budget as "<year>B".
 
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { type DB, schema } from '@/db';
+import { lockJob, writeGuard } from '@/lib/write-guard';
 import { recalcLines } from './calc';
 
 const { budgetVersions, leaseLines, submissions, properties, comparatives } = schema;
 
 export async function rollForward(db: DB, sourceVersionId: number, opts: { name?: string; userId?: number } = {}) {
   return db.transaction(async (tx) => {
-    const [source] = await tx.select().from(budgetVersions).where(eq(budgetVersions.id, sourceVersionId));
+    // one new version at a time, from the source's lines as they are (its lease saves wait meanwhile)
+    await lockJob(tx, 'newVersion');
+    const source = await writeGuard(tx, sourceVersionId, { leases: true });
     if (!source) throw new Error('Source version not found');
     const year = source.year + 1;
+    // a second click (or a second Admin) doesn't make a second copy
+    const name = opts.name ?? `${year} Budget`;
+    const [twin] = await tx.select({ id: budgetVersions.id }).from(budgetVersions).where(and(eq(budgetVersions.year, year), eq(budgetVersions.name, name)));
+    if (twin) throw new Error(`${name} already exists`);
 
     const [target] = await tx
       .insert(budgetVersions)
       .values({
         year,
-        name: opts.name ?? `${year} Budget`,
+        name,
         status: 'OPEN',
         sourceVersionId: source.id,
         assumptions: source.assumptions,

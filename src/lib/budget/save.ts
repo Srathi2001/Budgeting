@@ -3,6 +3,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@/db';
 import { canEditProperty, editablePropertyIds, type Actor, type EditCheck } from '@/lib/auth/permissions';
+import { writeGuard } from '@/lib/write-guard';
 import { recalcLines } from './calc';
 import { loadMasterRows } from './master';
 import { LINE_FIELDS, MF_CHOICES, UNIT_FIELDS, fixedFields, type RowPatch, type SaveResult } from './master-types';
@@ -86,22 +87,23 @@ export async function applyLineChanges(
     return { rows: [], errors: changes.map((c) => ({ lineId: c.lineId, message })) };
   }
   const ids = parsed.data.map((c) => c.lineId);
-  const current = await db
-    .select({ l: schema.leaseLines, u: schema.units })
-    .from(schema.leaseLines)
-    .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
-    .where(and(eq(schema.leaseLines.versionId, versionId), inArray(schema.leaseLines.id, ids.length ? ids : [-1])));
-  const byId = new Map(current.map((r) => [r.l.id, r]));
-
-  // permission checks run before the transaction (they use their own connection)
-  const checks = new Map<number, EditCheck>();
-  for (const r of current) {
-    if (!checks.has(r.l.propertyId)) checks.set(r.l.propertyId, await canEditProperty(user, versionId, r.l.propertyId));
-  }
-
   const errors: SaveResult['errors'] = [];
   const touched: number[] = [];
   await db.transaction(async (tx) => {
+    // one lease save of the version at a time; the rows and the permission checks are read after that,
+    // inside this transaction, so they hold until it commits (a lock or submission waits for it)
+    await writeGuard(tx, versionId, { leases: true });
+    const current = await tx
+      .select({ l: schema.leaseLines, u: schema.units })
+      .from(schema.leaseLines)
+      .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
+      .where(and(eq(schema.leaseLines.versionId, versionId), inArray(schema.leaseLines.id, ids.length ? ids : [-1])));
+    const byId = new Map(current.map((r) => [r.l.id, r]));
+    const checks = new Map<number, EditCheck>();
+    for (const r of current) {
+      if (!checks.has(r.l.propertyId)) checks.set(r.l.propertyId, await canEditProperty(user, versionId, r.l.propertyId, 'PM', tx));
+    }
+
     for (const { lineId, patch } of parsed.data) {
       const row = byId.get(lineId);
       if (!row) {

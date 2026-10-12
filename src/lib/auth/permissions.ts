@@ -13,6 +13,7 @@
 // on a property stay open until Admin approves it).
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import type { Exec } from '@/lib/write-guard';
 
 export type Actor = Pick<schema.User, 'id' | 'name' | 'email' | 'role' | 'coordinator'>;
 
@@ -66,31 +67,35 @@ export async function editablePropertyIds(user: Actor, version: schema.BudgetVer
 
 export type EditCheck = { ok: true } | { ok: false; reason: string };
 
-/** Can the user change the FM budget of this facility? FM (and Admin) until it is submitted. */
-export async function canEditFm(user: Actor, versionId: number, propertyId: number): Promise<EditCheck> {
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+/**
+ * Can the user change the FM budget of this facility? FM (and Admin) until it is submitted. `on`: the save's
+ * transaction (after writeGuard), so the answer holds until the save commits.
+ */
+export async function canEditFm(user: Actor, versionId: number, propertyId: number, on: Exec = db): Promise<EditCheck> {
+  const [version] = await on.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) return { ok: false, reason: 'Version not found' };
   if (version.status === 'LOCKED') return { ok: false, reason: 'This budget version is locked' };
   if (!entersData(user, 'FM')) return { ok: false, reason: 'The FM budget is entered by facilities management' };
-  const [sub] = await db.select().from(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, versionId), eq(schema.fmSubmissions.propertyId, propertyId)));
+  const [sub] = await on.select().from(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, versionId), eq(schema.fmSubmissions.propertyId, propertyId)));
   if (sub && (sub.status === 'SUBMITTED' || sub.status === 'APPROVED')) return { ok: false, reason: frozen(sub.status, 'facility') };
   return { ok: true };
 }
 
 /**
  * Can the user change this input of a property in this version? `owner`: whose input it is (the property
- * manager's by default; Finance's for the Finance building overhead accounts).
+ * manager's by default; Finance's for the Finance building overhead accounts). `on`: the save's transaction
+ * (after writeGuard), so the answer holds until the save commits.
  */
-export async function canEditProperty(user: Actor, versionId: number, propertyId: number, owner: InputOwner = 'PM'): Promise<EditCheck> {
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+export async function canEditProperty(user: Actor, versionId: number, propertyId: number, owner: InputOwner = 'PM', on: Exec = db): Promise<EditCheck> {
+  const [version] = await on.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) return { ok: false, reason: 'Version not found' };
   if (version.status === 'LOCKED') return { ok: false, reason: 'This budget version is locked' };
   if (isFm(user)) return { ok: false, reason: 'Facilities management enters the FM budget only' };
   if (!entersData(user, owner)) return { ok: false, reason: `Entered by ${OWNER_NAME[owner]}` };
-  const [prop] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
+  const [prop] = await on.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
   if (!prop) return { ok: false, reason: 'Property not found' };
   if (user.role === 'PM' && prop.coordinator !== user.coordinator) return { ok: false, reason: 'Not your property' };
-  const [sub] = await db
+  const [sub] = await on
     .select()
     .from(schema.submissions)
     .where(and(eq(schema.submissions.versionId, versionId), eq(schema.submissions.propertyId, propertyId)));

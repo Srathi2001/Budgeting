@@ -5,14 +5,15 @@ import 'server-only';
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { Actor } from '@/lib/auth/permissions';
+import { writeGuard, type Exec } from '@/lib/write-guard';
 import { ASRE, ASRE_LINE, ASRE_LINES } from './asre-types';
 import type { Atom } from './group-report';
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
 const even = (amount: number) => Array.from({ length: 12 }, () => Math.round((amount / 12) * 100) / 100);
 
-export async function loadAsreBudget(versionId: number): Promise<Record<string, number | null>> {
-  const rows = await db.select().from(schema.entityBudget).where(and(eq(schema.entityBudget.versionId, versionId), eq(schema.entityBudget.entity, ASRE)));
+export async function loadAsreBudget(versionId: number, on: Exec = db): Promise<Record<string, number | null>> {
+  const rows = await on.select().from(schema.entityBudget).where(and(eq(schema.entityBudget.versionId, versionId), eq(schema.entityBudget.entity, ASRE)));
   return Object.fromEntries(ASRE_LINES.map((l) => [l.key, rows.find((r) => r.line === l.key)?.amount ?? null]));
 }
 
@@ -71,8 +72,11 @@ export async function saveAsreBudget(user: Actor, versionId: number, values: Rec
     if (!ASRE_LINE.has(k)) return { error: `Unknown line ${k}` };
     if (v !== null && (!Number.isFinite(v) || v < 0 || v > 1e10)) return { error: `${ASRE_LINE.get(k)!.label}: not a valid amount` };
   }
-  const before = await loadAsreBudget(versionId);
-  await db.transaction(async (tx) => {
+  const locked = await db.transaction(async (tx) => {
+    // the version stays open until this commits; "before" is read in here, as it is now
+    const cur = await writeGuard(tx, versionId);
+    if (!cur || cur.status === 'LOCKED') return true;
+    const before = await loadAsreBudget(versionId, tx);
     for (const [line, amount] of Object.entries(values)) {
       if ((before[line] ?? null) === amount) continue;
       const where = and(eq(schema.entityBudget.versionId, versionId), eq(schema.entityBudget.entity, ASRE), eq(schema.entityBudget.line, line));
@@ -84,6 +88,7 @@ export async function saveAsreBudget(user: Actor, versionId: number, values: Rec
           .onConflictDoUpdate({ target: [schema.entityBudget.versionId, schema.entityBudget.entity, schema.entityBudget.line], set: { amount, updatedAt: new Date(), updatedBy: user.id } });
       await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'asre_budget', entityId: line, action: 'update', changes: { from: before[line] ?? null, to: amount } });
     }
+    return false;
   });
-  return {};
+  return locked ? { error: 'This budget version is locked' } : {};
 }

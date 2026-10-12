@@ -57,3 +57,5 @@ jobs:
       - run: npx tsx scripts/migrate.ts
       # the schema in code and the migrations folder must agree: a drift shows up as a new file here
       - run: npx drizzle-kit generate --name ci-drift-check && test -z "$(git status --porcelain drizzle)"
+      # saves at the same moment (the local PGlite database runs one thing at a time and can't show these)
+      - run: npx tsx scripts/concurrency-check.ts

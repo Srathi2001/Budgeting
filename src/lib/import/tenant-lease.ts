@@ -11,8 +11,9 @@
 
 import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import { writeGuard, type Exec } from '@/lib/write-guard';
 import { dayFromExcelSerial, dayFromYMD, formatDay } from '@/lib/engine/dates';
 import { recalcLines } from '@/lib/budget/calc';
 import { changedFields } from '@/lib/audit-diff';
@@ -456,25 +457,25 @@ function mfFor(members: ReportUnit[], facts: Facts, mfByUnit: Map<string, MfRow[
   };
 }
 
-export async function planImport(versionId: number, rows: ReportRow[], extras: ImportExtras = {}) {
+export async function planImport(versionId: number, rows: ReportRow[], extras: ImportExtras = {}, on: Exec = db) {
   const asOf = extras.asOf ?? new Date().toLocaleDateString('en-CA');
   const dumpByUnit = extras.dump ? new Map(extras.dump.map((r) => [unitKey(r.unitCode), r])) : null;
   const mfByUnit = extras.mf ? new Map<string, MfRow[]>() : null;
   for (const r of extras.mf ?? []) mfByUnit!.set(unitKey(r.unitCode), [...(mfByUnit!.get(unitKey(r.unitCode)) ?? []), r]);
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  const [version] = await on.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) throw new Error('Version not found');
   if (version.status === 'LOCKED') throw new Error('Version is locked');
 
   const { units: rUnits, leases } = buildModel(rows);
-  const props = await db.select().from(schema.properties);
+  const props = await on.select().from(schema.properties);
   const propByKey = new Map(props.map((p) => [propertyKey(p.code), p]));
   const propById = new Map(props.map((p) => [p.id, p]));
-  const allUnits = await db.select().from(schema.units);
+  const allUnits = await on.select().from(schema.units);
   const unitById = new Map(allUnits.map((u) => [u.id, u]));
-  const lines = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
+  const lines = await on.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
   const lineByKey = new Map(lines.map((l) => [unitKey(unitById.get(l.unitId)!.unitCode), l]));
   // submitted and approved properties stay as they were submitted
-  const subs = await db.select().from(schema.submissions).where(eq(schema.submissions.versionId, versionId));
+  const subs = await on.select().from(schema.submissions).where(eq(schema.submissions.versionId, versionId));
   const heldStatus = new Map(subs.filter((s) => s.status === 'SUBMITTED' || s.status === 'APPROVED').map((s) => [s.propertyId, s.status as string]));
   const fingerprint = leaseFingerprint(lines, subs, props.length, allUnits.length, asOf);
 
@@ -589,7 +590,7 @@ export async function planImport(versionId: number, rows: ReportRow[], extras: I
   // 5. preview
   const carried = new Set(apply.map((p) => p.carryFrom?.id).filter(Boolean));
   const removed = lines.filter((l) => !carried.has(l.id) && !heldStatus.has(l.propertyId));
-  const buNames = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
+  const buNames = new Map((await on.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
   const buOf = (p: PlannedLine) => propByKey.get(p.propertyKey)?.buCode ?? newProps.get(p.propertyKey)?.buCode ?? '?';
   const byBu = new Map<string, { leases: number; rent: number }>();
   for (const p of keep) {
@@ -789,11 +790,23 @@ export async function applyImport(
   extras: ImportExtras & { files?: string[] } = {},
   opts: { expect?: string; planId?: number } = {},
 ) {
-  const { plan, preview } = await planImport(versionId, rows, extras);
-  if (opts.expect && opts.expect !== preview.fingerprint) throw new Error('The lease lines or submission statuses changed since the preview: choose the files again to see what the import would do now');
   const now = new Date();
 
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    // after the lease saves running now, and none until this commits (submissions wait too); a prepared
+    // import is applied once
+    await writeGuard(tx, versionId, { leases: true });
+    if (opts.planId) {
+      const claimed = await tx
+        .update(schema.importPlans)
+        .set({ appliedAt: now })
+        .where(and(eq(schema.importPlans.id, opts.planId), isNull(schema.importPlans.appliedAt)))
+        .returning({ id: schema.importPlans.id });
+      if (!claimed.length) throw new Error('This import has already been applied');
+    }
+    // worked out in here, from the lines, inputs and statuses as they are now
+    const { plan, preview } = await planImport(versionId, rows, extras, tx);
+    if (opts.expect && opts.expect !== preview.fingerprint) throw new Error('The lease lines or submission statuses changed since the preview: choose the files again to see what the import would do now');
     for (const p of plan.newProperties) await tx.insert(schema.properties).values(p).onConflictDoNothing();
     const props = await tx.select().from(schema.properties);
     const propByKey = new Map(props.map((p) => [propertyKey(p.code), p]));
@@ -882,6 +895,6 @@ export async function applyImport(
       insert into submissions (version_id, property_id, status)
       select distinct ${versionId}::int, property_id, 'DRAFT'::submission_status from lease_lines where version_id = ${versionId}
       on conflict do nothing`);
+    return preview;
   });
-  return preview;
 }

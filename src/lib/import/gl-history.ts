@@ -3,6 +3,7 @@
 // undo always work on the same rows.
 import { and, desc, eq, gte, inArray, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { db, schema, type DB } from '@/db';
+import { lockJob } from '@/lib/write-guard';
 
 type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 
@@ -69,31 +70,35 @@ export async function undoableImport(ledger: string): Promise<{ planId: number; 
     .select({ planId: schema.importHistory.planId, at: schema.importHistory.createdAt })
     .from(schema.importHistory)
     .where(and(eq(schema.importHistory.kind, 'gl'), eq(schema.importHistory.ledger, ledger), isNull(schema.importHistory.undoneAt)))
-    .orderBy(desc(schema.importHistory.planId))
+    .orderBy(desc(schema.importHistory.id))
     .limit(1);
   return h ? { planId: h.planId, at: h.at.toISOString() } : null;
 }
 
-/** Puts back what an import replaced. Only the latest import of each table can be undone. */
+/**
+ * Puts back what an import replaced. Only the latest import of each table can be undone ("latest" in the
+ * order the imports were applied, not previewed). Runs one at a time with the GL imports.
+ */
 export async function undoGlImport(planId: number, userId: number): Promise<string> {
-  const entries = await db.select().from(schema.importHistory).where(and(eq(schema.importHistory.planId, planId), isNull(schema.importHistory.undoneAt)));
-  if (!entries.length) throw new Error('Nothing to undo for this import');
-  for (const e of entries) {
-    const later = await db
-      .select({ id: schema.importHistory.id })
-      .from(schema.importHistory)
-      .where(
-        and(
-          eq(schema.importHistory.tableName, e.tableName),
-          e.ledger ? eq(schema.importHistory.ledger, e.ledger) : undefined,
-          isNull(schema.importHistory.undoneAt),
-          sql`${schema.importHistory.planId} > ${planId}`,
-        ),
-      )
-      .limit(1);
-    if (later.length) throw new Error('A later import replaced the same data: undo that one first');
-  }
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    await lockJob(tx, 'gl');
+    const entries = await tx.select().from(schema.importHistory).where(and(eq(schema.importHistory.planId, planId), isNull(schema.importHistory.undoneAt)));
+    if (!entries.length) throw new Error('Nothing to undo for this import');
+    for (const e of entries) {
+      const later = await tx
+        .select({ id: schema.importHistory.id })
+        .from(schema.importHistory)
+        .where(
+          and(
+            eq(schema.importHistory.tableName, e.tableName),
+            e.ledger ? eq(schema.importHistory.ledger, e.ledger) : undefined,
+            isNull(schema.importHistory.undoneAt),
+            sql`${schema.importHistory.id} > ${e.id}`,
+          ),
+        )
+        .limit(1);
+      if (later.length) throw new Error('A later import replaced the same data: undo that one first');
+    }
     for (const e of entries) {
       const table = e.tableName as GlTable;
       await tx.delete(TABLE[table]).where(scopeWhere(table, e.scope as GlScope));
@@ -108,6 +113,6 @@ export async function undoGlImport(planId: number, userId: number): Promise<stri
       action: 'undo',
       changes: { planId, ledger: entries[0].ledger, restored: Object.fromEntries(entries.map((e) => [e.tableName, e.removed])) },
     });
+    return `Import undone: ${entries.map((e) => `${e.removed.toLocaleString('en-US')} ${e.tableName.replace('_', ' ')} rows put back`).join(', ')}`;
   });
-  return `Import undone: ${entries.map((e) => `${e.removed.toLocaleString('en-US')} ${e.tableName.replace('_', ' ')} rows put back`).join(', ')}`;
 }

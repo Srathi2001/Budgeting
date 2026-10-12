@@ -7,6 +7,7 @@ import { priorVersion } from './prior-version';
 import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import { isFinance, type Actor } from '@/lib/auth/permissions';
+import { writeGuard } from '@/lib/write-guard';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { bohAccountBudget } from './boh';
 import { referenceBudget } from './reference';
@@ -275,6 +276,9 @@ export async function saveAdminItem(
   let id = item.id;
   // the item and its audit row (before and after) land together
   const found = await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const cur = await writeGuard(tx, versionId);
+    if (!cur || cur.status === 'LOCKED') return 'locked' as const;
     let before: typeof schema.adminItems.$inferSelect | undefined;
     if (id) {
       [before] = await tx.select().from(schema.adminItems).where(and(eq(schema.adminItems.id, id), eq(schema.adminItems.versionId, versionId)));
@@ -287,6 +291,7 @@ export async function saveAdminItem(
     await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_item', entityId: String(id), action: before ? 'update' : 'create', changes: { from: before ? { kind: before.kind, dept: before.dept, payer: before.payer, data: before.data } : null, to: after } });
     return true;
   });
+  if (found === 'locked') return { error: 'This budget version is locked' };
   if (!found) return { error: 'Item not found' };
   return { id: id! };
 }
@@ -295,11 +300,15 @@ export async function deleteAdminItem(user: Actor, versionId: number, id: number
   if (!isFinance(user)) return { error: 'Admin overheads are entered by Finance' };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') return { error: 'This budget version is locked' };
-  await db.transaction(async (tx) => {
+  const locked = await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const cur = await writeGuard(tx, versionId);
+    if (!cur || cur.status === 'LOCKED') return true;
     const [row] = await tx.delete(schema.adminItems).where(and(eq(schema.adminItems.id, id), eq(schema.adminItems.versionId, versionId))).returning();
     if (row) await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_item', entityId: String(id), action: 'delete', changes: { from: { kind: row.kind, dept: row.dept, payer: row.payer, data: row.data }, to: null } });
+    return false;
   });
-  return {};
+  return locked ? { error: 'This budget version is locked' } : {};
 }
 
 const PAYROLL_FIELDS = { headcount: 'int', ctc: 'amount', newHeadcount: 'int', newCtc: 'amount', capPct: 'pct', mjnhPct: 'pct', asrePct: 'pct', seniorCtc: 'amount' } as const;
@@ -314,6 +323,12 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
   let saved = 0;
   // every change and its audit row land together: one transaction for the batch
   await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const cur = await writeGuard(tx, versionId);
+    if (!cur || cur.status === 'LOCKED') {
+      errors.push('This budget version is locked');
+      return;
+    }
     for (const c of changes) {
       const v = c.value;
       if (v !== null && (!Number.isFinite(v) || Math.abs(v) > 1e11)) {

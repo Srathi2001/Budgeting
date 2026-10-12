@@ -7,6 +7,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@/db';
 import { canEditProperty, entersData, isAdmin, type Actor, type EditCheck } from '@/lib/auth/permissions';
+import { writeGuard, type Exec } from '@/lib/write-guard';
 import { changedFields, pick } from '@/lib/audit-diff';
 import { withDefaults, type BohAssumptionKey } from '@/lib/engine/assumptions';
 import { CONTRACT_KIND, CONTRACT_TERMS, type ContractKind, type ContractRow, type ContractTerms } from './boh-types';
@@ -19,6 +20,9 @@ async function openVersion(versionId: number) {
   if (v.status === 'LOCKED') return { error: 'This budget version is locked' };
   return { v };
 }
+
+/** inside a save, after writeGuard: why the version can't take it (null: it can) */
+const held = (v: schema.BudgetVersion | undefined) => (!v ? 'Version not found' : v.status === 'LOCKED' ? 'This budget version is locked' : null);
 
 // ---- assumptions ---------------------------------------------------------------------------------
 
@@ -35,21 +39,27 @@ export async function saveBohAssumptionsAs(user: Actor, versionId: number, input
   if (o.error) return { error: o.error };
   const parsed = AssumptionInput.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
-  const before = withDefaults(o.v!.assumptions);
-  // the change and its audit row land together
-  await db.transaction(async (tx) => {
-  await tx
-    .update(schema.budgetVersions)
-    .set({ assumptions: { ...o.v!.assumptions, ...parsed.data } })
-    .where(eq(schema.budgetVersions.id, versionId));
-  await tx.insert(schema.auditLog).values({
-    userId: user.id,
-    versionId,
-    entity: 'boh_assumptions',
-    action: 'update',
-    changes: { from: Object.fromEntries(Object.keys(parsed.data).map((k) => [k, before[k as BohAssumptionKey]])), to: parsed.data },
+  // the change and its audit row land together; the version row is read in here and held, so another
+  // Admin's change of other assumptions (Admin → Assumptions, yearly rules) is kept, not overwritten
+  const refused = await db.transaction(async (tx) => {
+    const v = await writeGuard(tx, versionId, { versionUpdate: true });
+    const open = held(v);
+    if (open) return open;
+    const before = withDefaults(v!.assumptions);
+    await tx
+      .update(schema.budgetVersions)
+      .set({ assumptions: { ...v!.assumptions, ...parsed.data } })
+      .where(eq(schema.budgetVersions.id, versionId));
+    await tx.insert(schema.auditLog).values({
+      userId: user.id,
+      versionId,
+      entity: 'boh_assumptions',
+      action: 'update',
+      changes: { from: Object.fromEntries(Object.keys(parsed.data).map((k) => [k, before[k as BohAssumptionKey]])), to: parsed.data },
+    });
+    return null;
   });
-  });
+  if (refused) return { error: refused };
   return { ok: 'Assumptions saved' };
 }
 
@@ -88,7 +98,10 @@ export async function saveInsuranceAs(user: Actor, versionId: number, input: unk
   if (o.error) return { error: o.error };
   const parsed = InsuranceInput.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
-  await db.transaction(async (tx) => {
+  const refused = await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const open = held(await writeGuard(tx, versionId));
+    if (open) return open;
     const ids = parsed.data.map((r) => r.propertyId);
     const before = ids.length ? await tx.select().from(schema.bohInsurance).where(and(eq(schema.bohInsurance.versionId, versionId), inArray(schema.bohInsurance.propertyId, ids))) : [];
     for (const r of parsed.data) {
@@ -106,7 +119,9 @@ export async function saveInsuranceAs(user: Actor, versionId: number, input: unk
       return b ? { insuredValue: b.insuredValue, parRate: b.parRate, plPremium: b.plPremium } : null;
     };
     await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'boh_insurance', action: 'update', changes: parsed.data.map((r) => ({ propertyId: r.propertyId, from: was(r.propertyId), to: { insuredValue: r.insuredValue, parRate: r.parRate, plPremium: r.plPremium } })) });
+    return null;
   });
+  if (refused) return { error: refused };
   return { ok: `Saved ${parsed.data.length} building${parsed.data.length === 1 ? '' : 's'}` };
 }
 
@@ -126,7 +141,10 @@ export async function saveWatchmenAs(user: Actor, versionId: number, input: unkn
   if (o.error) return { error: o.error };
   const parsed = WatchmenInput.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
-  await db.transaction(async (tx) => {
+  const refused = await db.transaction(async (tx) => {
+    // the version stays open until this commits (a lock waits for it)
+    const open = held(await writeGuard(tx, versionId));
+    if (open) return open;
     const ids = parsed.data.map((r) => r.propertyId);
     const before = new Map((ids.length ? await tx.select().from(schema.bohWatchmen).where(and(eq(schema.bohWatchmen.versionId, versionId), inArray(schema.bohWatchmen.propertyId, ids))) : []).map((w) => [w.propertyId, w.share]));
     for (const r of parsed.data) {
@@ -139,7 +157,9 @@ export async function saveWatchmenAs(user: Actor, versionId: number, input: unkn
           .onConflictDoUpdate({ target: [schema.bohWatchmen.versionId, schema.bohWatchmen.propertyId], set: { share: r.share, updatedAt: new Date(), updatedBy: user.id } });
     }
     await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'boh_watchmen', action: 'update', changes: parsed.data.map((r) => ({ propertyId: r.propertyId, from: before.get(r.propertyId) ?? null, to: r.share || null })) });
+    return null;
   });
+  if (refused) return { error: refused };
   return { ok: `Saved ${parsed.data.length} building${parsed.data.length === 1 ? '' : 's'}` };
 }
 
@@ -214,24 +234,32 @@ export async function saveContractsAs(user: Actor, versionId: number, kind: Cont
   if (!parsed.success) return { saved: 0, errors: [parsed.error.issues[0]?.message ?? 'Invalid input'] };
   const { lines, deleted } = parsed.data;
   const ids = [...lines.map((l) => l.id), ...deleted].filter((x): x is number => x !== null);
-  const existing = new Map(
-    ids.length ? (await db.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, versionId), inArray(schema.bohContracts.id, ids)))).map((r) => [r.id, r]) : [],
-  );
+  const rowsOf = async (on: Exec) =>
+    new Map(ids.length ? (await on.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, versionId), inArray(schema.bohContracts.id, ids)))).map((r) => [r.id, r]) : []);
+  const buildings = (rows: Map<number, typeof schema.bohContracts.$inferSelect>) => new Set<number>([...lines.map((l) => l.propertyId), ...[...rows.values()].map((r) => r.propertyId)]);
   const props = new Map((await db.select({ id: schema.properties.id, code: schema.properties.code }).from(schema.properties)).map((p) => [p.id, p.code]));
-  // every building touched (where a row is now and where it goes) is checked before the write starts:
-  // the checks read the database on their own connection, which must not wait on the write
-  const checks = new Map<number, EditCheck>();
-  const touched = new Set<number>([...lines.map((l) => l.propertyId), ...[...existing.values()].map((r) => r.propertyId)]);
-  for (const id of touched) checks.set(id, await canEditProperty(user, versionId, id, 'PM'));
-  const may = (propertyId: number): EditCheck => checks.get(propertyId) ?? { ok: false, reason: 'Unknown building' };
   const errors: string[] = [];
   let saved = 0;
   // one audit row per contract row, with its fields before and after
   const FIELDS = ['propertyId', 'account', 'supplier', 'description', 'terms', 'quantity', 'rate', 'startMonth', 'startDate', 'endDate', 'renewal', 'renewalRate', 'renewalTerms', 'remarks'] as const;
   const trail: (typeof schema.auditLog.$inferInsert)[] = [];
   const log = (id: number, propertyId: number, action: string, changes: unknown) => trail.push({ userId: user.id, versionId, propertyId, entity: 'boh_contracts', entityId: String(id), action, changes: { kind, ...(changes as object) } });
+  // read before the transaction (never the global db inside it): which buildings to hold
+  const hold = [...buildings(await rowsOf(db))];
   // deletes, inserts, updates and their audit rows land together or not at all
   await db.transaction(async (tx) => {
+    // every building touched (where a row is now and where it goes) is held until this commits, and the
+    // rows and checks are read in here: a submission waits for the save, and the save sees the status
+    const cur = await writeGuard(tx, versionId, { properties: hold });
+    const open = held(cur);
+    if (open) {
+      errors.push(open);
+      return;
+    }
+    const existing = await rowsOf(tx);
+    const checks = new Map<number, EditCheck>();
+    for (const id of buildings(existing)) checks.set(id, await canEditProperty(user, versionId, id, 'PM', tx));
+    const may = (propertyId: number): EditCheck => checks.get(propertyId) ?? { ok: false, reason: 'Unknown building' };
     for (const id of deleted) {
       const r = existing.get(id);
       if (!r || r.kind !== kind) {

@@ -1,12 +1,13 @@
 'use server';
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { db, schema } from '@/db';
 import { requireAdmin } from '@/lib/auth/dal';
 import { recalcLines } from '@/lib/budget/calc';
+import { lockJob, writeGuard } from '@/lib/write-guard';
 import { rollForward } from '@/lib/budget/rollforward';
 import { getSettings, settingsChanged, DEFAULT_SETTINGS, type AppSettings } from '@/lib/settings';
 import { DEFAULT_ASSUMPTIONS, type AdminAssumptions } from '@/lib/engine/assumptions';
@@ -52,16 +53,51 @@ export async function setVersionStatus(versionId: number, status: 'OPEN' | 'LOCK
       if (other) throw new Error(`${other.name} is already the approved ${v.year} budget: only one version of a year can be locked`);
     }
     const why = reason?.trim().slice(0, 2000) || null;
-    // locking freezes what is otherwise worked out live (comparatives, forecast, building overheads, fees);
-    // reopening drops the snapshot so the version follows the live data again
-    const parts = status === 'LOCKED' ? await (await import('@/lib/budget/snapshot')).takeSnapshot(v) : [];
-    await db.transaction(async (tx) => {
-      await tx.delete(schema.versionSnapshots).where(eq(schema.versionSnapshots.versionId, versionId));
-      for (const p of parts) await tx.insert(schema.versionSnapshots).values({ versionId, part: p.part, data: p.data, createdBy: user.id });
-      await tx.update(schema.budgetVersions).set({ status }).where(eq(schema.budgetVersions.id, versionId));
-      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'version', action: status === 'LOCKED' ? 'lock' : 'unlock', changes: { from: v.status, to: status, reason: why } });
-    });
-    return status === 'LOCKED' ? 'Version locked' : 'Version reopened';
+    if (status === 'OPEN') {
+      // reopening drops the snapshot so the version follows the live data again
+      await db.transaction(async (tx) => {
+        const cur = await writeGuard(tx, versionId, { versionUpdate: true });
+        if (!cur) throw new Error('Version not found');
+        await tx.delete(schema.versionSnapshots).where(eq(schema.versionSnapshots.versionId, versionId));
+        await tx.update(schema.budgetVersions).set({ status }).where(eq(schema.budgetVersions.id, versionId));
+        await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'version', action: 'unlock', changes: { from: cur.status, to: status, reason: why } });
+      });
+      return 'Version reopened';
+    }
+    // 1. the lock: waits for the saves running now (they hold the version row), and every save after it sees
+    //    LOCKED inside its own transaction, so nothing can change the version's inputs any more
+    await db
+      .transaction(async (tx) => {
+        const cur = await writeGuard(tx, versionId, { versionUpdate: true, leases: true });
+        if (!cur) throw new Error('Version not found');
+        await tx.update(schema.budgetVersions).set({ status }).where(eq(schema.budgetVersions.id, versionId));
+        await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'version', action: 'lock', changes: { from: cur.status, to: status, reason: why } });
+      })
+      .catch((e: Error) => {
+        // two versions of a year locked at the same moment: the database keeps one (budget_versions_one_locked_per_year)
+        if (/one_locked_per_year/.test(String((e.cause as Error | undefined)?.message ?? e.message))) throw new Error(`Another ${v.year} version was just locked: only one version of a year can be locked`);
+        throw e;
+      });
+    // 2. the freeze: what is otherwise worked out live (comparatives, forecast, building overheads, fees),
+    //    worked out from the inputs as they were locked
+    try {
+      const parts = await (await import('@/lib/budget/snapshot')).takeSnapshot(v);
+      await db.transaction(async (tx) => {
+        const cur = await writeGuard(tx, versionId, { versionUpdate: true });
+        if (cur?.status !== 'LOCKED') return; // reopened meanwhile: nothing to freeze
+        await tx.delete(schema.versionSnapshots).where(eq(schema.versionSnapshots.versionId, versionId));
+        for (const p of parts) await tx.insert(schema.versionSnapshots).values({ versionId, part: p.part, data: p.data, createdBy: user.id });
+      });
+    } catch (e) {
+      // without its snapshot the version can't stay locked: back to open, and say so
+      await db.transaction(async (tx) => {
+        await writeGuard(tx, versionId, { versionUpdate: true });
+        await tx.update(schema.budgetVersions).set({ status: 'OPEN' }).where(eq(schema.budgetVersions.id, versionId));
+        await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'version', action: 'unlock', changes: { from: 'LOCKED', to: 'OPEN', reason: `Freezing the figures failed: ${(e as Error).message}`.slice(0, 2000) } });
+      });
+      throw new Error(`The version could not be locked: ${(e as Error).message}`);
+    }
+    return 'Version locked';
   });
 }
 
@@ -84,6 +120,9 @@ export async function recalcVersion(versionId: number): Promise<Result> {
     if (v.isBaseline) throw new Error(`${v.name} is the approved baseline: its figures are kept as imported`);
     if (v.status === 'LOCKED') throw new Error(`${v.name} is locked: its figures are kept as they were`);
     await db.transaction(async (tx) => {
+      // after the lease saves running now; the version can't be locked until this commits
+      const cur = await writeGuard(tx, versionId, { leases: true });
+      if (cur?.status === 'LOCKED') throw new Error(`${v.name} is locked: its figures are kept as they were`);
       await recalcLines(tx, versionId);
       await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'version', action: 'recalculate', changes: null });
     });
@@ -112,9 +151,11 @@ export async function saveAssumptions(versionId: number, input: AdminAssumptions
   const user = await requireAdmin();
   return wrap(async () => {
     const a = AssumptionsSchema.parse(input);
-    const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-    if (!v || v.status === 'LOCKED') throw new Error('Version is locked');
     await db.transaction(async (tx) => {
+      // the version row as it is now, held until this commits: another Admin's change of other settings
+      // (yearly rules, Building overheads' Assumptions tab) can't be overwritten with an old copy
+      const v = await writeGuard(tx, versionId, { versionUpdate: true, leases: true });
+      if (!v || v.status === 'LOCKED') throw new Error('Version is locked');
       // keep the settings made elsewhere (Building overheads' Assumptions tab)
       await tx.update(schema.budgetVersions).set({ assumptions: { ...v.assumptions, ...a } }).where(eq(schema.budgetVersions.id, versionId));
       await recalcLines(tx, versionId);
@@ -143,10 +184,11 @@ export async function saveYearlyRules(versionId: number, input: z.infer<typeof Y
     const d = YearlySchema.parse(input);
     const total = d.fmSupervision.split.reduce((s, x) => s + x.share, 0);
     if (Math.abs(total - 1) > 0.0005) throw new Error(`The supervision split adds up to ${Math.round(total * 10000) / 100}%: it must be 100%`);
-    const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-    if (!v || v.status === 'LOCKED') throw new Error('Version is locked');
-    const before = { ...DEFAULT_ASSUMPTIONS, ...v.assumptions };
     await db.transaction(async (tx) => {
+      // the version row as it is now, held until this commits (see saveAssumptions)
+      const v = await writeGuard(tx, versionId, { versionUpdate: true });
+      if (!v || v.status === 'LOCKED') throw new Error('Version is locked');
+      const before = { ...DEFAULT_ASSUMPTIONS, ...v.assumptions };
       await tx.update(schema.budgetVersions).set({ assumptions: { ...v.assumptions, ...d } }).where(eq(schema.budgetVersions.id, versionId));
       await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'yearly_rules', action: 'update', changes: changedFields(pick(before, ['payrollRules', 'fmSupervision']), d) });
     });
@@ -166,8 +208,11 @@ export async function saveMappings(input: AppSettings): Promise<Result> {
   const user = await requireAdmin();
   return wrap(async () => {
     const d = MappingsSchema.parse(input) as AppSettings;
-    const before = await getSettings();
     await db.transaction(async (tx) => {
+      // one mappings save at a time; "before" read in here so two Admins' saves are recorded correctly
+      await lockJob(tx, 'settings');
+      const before: AppSettings = { ...DEFAULT_SETTINGS };
+      for (const r of await tx.select().from(schema.appSettings)) if (r.key in DEFAULT_SETTINGS) (before as unknown as Record<string, unknown>)[r.key] = r.value;
       for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof AppSettings)[]) {
         await tx
           .insert(schema.appSettings)
@@ -316,6 +361,9 @@ export async function importComparatives(versionId: number, form: FormData): Pro
     const saved = values.length;
     // the whole file lands, with its audit row, or nothing does
     await db.transaction(async (tx) => {
+      // the version stays open until this commits (a lock waits for it)
+      const cur = await writeGuard(tx, versionId);
+      if (!cur || cur.status === 'LOCKED') throw new Error('This version is locked: reopen it first');
       for (const x of values)
         await tx
           .insert(schema.comparatives)
@@ -485,6 +533,16 @@ export async function applyGlActuals(planId: number, force = false): Promise<Res
     const extra: string[] = [];
     const info = { planId, ledger, versionId, userId: user.id };
     await db.transaction(async (tx) => {
+      // the version stays open until this commits; one GL import (or undo) at a time; a plan is applied once
+      const cur = await writeGuard(tx, versionId);
+      if (!cur || cur.status === 'LOCKED') throw new Error('The version is locked: reopen it to import GL actuals into it');
+      await lockJob(tx, 'gl');
+      const claimed = await tx
+        .update(schema.importPlans)
+        .set({ appliedAt: new Date() })
+        .where(and(eq(schema.importPlans.id, planId), isNull(schema.importPlans.appliedAt)))
+        .returning({ id: schema.importPlans.id });
+      if (!claimed.length) throw new Error('This import has already been applied');
       // keep what is replaced, so the import can be undone
       for (const part of parts) await keepReplaced(tx, info, part.table, part.scope, part.incoming);
       await applyGlImport(versionId, v, user.id, { file: plan.file, preview: p.preview }, tx);

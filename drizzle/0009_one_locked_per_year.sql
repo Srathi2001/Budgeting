@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "budget_versions_one_locked_per_year" ON "budget_versions" USING btree ("year") WHERE "budget_versions"."status" = 'LOCKED';
