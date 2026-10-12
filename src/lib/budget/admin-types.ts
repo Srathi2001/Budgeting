@@ -10,6 +10,7 @@
 
 import type { AdminItem, ItemKind } from './admin-items';
 
+import { DEFAULT_PAYROLL_RULES, OTHER_DEPT_RULE, type PayrollRule } from '@/lib/engine/assumptions';
 export interface Dept {
   code: string;
   name: string;
@@ -35,23 +36,10 @@ export const DEPTS: Dept[] = [
 export const DEPT = new Map(DEPTS.map((d) => [d.code, d]));
 export const deptName = (code: string) => DEPT.get(code)?.name ?? `Cost centre ${code}`;
 
-/**
- * 2026 rules (PayrollxCost F:I and note B33). Capitalised to projects (PDD) and ASRE are shares of the
- * department's payroll plus the admin overheads ANPM pays for it; MJNH (SMAH) of its payroll only. ASRE
- * takes 5% of the senior staff of each department (PM 2026: 5% × 1,471,280.67), Senior Management in
- * full (`asreWhole`). Exco (family members) was nil in 2026: their payroll stays in G&A.
- */
-export const DEFAULT_RULES: Record<string, { cap: number; mjnh: number; asre: number; asreWhole?: boolean }> = {
-  '212': { cap: 1, mjnh: 0, asre: 0.05 },
-  '201': { cap: 0.1, mjnh: 0, asre: 0.05 },
-  '207': { cap: 0.05, mjnh: 0.21, asre: 0.05 },
-  '206': { cap: 0.1, mjnh: 0, asre: 0.05 },
-  '000': { cap: 0.05, mjnh: 0, asre: 0.05 },
-  '214': { cap: 0, mjnh: 0, asre: 0.05, asreWhole: true },
-};
-export const ruleOf = (dept: string) => DEFAULT_RULES[dept] ?? { cap: 0, mjnh: 0, asre: 0.05 };
+/** the payroll rule of a department: the version's rules (Admin → Assumptions; default: 2026) */
+export const ruleOf = (dept: string, rules: Record<string, PayrollRule> = DEFAULT_PAYROLL_RULES): PayrollRule => rules[dept] ?? OTHER_DEPT_RULE;
 
-export type AdminGroup = 'Payroll' | 'Staff costs' | 'Office & admin' | 'Vehicles' | 'IT & communication' | 'Professional fees' | 'Insurance' | 'Depreciation' | 'Bank charges';
+export type AdminGroup = 'Payroll' | 'Staff costs' | 'Office & admin' | 'Vehicles' | 'IT & communication' | 'Professional fees' | 'Insurance' | 'Depreciation' | 'Bank charges' | 'VAT';
 
 export interface AdminAccount {
   code: string;
@@ -161,9 +149,15 @@ export const ADMIN_ACCOUNTS: AdminAccount[] = [
     ['66202', 'Bank charges - other'],
     ['66203', 'Bank charges - POS & network'],
   ]),
+  // VAT is not in the cash flow (it passes through to the FTA, as in the 2026 budget); what cannot be
+  // recovered is a G&A cost (2026 budget: Admin(GA)xOverheads row 30, ANPM 20,000 and REHL 100,000)
+  ...A('VAT', [
+    ['73102', 'VAT expenses - non-recoverable'],
+    ['73103', 'VAT expenses - deemed supply'],
+  ]),
 ];
 export const ADMIN_ACCOUNT = new Map(ADMIN_ACCOUNTS.map((a) => [a.code, a]));
-export const ADMIN_GROUPS: AdminGroup[] = ['Staff costs', 'Office & admin', 'Vehicles', 'IT & communication', 'Professional fees', 'Insurance', 'Depreciation', 'Bank charges'];
+export const ADMIN_GROUPS: AdminGroup[] = ['Staff costs', 'Office & admin', 'Vehicles', 'IT & communication', 'Professional fees', 'Insurance', 'Depreciation', 'Bank charges', 'VAT'];
 export const isPayrollAccount = (code: string) => ADMIN_ACCOUNT.get(code)?.group === 'Payroll';
 /** salary allocated to buildings (FM staff, watchmen): a credit in payroll, shown apart */
 export const SALARY_ALLOCATION = '63112';
@@ -196,18 +190,6 @@ export const FEES = [
   { key: 'AMA', name: 'AMA fee to MJNH', base: 'Asset value' },
 ] as const;
 export type FeeKind = (typeof FEES)[number]['key'];
-
-/**
- * Fees of past budgets kept outside the tool, by year: the 2026 final budget (H.E. MJN_Budget 2026.xlsm,
- * PnLxREHLxANPM row 31 "General Admin Cost (PMA@6%)" and row 33 "AMA … 0.5% on properties valuation").
- * The base is the fee ÷ the rate.
- */
-export const PAST_FEES: Record<number, Record<FeeKind, { rate: number; fee: Record<FeeEntity, number> }>> = {
-  2026: {
-    PMA: { rate: 0.06, fee: { '501': 4046489.17, '502': 7975681.6, MALL: 3051000 } },
-    AMA: { rate: 0.005, fee: { '501': 5638982.08, '502': 7332500, MALL: 3520000 } },
-  },
-};
 
 export interface FeeRow {
   fee: FeeKind;
@@ -280,6 +262,10 @@ export interface AdminData {
   revenue: Record<SplitEntity, number>;
   /** back-up schedule items (vehicles, telephones, training, events, IT, capex, other) */
   items: AdminItem[];
+  /** the version's payroll rules by department (Admin → Assumptions) */
+  rules: Record<string, PayrollRule>;
+  /** last year's approved budget per department (reference only, e.g. 2026B): payroll cost to company, admin overheads */
+  prior: { label: string; payroll: Record<string, number>; admin: Record<string, number> } | null;
 }
 
 export type PayrollField = 'headcount' | 'ctc' | 'newHeadcount' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct' | 'seniorCtc';
@@ -293,9 +279,9 @@ export type AdminChange =
  * overheads ANPM pays for the department. Capitalised (PDD) and ASRE come off payroll + overheads, MJNH
  * off payroll; `net` is what stays in ANPM's G&A of the two together.
  */
-export function payrollSplit(r: Pick<PayrollRow, 'dept' | 'ctc' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct' | 'seniorCtc'>, oh = 0) {
+export function payrollSplit(r: Pick<PayrollRow, 'dept' | 'ctc' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct' | 'seniorCtc'>, oh = 0, rules?: Record<string, PayrollRule>) {
   const total = (r.ctc ?? 0) + (r.newCtc ?? 0);
-  const rule = ruleOf(r.dept);
+  const rule = ruleOf(r.dept, rules);
   const base = total + oh;
   const cap = base * (r.capPct ?? rule.cap);
   const mjnh = total * (r.mjnhPct ?? rule.mjnh);

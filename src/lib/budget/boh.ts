@@ -8,10 +8,12 @@ import 'server-only';
 import { cache } from 'react';
 import { and, eq, gte, inArray, like, lte, max } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { canEditProperty, isFinance, type Actor, type EditCheck } from '@/lib/auth/permissions';
+import { canEditProperty, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { withDefaults } from '@/lib/engine/assumptions';
-import { BOH_ACCOUNT, BOH_ACCOUNTS, CONTRACT_KIND_OF, phase, type BohBlock, type BohCalc, type BohChange, type BohLine, type BohRow, type ContractTerms } from './boh-types';
-import { contractAmount, contractMonths, forecastY1, parBudget, plBudget, waterBudget, watchmenBudget } from './boh-calc';
+import { BOH_ACCOUNT, BOH_ACCOUNTS, CONTRACT_KIND_OF, phase, type BohBlock, type BohCalc, type BohChange, type BohLine, type BohRow } from './boh-types';
+import { referenceBudget } from './reference';
+import { frozen } from './snapshot-store';
+import { contractYear, type ContractInput, forecastY1, parBudget, plBudget, waterBudget, watchmenBudget } from './boh-calc';
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -102,13 +104,17 @@ async function bohContext(version: schema.BudgetVersion, ids: number[]) {
     ids.length ? db.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, version.id), inArray(schema.bohContracts.propertyId, ids))) : Promise.resolve([]),
     seasonalPatterns(version.year),
   ]);
+  // a locked version keeps the cells it was locked with (water & electricity, municipal, phasing, contracts)
+  const snap = await frozen<BohSnapshot>(version, 'boh');
+  const frozenCells = snap ? new Map(snap.cells.map(([pid, account, cell]) => [`${pid}|${account}`, cell])) : null;
   return {
+    frozen: frozenCells,
     version,
     a: withDefaults(version.assumptions),
     // the imported 2026 budget is history: nothing is calculated for it
     calcOn: !version.isBaseline,
     m,
-    cutoff,
+    cutoff: snap ? snap.cutoff : cutoff,
     budget: by(budget),
     insurance: new Map(insurance.map((i) => [i.propertyId, i])),
     watchmen: new Map(watchmen.map((w) => [w.propertyId, w.share])),
@@ -135,6 +141,35 @@ interface BohCell {
 
 /** One building's account: its actuals, forecast, budget (entered or calculated) and phasing. */
 function cellOf(ctx: BohContext, propertyId: number, account: string): BohCell {
+  if (ctx.frozen) {
+    const f = ctx.frozen.get(`${propertyId}|${account}`);
+    // a copy: the page adds its reference figures to the row
+    return f ? structuredClone(f) : { row: { account, a2: null, a1: null, ytd: null, f: null, b: null, entered: null, calc: null, dueMonth: null, defaultDue: 1 }, months: z12(), cash: z12() };
+  }
+  return liveCell(ctx, propertyId, account);
+}
+
+/** the building overheads as stored when a version is locked (version_snapshots): cells with figures only */
+export interface BohSnapshot {
+  cutoff: number;
+  cells: [number, string, BohCell][];
+}
+
+/** Every building's cells worked out now, for a snapshot. */
+export async function bohSnapshot(version: schema.BudgetVersion): Promise<BohSnapshot> {
+  const ids = (await db.select({ id: schema.properties.id }).from(schema.properties)).map((p) => p.id);
+  const ctx = await bohContext({ ...version, status: 'OPEN' }, ids);
+  const cells: BohSnapshot['cells'] = [];
+  for (const id of ids)
+    for (const a of BOH_ACCOUNTS) {
+      const c = liveCell(ctx, id, a.code);
+      const r = c.row;
+      if ([r.a2, r.a1, r.ytd, r.f, r.b, r.entered].some((v) => v !== null) || c.months.some((v) => v) || c.cash.some((v) => v)) cells.push([id, a.code, c]);
+    }
+  return { cutoff: ctx.cutoff, cells };
+}
+
+function liveCell(ctx: BohContext, propertyId: number, account: string): BohCell {
   const a = BOH_ACCOUNT.get(account)!;
   const Y = ctx.version.year;
   const yrs = ctx.m.get(propertyId)?.get(account);
@@ -152,20 +187,31 @@ function cellOf(ctx: BohContext, propertyId: number, account: string): BohCell {
   if (ctx.calcOn) {
     const ins = ctx.insurance.get(propertyId);
     const share = ctx.watchmen.get(propertyId);
-    if (account === WATER) [calc, b] = ['water', waterBudget(f, ctx.a.bohUtilitiesPct)];
+    // water & electricity is calculated from last year's forecast; a building with no history (no
+    // forecast) takes the amount typed instead (audit FIN-011)
+    if (account === WATER && f) [calc, b] = ['water', waterBudget(f, ctx.a.bohUtilitiesPct)];
     else if (account === PAR && ins?.insuredValue && ins.parRate) [calc, b] = ['insurance', parBudget(ins.insuredValue, ins.parRate, ctx.a.insParPct)];
     else if (account === PL && ins?.plPremium) [calc, b] = ['insurance', plBudget(ins.plPremium, ctx.a.insPlPct)];
     else if (account === WATCHMEN && share) [calc, b] = ['watchmen', watchmenBudget(share, ctx.a.watchmanCost)];
-    else if (CONTRACT_KIND_OF.has(account) && contracts.length) [calc, b] = ['contracts', r2(contracts.reduce((s, c) => s + contractAmount(c), 0))];
+    else if (CONTRACT_KIND_OF.has(account) && contracts.length) [calc, b] = ['contracts', r2(contracts.reduce((s, c) => s + contractYear(c as ContractInput, Y).total, 0))];
     else if (account === MUNICIPAL && entered === null && f) [calc, b] = ['forecast', f];
   }
 
   let months: number[];
+  let cash: number[];
   if (calc === 'contracts') {
+    // each contract over its own period: only its days in the year are booked; paid by its terms (FIN-008)
     months = z12();
-    for (const c of contracts) contractMonths({ terms: c.terms as ContractTerms, quantity: c.quantity, rate: c.rate, startMonth: c.startMonth }).forEach((v, i) => (months[i] += v));
-  } else months = phase(b ?? 0, a.phasing, due, ctx.patterns.get(account));
-  const cash = a.paidUpfront ? phase(b ?? 0, 'due', due) : months;
+    cash = z12();
+    for (const c of contracts) {
+      const y = contractYear(c as ContractInput, Y);
+      y.expense.forEach((v, i) => (months[i] += v));
+      y.cash.forEach((v, i) => (cash[i] += v));
+    }
+  } else {
+    months = phase(b ?? 0, a.phasing, due, ctx.patterns.get(account));
+    cash = a.paidUpfront ? phase(b ?? 0, 'due', due) : months;
+  }
   return {
     row: {
       account,
@@ -192,7 +238,8 @@ export async function bohAccountBudget(version: schema.BudgetVersion, account: s
   return bs.length ? r2(bs.reduce((s, b) => s + b, 0)) : null;
 }
 
-export async function loadBuildingOverheads(version: schema.BudgetVersion, props: schema.Property[], editable: Set<number>) {
+/** `editable`: buildings whose property manager inputs the user may change; `finEditable`: Finance's inputs */
+export async function loadBuildingOverheads(version: schema.BudgetVersion, props: schema.Property[], editable: Set<number>, finEditable: Set<number> = new Set()) {
   const ids = props.map((p) => p.id);
   const bus = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
   const ctx = await readCtx(version, ids);
@@ -204,9 +251,19 @@ export async function loadBuildingOverheads(version: schema.BudgetVersion, props
     buName: bus.get(p.buCode) ?? p.buCode,
     pm: p.coordinator,
     editable: editable.has(p.id),
+    finEditable: finEditable.has(p.id),
     rows: BOH_ACCOUNTS.map((a) => cellOf(ctx, p.id, a.code).row),
   }));
-  return { blocks, cutoff: ctx.cutoff };
+  // last year's approved budget, reference only (2026B from the 2026 workbook)
+  const ref = await referenceBudget(version.year - 1, 'boh', ids);
+  for (const b of blocks) {
+    for (const r of ref.filter((x) => x.propertyId === b.propertyId)) {
+      const row = b.rows.find((x) => x.account === r.account);
+      if (row) Object.assign(row, { pb: (row.pb ?? 0) + r.amount, pbNote: r.note });
+      else (b.pbOther ??= []).push({ account: r.account, amount: r.amount, note: r.note });
+    }
+  }
+  return { blocks, cutoff: ctx.cutoff, priorLabel: ref.length ? `${version.year - 1}B` : null };
 }
 
 /** a calculated budget is changed where it is calculated, not typed (municipal charges excepted) */
@@ -219,7 +276,7 @@ export async function saveBuildingOverheads(user: Actor, versionId: number, chan
   if (version.status === 'LOCKED') return { saved: 0, errors: ['This budget version is locked'] };
   const props = new Map((await db.select().from(schema.properties)).map((p) => [p.id, p]));
   const ctx = await bohContext(version, [...new Set(changes.map((c) => c.propertyId))].filter((id) => props.has(id)));
-  const checks = new Map<number, EditCheck>();
+  const checks = new Map<string, EditCheck>();
   const errors: string[] = [];
   let saved = 0;
   for (const c of changes) {
@@ -237,19 +294,17 @@ export async function saveBuildingOverheads(user: Actor, versionId: number, chan
       errors.push(`${p.code} ${acct.name}: month 1–12`);
       continue;
     }
-    if (acct.owner === 'FIN' && !isFinance(user)) {
-      errors.push(`${p.code} ${acct.name}: entered by Finance`);
-      continue;
-    }
     const calc = cellOf(ctx, p.id, c.account).row.calc;
     if (fixedCalc(calc) && c.amount !== null) {
       errors.push(`${p.code} ${acct.name}: calculated (${calc === 'contracts' ? 'the contract schedule' : calc === 'watchmen' ? 'Security allocation' : 'Assumptions'})`);
       continue;
     }
-    if (!checks.has(p.id)) checks.set(p.id, await canEditProperty(user, versionId, p.id));
-    const check = checks.get(p.id)!;
+    // whose input the account is decides who may change it (and when)
+    const key = `${p.id}|${acct.owner}`;
+    if (!checks.has(key)) checks.set(key, await canEditProperty(user, versionId, p.id, acct.owner));
+    const check = checks.get(key)!;
     if (!check.ok) {
-      errors.push(`${p.code}: ${check.reason}`);
+      errors.push(`${p.code} ${acct.name}: ${check.reason}`);
       continue;
     }
     const where = and(eq(schema.bohBudget.versionId, versionId), eq(schema.bohBudget.propertyId, p.id), eq(schema.bohBudget.account, c.account));

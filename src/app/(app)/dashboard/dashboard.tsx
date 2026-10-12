@@ -183,7 +183,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
               sub={`${F}: ${compact(m.forecastTotal)}`}
               spark={m.budget}
             />
-            <StatTile label="Cash inflow" value={compact(m.cashTotal)} sub="Rent + VAT + deposits" spark={m.cash} />
+            <StatTile label="Cash inflow" value={compact(m.cashTotal)} sub="Rent cheques + deposits, ex VAT" spark={m.cash} />
             <StatTile label="Occupancy (avg)" value={pctTxt(sum(m.occ) / 12)} sub={`${m.leased} of ${m.units} units leased now`} spark={m.occ} />
             <StatTile label="Vacancy loss" value={compact(m.vacancyLoss)} sub={`${pctTxt(m.total ? m.vacancyLoss / m.total : null)} of ${B}`} />
             <StatTile label={`Leases due ${data.year}`} value={compact(m.dueRent)} sub={`${m.dueCount} leases · ${pctTxt(m.renewalRate)} renewing${m.avgVacancy === null ? '' : ` · new tenants after ${Math.round(m.avgVacancy)} days`}`} />
@@ -198,7 +198,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
           <div className="grid gap-4 xl:grid-cols-2">
             <ChartCard
               title={`Revenue by month · ${B} vs ${F}`}
-              sub={`Budget revenue recognised each month · ${F}: actuals${data.forecastCutoff ? ` to ${MONTHS[data.forecastCutoff - 1]}` : ''}, then the Lease Budget projection`}
+              sub={`Budget revenue recognised each month · ${F}: actuals${data.forecastCutoff ? ` to ${MONTHS[data.forecastCutoff - 1]}` : ''}, then the leases and the property managers' inputs`}
               legend={
                 <Legend
                   shape="line"
@@ -222,7 +222,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
 
             <ChartCard
               title={`Revenue vs cash inflow · ${data.year}`}
-              sub="Cash follows the cheque schedules; it includes VAT and security deposits"
+              sub="Cash follows the cheque schedules; it includes security deposits, not VAT (passed through to the FTA)"
               legend={
                 <Legend
                   items={[
@@ -360,7 +360,7 @@ export function Dashboard({ data, reports, locked }: { data: DashboardData; repo
             </div>
             <div>
               <dt>Cash inflow</dt>
-              <dd>Rent cheques in their cheque month, plus VAT on commercial and labour rent, plus security deposits received less refunded.</dd>
+              <dd>Rent cheques in their cheque month, plus security deposits received less refunded. VAT is left out: it passes through to the FTA, as in the 2026 budget.</dd>
             </div>
             <div>
               <dt>Occupancy</dt>

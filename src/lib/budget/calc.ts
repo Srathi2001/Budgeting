@@ -78,7 +78,7 @@ export type StoredCalc = Omit<LeaseResult, keyof MonthlySeries> & {
   revenue: number[];
   /** rent cheques ex VAT */
   cash: number[];
-  /** total cash inflow: rent + VAT + deposits in - deposits out */
+  /** total cash inflow: rent cheques + deposits in - deposits out (VAT passes through to the FTA) */
   cashFlow: number[];
   /**
    * monthly revenue of the year before the budget year, from the same leases and inputs: the months

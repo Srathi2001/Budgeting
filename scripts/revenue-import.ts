@@ -3,6 +3,7 @@
 //   npx tsx scripts/revenue-import.ts <Revenue Recognition Summary.xlsx>           preview only
 //   npx tsx scripts/revenue-import.ts <Revenue Recognition Summary.xlsx> --apply   import
 import 'dotenv/config';
+import { scriptActor } from './script-actor';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { db } from '../src/db';
@@ -12,7 +13,7 @@ async function main() {
   const [file, flag] = process.argv.slice(2);
   if (!file) throw new Error('usage: revenue-import.ts <report.xlsx> [--apply]');
   const report = parseRevenueRecognition(readFileSync(file));
-  const p = flag === '--apply' ? await applyRevenueImport(report, null, basename(file)) : (await planRevenueImport(report)).preview;
+  const p = flag === '--apply' ? await applyRevenueImport(report, await scriptActor(), basename(file)) : (await planRevenueImport(report)).preview;
   console.log(`Accounting periods ${p.accountingPeriods} (${p.from} – ${p.to}) · forecast ${p.forecastPeriod} · ${p.matched} properties`);
   console.table(p.years);
   console.log(`Oracle forecast (reference): ${p.oracleForecast.toLocaleString('en-US')}`);

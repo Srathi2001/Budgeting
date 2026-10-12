@@ -47,6 +47,23 @@ export function monthsOfYear(year: number): MonthBucket[] {
   return out;
 }
 
+/** The same calendar date `years` later (29 February → 1 March of a non-leap year). */
+export function addYears(day: Day, years: number): Day {
+  const d = new Date(day * MS_PER_DAY);
+  return dayFromYMD(d.getUTCFullYear() + years, d.getUTCMonth() + 1, d.getUTCDate());
+}
+
+/**
+ * Last day of a contract term that starts on `start`. A term of whole years (365 days a year, give or take
+ * a day) runs in calendar years, to the day before the same date: 1-Jan-2028 → 31-Dec-2028, a leap year
+ * included. Any other term is counted in days.
+ */
+export function termEnd(start: Day, termDays: number): Day {
+  const years = Math.round(termDays / 365);
+  if (years >= 1 && Math.abs(termDays - years * 365) <= years) return addYears(start, years) - 1;
+  return start + termDays - 1;
+}
+
 export function overlapDays(aStart: Day, aEnd: Day, bStart: Day, bEnd: Day): number {
   const s = Math.max(aStart, bStart);
   const e = Math.min(aEnd, bEnd);

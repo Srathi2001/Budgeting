@@ -20,6 +20,7 @@ export const USE_GROUPS: { key: UseGroup; label: string }[] = [
 ];
 
 /** single negotiated deals, always counted as whole-building leases */
+/** properties let as a whole building, by name: a mapping (Admin → Mappings; settings.ts) */
 const WHOLE_BUILDING_NAMES = ['MIRDIFF SHOPPING MALL', 'MJN AL WARQAA SCHOOL', 'AL RAFA BUILDING (PLAZA 2)'];
 
 const GROUP_OF: Record<Category, UseGroup | null> = {
@@ -73,13 +74,14 @@ const add = (m: Map<string, Acc>, k: string, l: PsfLine) => {
 const stat = (a: Acc): PsfStat => ({ psf: a.area > 0 ? a.rent / a.area : 0, area: a.area, units: a.units });
 const byPsf = <T extends PsfStat>(a: T, b: T) => b.psf - a.psf;
 
-export function buildRentPsf(lines: PsfLine[], filters: Filters): RentPsf {
+export function buildRentPsf(lines: PsfLine[], filters: Filters, wholeBuildingNames: string[] = WHOLE_BUILDING_NAMES): RentPsf {
+  const wholeNames = new Set(wholeBuildingNames.map((n) => n.trim().toUpperCase()));
   // whole-building properties, from all lines (before filters): all leased lines on one lease
   const leases = new Map<number, Set<string>>();
   const named = new Set<number>();
   for (const l of lines) {
     if (l.leaseNumber) leases.set(l.propertyId, (leases.get(l.propertyId) ?? new Set()).add(l.leaseNumber));
-    if (WHOLE_BUILDING_NAMES.includes(l.propertyName.trim().toUpperCase())) named.add(l.propertyId);
+    if (wholeNames.has(l.propertyName.trim().toUpperCase())) named.add(l.propertyId);
   }
   const whole = (id: number) => named.has(id) || leases.get(id)?.size === 1;
 

@@ -43,7 +43,7 @@ export default async function ConsolidatedPage() {
           yy={String(year).slice(2)}
           head="Cash flow"
           lines={cashStatement(atoms, expenses)}
-          basis="AED. Rent cheques with VAT in their cheque month, other income as booked, security deposits received less refunded; a running balance shows its quarter-end value."
+          basis="AED, ex VAT (VAT passes through to the FTA, as the 2026 budget). Rent cheques in their cheque month, other income as booked, security deposits received less refunded; a running balance shows its quarter-end value."
           caption={`Cash flow by quarter, ${version.name}`}
         />
       </section>

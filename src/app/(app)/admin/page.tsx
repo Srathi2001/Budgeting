@@ -1,9 +1,12 @@
 import { redirect } from 'next/navigation';
 import { asc, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { requireUser, isFinance, getActiveVersion, requireVersion } from '@/lib/auth/dal';
+import { requireUser, isAdmin, getActiveVersion, requireVersion } from '@/lib/auth/dal';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { VersionsPanel, AssumptionsPanel, UsersPanel, PropertiesPanel, ComparativesPanel } from './panels';
+import { AsrePanel, MappingsPanel, YearlyRulesPanel } from './settings-panels';
+import { loadAsreBudget } from '@/lib/budget/asre';
+import { getSettings } from '@/lib/settings';
 import { PageHeader } from '@/components/ui/page-header';
 import { RoutedTabs } from '@/components/ui/tabs';
 import { Banner } from '@/components/ui/status';
@@ -40,6 +43,9 @@ export const metadata = { title: 'Admin · Budget' };
 const TABS = [
   ['versions', 'Budget versions'],
   ['assumptions', 'Assumptions'],
+  ['rules', 'Yearly rules'],
+  ['mappings', 'Mappings'],
+  ['asre', 'ASRE'],
   ['comparatives', 'Comparatives'],
   ['properties', 'Properties'],
   ['users', 'Users'],
@@ -48,11 +54,11 @@ const TABS = [
 export default async function AdminPage(props: PageProps<'/admin'>) {
   const user = await requireUser();
   const sp = await props.searchParams;
-  if (!isFinance(user))
+  if (!isAdmin(user))
     return (
       <div className="anh-main">
-        <Banner kind="warning" title="Finance access required">
-          Admin is for Finance. Ask a Finance user if something here needs changing.
+        <Banner kind="warning" title="Admin access required">
+          Versions, assumptions, comparatives, properties and users are managed by Admin.
         </Banner>
       </div>
     );
@@ -68,7 +74,7 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
       <PageHeader
         eyebrow="Admin"
         title="Admin"
-        sub={`${v.name} · versions, assumptions, comparatives, properties and users`}
+        sub={`${v.name} · versions, assumptions, yearly rules, mappings, comparatives, properties and users`}
         tabs={
           <RoutedTabs
             ariaLabel="Admin sections"
@@ -79,6 +85,11 @@ export default async function AdminPage(props: PageProps<'/admin'>) {
 
       {tab === 'versions' && <VersionsPanel versions={all.map((x) => ({ id: x.id, name: x.name, year: x.year, status: x.status, isBaseline: x.isBaseline, createdAt: x.createdAt.toISOString() }))} />}
       {tab === 'assumptions' && <AssumptionsPanel versionId={v.id} versionName={v.name} locked={v.status === 'LOCKED'} assumptions={withDefaults(v.assumptions)} />}
+      {tab === 'rules' && (
+        <YearlyRulesPanel versionId={v.id} versionName={v.name} locked={v.status === 'LOCKED'} rules={withDefaults(v.assumptions).payrollRules} supervision={withDefaults(v.assumptions).fmSupervision} />
+      )}
+      {tab === 'mappings' && <MappingsPanel settings={await getSettings()} />}
+      {tab === 'asre' && <AsrePanel versionId={v.id} versionName={v.name} locked={v.status === 'LOCKED'} values={await loadAsreBudget(v.id)} />}
       {tab === 'comparatives' && <ComparativesTab version={v} />}
       {tab === 'properties' && <PropertiesPanel rows={await db.select().from(schema.properties).orderBy(asc(schema.properties.buCode), asc(schema.properties.code))} />}
       {tab === 'users' && (

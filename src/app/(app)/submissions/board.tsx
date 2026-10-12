@@ -133,7 +133,7 @@ export function SubmissionsBoard({ rows, versionId, finance, open }: { rows: Boa
         confirmLabel={pending ? { submit: 'Submit', approve: 'Approve', return: 'Return' }[pending.action] : 'Confirm'}
         note={
           pending?.action === 'submit'
-            ? { label: 'Note for Finance (optional)', placeholder: 'Anything Finance should know' }
+            ? { label: 'Note for Admin (optional)', placeholder: 'Anything Admin should know' }
             : pending?.action === 'return'
               ? { label: 'What needs to change', required: true, placeholder: 'Say which units or inputs to revisit' }
               : undefined
@@ -148,9 +148,9 @@ export function SubmissionsBoard({ rows, versionId, finance, open }: { rows: Boa
 
 function bodyFor(p: NonNullable<Pending>): string {
   const warn = p.row.warnings ? ` ${p.row.warnings} row warning${p.row.warnings === 1 ? ' is' : 's are'} still open; you can submit anyway.` : '';
-  if (p.action === 'submit') return `The property becomes read only for property managers until Finance approves or returns it.${warn}`;
-  if (p.action === 'approve') return 'The budget inputs of this property are accepted as final for this version. Finance can still return it later.';
-  return 'The property goes back to its property manager with your note and can be edited again.';
+  if (p.action === 'submit') return `The property becomes read only for everyone until Admin approves or returns it.${warn}`;
+  if (p.action === 'approve') return 'The budget inputs of this property are accepted as final for this version. Admin can still return it later.';
+  return 'The property goes back to its property manager with your reason and can be edited again.';
 }
 
 function RowActions({ row, finance, open, onAct, onHistory }: { row: BoardRow; finance: boolean; open: boolean; onAct: (a: 'submit' | 'approve' | 'return') => void; onHistory: () => void }) {

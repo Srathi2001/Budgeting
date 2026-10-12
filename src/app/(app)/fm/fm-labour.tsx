@@ -6,10 +6,11 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { fmt, sum } from '@/lib/format';
-import { STAFF_TEAMS } from '@/lib/budget/fm-types';
+import { STAFF_TEAMS, type StaffTeam } from '@/lib/budget/fm-types';
 import type { FmPageData } from '@/lib/budget/fm-page';
 import { saveFmStaff } from './actions';
 import { TemplateButtons } from '@/components/template-buttons';
+import { FormField, FormGrid, FormSection, ListAndForm, NumIn, RecordForm, Show, useDraft } from '@/components/record-form';
 
 const parse = (s: string) => {
   const n = Number(s.replace(/[,\s]/g, ''));
@@ -26,6 +27,8 @@ export function FmLabour({ data }: { data: FmPageData }) {
   const [dirty, setDirty] = useState(false);
   const edit = data.canEditStaff;
   const prior = data.priorLabel;
+  // the team open in the side form
+  const [open, setOpen] = useState<string | null>(null);
 
   const save = () =>
     start(async () => {
@@ -43,8 +46,21 @@ export function FmLabour({ data }: { data: FmPageData }) {
   const allocated = facilities.filter((f) => f.staffTotal >= 0.5 || (f.priorStaffTotal ?? 0) >= 0.5);
   const col = (get: (f: (typeof facilities)[number]) => number) => sum(allocated.map(get));
 
+  const openIdx = data.staff.findIndex((s) => s.team === open);
+  const form = openIdx >= 0 && (
+    <TeamForm
+      key={data.staff[openIdx].team}
+      data={data}
+      team={data.staff[openIdx].team}
+      onSaved={(team, ctc, overtime) => setRows((rs) => rs.map((x) => (x.team === team ? { team, ctc: ctc ? String(ctc) : '', ot: overtime ? String(overtime) : '' } : x)))}
+      onClose={() => setOpen(null)}
+      onPrev={openIdx > 0 ? () => setOpen(data.staff[openIdx - 1].team) : undefined}
+      onNext={openIdx < data.staff.length - 1 ? () => setOpen(data.staff[openIdx + 1].team) : undefined}
+    />
+  );
   return (
-    <div className="min-h-0 flex-1 space-y-5 overflow-auto p-4">
+    <ListAndForm form={form}>
+    <div className="space-y-5 p-4">
       <section className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-sm font-bold">FM staff by team</h2>
@@ -116,8 +132,10 @@ export function FmLabour({ data }: { data: FmPageData }) {
                   <td className="anh-num locked">{k === 'ot' && r.team === 'GA' ? '' : fmt(parse(r[k]))}</td>
                 );
               return (
-                <tr key={r.team}>
-                  <td className="font-bold">{t.label}</td>
+                <tr key={r.team} className={open === r.team ? 'is-selected' : undefined}>
+                  <td className="cursor-pointer font-bold" onClick={() => setOpen(r.team)} title="Open in the form">
+                    {t.label}
+                  </td>
                   <td>{t.hint}</td>
                   {prior && (
                     <>
@@ -205,5 +223,85 @@ export function FmLabour({ data }: { data: FmPageData }) {
         </table>
       </section>
     </div>
+    </ListAndForm>
+  );
+}
+
+/** one team in the side form, as the Lease Budget's row form; the other teams are sent as stored */
+function TeamForm({ data, team, onSaved, onClose, onPrev, onNext }: { data: FmPageData; team: string; onSaved: (team: string, ctc: number, overtime: number) => void; onClose: () => void; onPrev?: () => void; onNext?: () => void }) {
+  const router = useRouter();
+  const s = data.staff.find((x) => x.team === team)!;
+  const t = TEAM.get(team as StaffTeam)!;
+  const d = useDraft({ ctc: s.ctc || null, overtime: s.overtime || null });
+  const [saving, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const edit = data.canEditStaff;
+  const ga = team === 'GA';
+  return (
+    <RecordForm
+      title={t.label}
+      subtitle={`FM staff · spread over ${t.hint.toLowerCase()}`}
+      canEdit={edit}
+      dirty={d.dirty}
+      saving={saving}
+      error={error}
+      onSave={() =>
+        start(async () => {
+          const ctc = d.value.ctc ?? 0;
+          const overtime = ga ? 0 : (d.value.overtime ?? 0);
+          if (ctc < 0 || overtime < 0) return setError('Amounts must be 0 or more');
+          const r = await saveFmStaff(
+            data.version.id,
+            data.staff.map((x) => (x.team === team ? { team, ctc, overtime } : { team: x.team, ctc: x.ctc, overtime: x.team === 'GA' ? 0 : x.overtime })),
+          );
+          if (r.error) return setError(r.error);
+          setError(null);
+          onSaved(team, ctc, overtime);
+          router.refresh();
+        })
+      }
+      onCancel={() => (d.reset(), setError(null))}
+      onClose={onClose}
+      onPrev={onPrev}
+      onNext={onNext}
+    >
+      {!edit && data.staffLockedReason && <p className="text-xs text-slate-600">{data.staffLockedReason}</p>}
+      <FormSection title={`${data.version.year}B`}>
+        <FormGrid>
+          <FormField label="Cost to company">
+            <NumIn value={d.value.ctc} enabled={edit} changed={d.changed('ctc')} onChange={(n) => d.set('ctc', n)} />
+          </FormField>
+          {!ga && (
+            <FormField label="Overtime">
+              <NumIn value={d.value.overtime} enabled={edit} changed={d.changed('overtime')} onChange={(n) => d.set('overtime', n)} />
+            </FormField>
+          )}
+          {!ga && (
+            <FormField label="With G&A share" hint="As saved">
+              <Show right>{fmt(s.cost)}</Show>
+            </FormField>
+          )}
+        </FormGrid>
+      </FormSection>
+      {data.priorLabel && s.prior && (
+        <FormSection title={data.priorLabel} tone="fixed">
+          <FormGrid>
+            <FormField label="Cost to company">
+              <Show right>{fmt(s.prior.ctc)}</Show>
+            </FormField>
+            {!ga && (
+              <FormField label="Overtime">
+                <Show right>{fmt(s.prior.overtime)}</Show>
+              </FormField>
+            )}
+            {!ga && (
+              <FormField label="With G&A share">
+                <Show right>{fmt(s.prior.cost)}</Show>
+              </FormField>
+            )}
+          </FormGrid>
+        </FormSection>
+      )}
+    </RecordForm>
   );
 }

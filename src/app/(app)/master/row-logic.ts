@@ -10,7 +10,7 @@ export const outcomeOf = (r: Pick<MasterRow, 'renew1' | 'noRenewal' | 'currentEn
   r.noRenewal ? 'Not re-let' : r.renew1 && r.currentEnd ? 'Renew' : 'New tenant';
 export const outcomePatch = (o: Outcome) => ({ renew1: o === 'Renew', noRenewal: o === 'Not re-let' });
 
-/** A current lease going to a new tenant (not contracted, not owner): vacancy days are required. */
+/** A current lease going to a new tenant (not contracted, not owner): vacancy days apply (blank = the default). */
 export const needsVacancyDays = (r: Pick<MasterRow, 'renew1' | 'noRenewal' | 'currentEnd' | 'contracted' | 'staffOwner'>) =>
   !!r.currentEnd && !r.contracted && r.staffOwner !== 'OWNER' && outcomeOf(r) === 'New tenant';
 

@@ -4,10 +4,12 @@
 // entered by the property manager (properties) or Finance (General) and phased evenly over 12 months.
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { canEditProperty, isFinance, type EditCheck } from '@/lib/auth/permissions';
+import { canEditProperty, entersData, isFinance, type EditCheck } from '@/lib/auth/permissions';
 import type { Actor } from '@/lib/auth/permissions';
 import { OI_ACCOUNT, OI_INPUT, OI_STORED, oiInput, type OiBlock, type OiChange, type OiPeriod } from './other-income-types';
 import { managementFees } from './admin';
+import { referenceBudget } from './reference';
+import { FD_INTEREST_ACCOUNT, treasuryForStatements } from './treasury';
 import { PMA_FEE } from './group';
 
 export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor, props: schema.Property[], editable: Set<number>): Promise<OiBlock[]> {
@@ -44,7 +46,7 @@ export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor
         code: 'General',
         name: 'Company level',
         pm: null,
-        editable: open,
+        editable: open && entersData(user, 'FIN'),
         values: {},
         mfBudget: 0,
       });
@@ -71,11 +73,23 @@ export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor
     }
   }
 
+  // last year's approved budget, reference only (2026B from the 2026 workbook)
+  for (const r of await referenceBudget(version.year - 1, 'oi')) {
+    const b = blocks.get(r.propertyId !== null ? `P:${r.propertyId}` : r.scope);
+    if (b) (b.prior ??= {})[r.account] = (b.prior[r.account] ?? 0) + r.amount;
+  }
+
   // ANPM's PMA fee is calculated: each landlord's rate × base, from Admin overheads (2026 budget: 6% of rent)
   const pmaBlock = blocks.get(PMA_FEE.scope);
   if (pmaBlock) {
     const { rows } = await managementFees(version);
     pmaBlock.calcB = { [PMA_FEE.account]: Math.round(rows.reduce((s, r) => s + (r.fee === 'PMA' ? (r.amount ?? 0) : 0), 0) * 100) / 100 };
+  }
+
+  // deposit interest of the companies: calculated from Finance → Fixed deposits (it replaced the typed figure)
+  if (finance) {
+    const fd = new Map((await treasuryForStatements(version)).fdInterest.map((x) => [x.entity, x.months.reduce((s, v) => s + v, 0)]));
+    for (const b of blocks.values()) if (b.kind === 'G') b.calcB = { ...b.calcB, [FD_INTEREST_ACCOUNT]: Math.round((fd.get(b.buCode) ?? 0) * 100) / 100 };
   }
 
   return [...blocks.values()].sort((a, b) => a.buCode.localeCompare(b.buCode) || (a.kind === b.kind ? a.code.localeCompare(b.code) : a.kind === 'G' ? 1 : -1));
@@ -121,7 +135,7 @@ export async function saveOtherIncome(user: Actor, versionId: number, changes: O
         errors.push(`${p.code} ${acct.name}: calculated from the leases`);
         continue;
       }
-      if (!checks.has(c.scope)) checks.set(c.scope, await canEditProperty(user, versionId, propertyId));
+      if (!checks.has(c.scope)) checks.set(c.scope, await canEditProperty(user, versionId, propertyId, 'PM'));
       const check = checks.get(c.scope)!;
       if (!check.ok) {
         errors.push(`${p.code}: ${check.reason}`);
@@ -129,12 +143,16 @@ export async function saveOtherIncome(user: Actor, versionId: number, changes: O
       }
     } else {
       buCode = m[2];
+      if (c.account === FD_INTEREST_ACCOUNT && c.period === 'B') {
+        errors.push('Deposit interest is calculated from Finance → Fixed deposits');
+        continue;
+      }
       if (c.scope === PMA_FEE.scope && c.account === PMA_FEE.account && c.period === 'B') {
         errors.push("The PMA fee is calculated: the rate × the base per landlord, in Admin overheads");
         continue;
       }
-      if (!isFinance(user)) {
-        errors.push(`General ${buCode}: Finance only`);
+      if (!entersData(user, 'FIN')) {
+        errors.push(`General ${buCode}: entered by Finance`);
         continue;
       }
     }

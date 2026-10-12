@@ -14,9 +14,11 @@ interface Ctx {
   filters: Filters;
   setFilters: (f: Filters) => void;
   universe: FilterProperty[];
+  /** the business units offered (also those without properties, e.g. ANPM 521) */
+  bus: { code: string; name: string }[];
 }
 
-const FiltersContext = createContext<Ctx>({ filters: NO_FILTERS, setFilters: () => {}, universe: [] });
+const FiltersContext = createContext<Ctx>({ filters: NO_FILTERS, setFilters: () => {}, universe: [], bus: [] });
 
 /** Tabs that show the filter bar; those marked true are filtered on the server and refresh on a change. */
 const FILTERED_TABS: Record<string, boolean> = {
@@ -33,7 +35,7 @@ const FILTERED_TABS: Record<string, boolean> = {
   '/fm': true,
 };
 
-export function FiltersProvider({ initial, universe, children }: { initial: Filters; universe: FilterProperty[]; children: ReactNode }) {
+export function FiltersProvider({ initial, universe, bus = [], children }: { initial: Filters; universe: FilterProperty[]; bus?: { code: string; name: string }[]; children: ReactNode }) {
   const [filters, setState] = useState(initial);
   const router = useRouter();
   const path = usePathname();
@@ -45,7 +47,7 @@ export function FiltersProvider({ initial, universe, children }: { initial: Filt
     },
     [router, path],
   );
-  const value = useMemo(() => ({ filters, setFilters, universe }), [filters, setFilters, universe]);
+  const value = useMemo(() => ({ filters, setFilters, universe, bus }), [filters, setFilters, universe, bus]);
   return <FiltersContext.Provider value={value}>{children}</FiltersContext.Provider>;
 }
 
@@ -70,10 +72,11 @@ export function AdoptPropertyFilter({ ids, path }: { ids: number[]; path: string
 /** The filter row under the top bar, on the tabs that use it. */
 export function FilterBar() {
   const path = usePathname();
-  const { filters: f, setFilters, universe } = useFilters();
+  const { filters: f, setFilters, universe, bus: offered } = useFilters();
   if (!(path in FILTERED_TABS)) return null;
 
-  const bus = [...new Map(universe.map((p) => [p.bu, p.buName])).entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  // every business unit offered, in order; a unit without properties (ANPM) shows a count of 0
+  const bus = offered.length ? offered.map((b) => [b.code, b.name] as const) : [...new Map(universe.map((p) => [p.bu, p.buName])).entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const pms = [...new Set(universe.map((p) => p.pm))].sort();
   const count = (key: (p: FilterProperty) => string | string[]) => {
     const m = new Map<string, number>();
@@ -96,7 +99,7 @@ export function FilterBar() {
         label="Business unit"
         value={f.bu}
         onChange={(v) => set({ bu: v, prop: [] })}
-        options={bus.map(([code, name]) => ({ value: code, label: `${code} ${name}`, count: buN.get(code) }))}
+        options={bus.map(([code, name]) => ({ value: code, label: code === 'MALL' ? name : `${code} ${name}`, count: buN.get(code) ?? 0 }))}
       />
       <MultiSelect
         label="Property manager"

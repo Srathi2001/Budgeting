@@ -1,17 +1,17 @@
 // Dashboard report cards, computed on the server for the page filters:
-// - rent by year: Oracle's Revenue Recognition Summary (from FIRST_REPORT_YEAR), the prior budget
+// - rent by year: Oracle's Revenue Recognition Summary (from the first reporting year, Admin → Mappings), the prior budget
 //   version, the forecast (actuals + Lease Budget) and the budget;
 // - other income by GL account: the uploaded GL actuals only;
 // - operating costs and building capex: FM GL actuals, the prior FM budget and this FM budget.
 import 'server-only';
-import { and, desc, eq, inArray, like } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { isFinance, type CurrentUser } from '@/lib/auth/dal';
 import type { Filters } from '@/lib/filters';
 import { MONTHS, sum } from '@/lib/format';
-import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
-import { FIRST_REPORT_YEAR } from './comparatives';
+import { getSettings } from '@/lib/settings';
+import { loadPriorForecast } from './forecast';
 import { propertyRollups } from './reports';
 import { oiLabel } from './other-income-types';
 import { withDefaults } from '@/lib/engine/assumptions';
@@ -66,7 +66,8 @@ export async function loadDashboardReports(
   const propIds = rolls.map((r) => r.propertyId);
 
   // ---- rent by year ------------------------------------------------------------------------------
-  const actualYears = Array.from({ length: Math.max(Y - 1 - FIRST_REPORT_YEAR, 0) }, (_, i) => FIRST_REPORT_YEAR + i); // full years before Y-1
+  const first = (await getSettings()).firstReportYear; // Admin → Mappings
+  const actualYears = Array.from({ length: Math.max(Y - 1 - first, 0) }, (_, i) => first + i); // full years before Y-1
   const actualRows = await db
     .select()
     .from(schema.revenueActuals)
@@ -78,38 +79,27 @@ export async function loadDashboardReports(
     m[Number(a.month.slice(5)) - 1] += a.amount;
     actual.set(k, m);
   }
-  const [last] = await db
-    .select({ m: schema.revenueActuals.month })
-    .from(schema.revenueActuals)
-    .where(and(eq(schema.revenueActuals.kind, 'A'), like(schema.revenueActuals.month, `${Y - 1}-%`)))
-    .orderBy(desc(schema.revenueActuals.month))
-    .limit(1);
-  const cutoff = last?.m ? Number(last.m.slice(5)) : 0;
-  // the forecast: actuals to the cut-off + the Lease Budget's projection (the same leases run through Y-1)
+  // the forecast: the one rule (forecast.ts); with a Category filter, the lines of those categories
+  const pf = await loadPriorForecast(version, scope.propertyIds);
+  const cutoff = pf.cutoff;
   const lineRows = await db
-    .select({ propertyId: schema.leaseLines.propertyId, calc: schema.leaseLines.calc, kind: schema.properties.kind, pivotCategory: schema.units.pivotCategory, unitType: schema.units.unitType, rc: schema.units.rc })
+    .select({ id: schema.leaseLines.id, propertyId: schema.leaseLines.propertyId, kind: schema.properties.kind, pivotCategory: schema.units.pivotCategory, unitType: schema.units.unitType, rc: schema.units.rc })
     .from(schema.leaseLines)
     .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
     .innerJoin(schema.properties, eq(schema.properties.id, schema.leaseLines.propertyId))
     .where(and(eq(schema.leaseLines.versionId, version.id), inArray(schema.leaseLines.propertyId, ids)));
-  const proj = new Map<number, number[]>();
-  for (const l of lineRows) {
-    if (scope.categories.length && !scope.categories.includes(categoryOf(l, l.kind))) continue;
-    const pr = (l.calc as StoredCalc | null)?.priorRevenue;
-    if (!pr) continue;
-    const m = proj.get(l.propertyId) ?? z12();
-    pr.forEach((v, i) => (m[i] += v));
-    proj.set(l.propertyId, m);
-  }
+  const fByProperty = new Map<number, number>();
+  if (scope.categories.length) {
+    for (const l of lineRows) {
+      if (!scope.categories.includes(categoryOf(l, l.kind))) continue;
+      fByProperty.set(l.propertyId, (fByProperty.get(l.propertyId) ?? 0) + sum(pf.lines.get(l.id) ?? z12()));
+    }
+  } else for (const [id, p] of pf.properties) fByProperty.set(id, sum(p.months));
   const getA = (yy: number) => (id: number) => {
     const m = actual.get(`${id}|${yy}`);
     return m ? sum(m) : null;
   };
-  const getF = (id: number) => {
-    const p = proj.get(id) ?? z12();
-    const a = actual.get(`${id}|${Y - 1}`);
-    return a && cutoff ? sum(a.slice(0, cutoff)) + sum(p.slice(cutoff)) : sum(p);
-  };
+  const getF = (id: number) => fByProperty.get(id) ?? 0;
   const rentP = new Map(priorRolls.map((r) => [r.propertyId, sum(r.revenue)]));
   const rentB = new Map(rolls.map((r) => [r.propertyId, sum(r.revenue)]));
   const getP = (id: number) => rentP.get(id) ?? null;

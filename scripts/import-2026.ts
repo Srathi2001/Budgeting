@@ -33,7 +33,9 @@ const MALL_CODES = new Set(['10B131N']);
 const t = schema;
 
 async function reset() {
-  await db.execute(sql`truncate table audit_log, submissions, property_notes, comparatives,
+  // the audit log is append-only: a reset keeps it, with a row saying the data was reset
+  await db.insert(schema.auditLog).values({ entity: 'database', action: 'reset', changes: { script: 'import-2026 --reset' } });
+  await db.execute(sql`truncate table submissions, property_notes, comparatives,
     rera_index, line_monthly, lease_lines, budget_versions, units, properties, business_units, users
     restart identity cascade`);
 }

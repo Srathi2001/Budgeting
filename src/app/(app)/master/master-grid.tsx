@@ -25,6 +25,7 @@ import { count, fmt, fmtDate, MONTHS, parseDate, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine, saveRera } from './actions';
 import { RowForm } from './row-form';
 import { TemplateImport } from './template-import';
+import { DEFAULT_ASSUMPTIONS } from '@/lib/engine/assumptions';
 import { OUTCOMES, annualRent, needsVacancyDays, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 import { ExcelFilter } from '@/components/excel-filter';
 import { LeaseTabs } from './lease-tabs';
@@ -453,11 +454,12 @@ export function MasterGrid({
           },
           {
             ...inputCol('vacancyDays', 'Vacancy Days', 'int', {
-              headerTooltip: 'New tenant: empty days between the lease end and the new tenant. Required; no default.',
+              headerTooltip: 'New tenant: empty days between the lease end and the new tenant. Blank = the default (60 days, Admin → Assumptions).',
             }),
             editable: (p) => editable(p) && !!p.data && needsVacancyDays(p.data),
-            // required and missing: flagged like an issue
-            cellClass: (p) => (!p.data || p.node.isRowPinned() || !needsVacancyDays(p.data) ? '' : p.data.vacancyDays === null ? 'cell-input cell-issue' : 'cell-input'),
+            // blank: the default applies, shown as such
+            valueFormatter: (p) => (p.value !== null && p.value !== undefined ? String(p.value) : p.data && !p.node?.isRowPinned() && needsVacancyDays(p.data) ? `${DEFAULT_ASSUMPTIONS.defaultVacancyDays} (default)` : ''),
+            cellClass: (p) => (!p.data || p.node.isRowPinned() || !needsVacancyDays(p.data) ? '' : 'cell-input'),
           },
           inputCol('budgetRate', 'Budget Rate', 'money', {
             headerTooltip: 'New-tenant rate. Residential: annual rent · Commercial/labour: AED per sq.ft per year · Camps: AED per bed per month',
@@ -479,7 +481,7 @@ export function MasterGrid({
               p.data.increasePctOverride = n === null ? null : n / 100;
               return true;
             },
-            valueFormatter: (p) => (p.value === null || p.value === undefined ? '' : `${p.value}%`),
+            valueFormatter: (p) => (p.value === null || p.value === undefined ? '' : pct((p.value as number) / 100)),
             cellClass: (p) => (p.data?.increasePctOverride !== null && p.data?.increasePctOverride !== undefined ? 'cell-override' : 'cell-derived'),
           },
           {
@@ -531,14 +533,14 @@ export function MasterGrid({
         headerClass: 'hdr-rera',
         children: [
           { ...derivedCol('revenueTotal', 'Revenue', (r) => r.revenueTotal, 'money'), headerClass: 'hdr-revenue', valueGetter: (p) => p.data?.revenueTotal ?? 0 },
-          { ...derivedCol('cashFlowTotal', 'Cash Inflow', (r) => r.cashFlowTotal, 'money', 'Rent cheques + VAT + deposits in − deposits out'), headerClass: 'hdr-cash', valueGetter: (p) => p.data?.cashFlowTotal ?? 0 },
+          { ...derivedCol('cashFlowTotal', 'Cash Inflow', (r) => r.cashFlowTotal, 'money', 'Rent cheques + deposits in − deposits out, ex VAT'), headerClass: 'hdr-cash', valueGetter: (p) => p.data?.cashFlowTotal ?? 0 },
           derivedCol('vacancyLoss', 'Vacancy Loss', (r) => r.vacancyLoss, 'money', 'Gap between the lease ending and the next tenant, at the new rent'),
           { ...derivedCol('maintenanceTotal', 'Maintenance Fee', (r) => r.maintenanceTotal, 'money', 'Other income (not rent): booked in the month each contract starts'), valueGetter: (p) => p.data?.maintenanceTotal ?? 0 },
         ],
       },
     ];
     if (showRevenue) defs.push({ headerName: `Revenue by month ${year}`, headerClass: 'hdr-revenue', children: monthCols('revenue', 'hdr-revenue') });
-    if (showCash) defs.push({ headerName: `Cash inflow by month ${year} (rent + VAT + deposits)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'hdr-cash') });
+    if (showCash) defs.push({ headerName: `Cash inflow by month ${year} (rent + deposits, ex VAT)`, headerClass: 'hdr-cash', children: monthCols('cashFlow', 'hdr-cash') });
     // the one vertical rule per column group (the pinned Unit group ends at the pinned edge)
     return defs.map((d, i) => (i > 0 && 'children' in d ? { ...d, children: [groupStart(d.children[0] as ColDef<Row>), ...d.children.slice(1)] } : d));
   }, [showRevenue, showCash, year, isAdmin, mfPct]);

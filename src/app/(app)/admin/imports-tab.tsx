@@ -4,10 +4,11 @@ import { fmtDateTime } from '@/lib/format';
 import { LeaseImportPanel, GlImportPanel, RevenueImportPanel } from './panels';
 import { lastActualMonth } from '@/lib/import/revenue-recognition';
 import { GL_LEDGERS, GL_LEDGER_NAMES } from '@/lib/import/gl-other-income';
+import { undoableImport } from '@/lib/import/gl-history';
 import { withDefaults } from '@/lib/engine/assumptions';
 
 /** Every Oracle report the tool imports, in one tab: what to run, with which parameters, and where it goes. */
-export async function ImportsTab({ version }: { version: schema.BudgetVersion }) {
+export async function ImportsTab({ version, admin = false }: { version: schema.BudgetVersion; admin?: boolean }) {
   const Y = version.year;
   const yy = (n: number) => String(n).slice(2);
   const cutoff = withDefaults(version.assumptions).actualsCutoffMonth;
@@ -30,6 +31,8 @@ export async function ImportsTab({ version }: { version: schema.BudgetVersion })
     select distinct on (changes->>'ledger') changes->>'ledger' as ledger, at, changes->>'file' as file from audit_log
     where entity = 'gl_import' and version_id = ${version.id} order by changes->>'ledger', at desc`);
   const glLast = new Map((glRows as { ledger: string; at: string; file: string | null }[]).map((r) => [r.ledger, r]));
+  // the latest import of each ledger that can be undone
+  const undo = new Map(await Promise.all(GL_LEDGER_NAMES.map(async (l) => [l, await undoableImport(l)] as const)));
 
   const REPORTS = [
     {
@@ -50,8 +53,9 @@ export async function ImportsTab({ version }: { version: schema.BudgetVersion })
       id: `gl-${i + 1}`,
       name: `Account Analysis Report (not "Account Wise Analysis Report")`,
       where: 'Oracle: General Ledger',
-      params: `Ledger or Ledger Set ${ledger} · Period From Jan-${yy(Y - 3)} To ${cutMon}-${yy(Y - 1)} · Balance Type Actual · Account starts with 52`,
-      feeds: 'Other Income: GL actuals',
+      // all accounts: the MJN HOLDING file also carries the FM, building overhead and G&A actuals
+      params: `Ledger or Ledger Set ${ledger} · Period From Jan-${yy(Y - 3)} To ${cutMon}-${yy(Y - 1)} · Balance Type Actual · all accounts (no account filter)`,
+      feeds: ledger === 'MJN HOLDING' ? 'Other Income, FM, Building Overheads and Admin Overheads: GL actuals' : 'Other Income: GL actuals',
     })),
   ];
 
@@ -103,7 +107,18 @@ export async function ImportsTab({ version }: { version: schema.BudgetVersion })
       </div>
       {GL_LEDGER_NAMES.map((ledger, i) => (
         <div key={ledger} id={`gl-${i + 1}`} className="scroll-mt-4">
-          <GlImportPanel ledger={ledger} companies={Object.keys(GL_LEDGERS[ledger].companies)} versionId={version.id} versionName={version.name} year={Y} locked={version.status === 'LOCKED'} last={lastOf(glLast.get(ledger))} cutoff={cutoff} />
+          <GlImportPanel
+            ledger={ledger}
+            companies={Object.keys(GL_LEDGERS[ledger].companies)}
+            versionId={version.id}
+            versionName={version.name}
+            year={Y}
+            locked={version.status === 'LOCKED'}
+            last={lastOf(glLast.get(ledger))}
+            cutoff={cutoff}
+            undo={undo.get(ledger) ?? null}
+            admin={admin}
+          />
         </div>
       ))}
     </div>

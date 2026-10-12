@@ -349,7 +349,7 @@ export const fmStaff = pgTable(
   (t) => [primaryKey({ columns: [t.versionId, t.team] })],
 );
 
-/** FM budget approval per facility: FMD submits, Finance approves or returns (same statuses as revenue). */
+/** FM budget approval per facility: FMD submits, Admin approves or returns (same statuses as revenue). */
 export const fmSubmissions = pgTable(
   'fm_submissions',
   {
@@ -469,6 +469,17 @@ export const bohContracts = pgTable(
     quantity: decimal('quantity').notNull().default(12),
     rate: money('rate').notNull().default(0),
     startMonth: integer('start_month'),
+    /**
+     * The contract's own period (audit FIN-008): quantity × rate is its value for that period, spread over
+     * its days; only the days inside the budget year are booked. Blank: from the start month for a year
+     * (monthly with a number of months: that many months).
+     */
+    startDate: day('start_date'),
+    endDate: day('end_date'),
+    /** when it ends before 31 December: RENEW (at renewalRate, on renewalTerms) or END; null = not decided (flagged) */
+    renewal: text('renewal'),
+    renewalRate: money('renewal_rate'),
+    renewalTerms: text('renewal_terms'),
     remarks: text('remarks'),
     /** PO: from an Oracle purchase order (the po* fields hold it) · PM: entered */
     source: text('source').notNull().default('PM'),
@@ -602,6 +613,249 @@ export const importPlans = pgTable(
     appliedAt: timestamp('applied_at', { withTimezone: true }),
   },
   (t) => [index('import_plans_user_idx').on(t.userId, t.createdAt)],
+);
+
+/**
+ * What an import replaced, kept so the import can be undone: one row per table it replaced, with the
+ * scope it replaced (months, accounts, business units) and the rows as they were before.
+ */
+export const importHistory = pgTable(
+  'import_history',
+  {
+    id: serial('id').primaryKey(),
+    /** the import plan applied (import_plans.id) */
+    planId: integer('plan_id').notNull(),
+    kind: text('kind').notNull(), // gl
+    ledger: text('ledger'),
+    versionId: integer('version_id'),
+    /** other_income | fm_actuals | boh_actuals | admin_actuals */
+    tableName: text('table_name').notNull(),
+    scope: jsonb('scope').$type<Record<string, unknown>>().notNull(),
+    /** the rows the import removed, as they were */
+    rows: jsonb('rows').$type<Record<string, unknown>[]>().notNull(),
+    removed: integer('removed').notNull(),
+    inserted: integer('inserted').notNull(),
+    userId: integer('user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    undoneAt: timestamp('undone_at', { withTimezone: true }),
+    undoneBy: integer('undone_by'),
+  },
+  (t) => [index('import_history_plan_idx').on(t.planId)],
+);
+
+/**
+ * Shareholder loans, entered by Finance (Finance → Shareholder loans): the schedule of each loan gives the
+ * monthly interest (P&L, below EBITDA, of the borrowing entity), interest and principal paid (cash flow)
+ * and the closing balance. Drawdowns and repayments that follow no pattern go in loan_events.
+ */
+export const shareholderLoans = pgTable(
+  'shareholder_loans',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id')
+      .notNull()
+      .references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    lender: text('lender'),
+    /** the borrowing entity (business unit code) */
+    entity: text('entity').notNull(),
+    principal: money('principal'),
+    /** outstanding at 1 January of the budget year */
+    openingBalance: money('opening_balance').notNull().default(0),
+    /** interest rate a year (fraction) */
+    rate: decimal('rate').notNull().default(0),
+    /** ACT/365 or 30/360 */
+    dayBasis: text('day_basis').notNull().default('ACT/365'),
+    interestFrequency: text('interest_frequency').notNull().default('Quarterly'),
+    firstInterestDate: day('first_interest_date'),
+    /** EQUAL_PRINCIPAL / ANNUITY / BULLET / CUSTOM (from loan_events) */
+    repaymentType: text('repayment_type').notNull().default('EQUAL_PRINCIPAL'),
+    repaymentFrequency: text('repayment_frequency').notNull().default('Quarterly'),
+    firstRepaymentDate: day('first_repayment_date'),
+    maturityDate: day('maturity_date'),
+    /** share of the interest capitalised to a project (fraction), and which */
+    capitalisePct: decimal('capitalise_pct').notNull().default(0),
+    capitaliseProject: text('capitalise_project'),
+    /** repayments come back as a shareholder contribution this many months later (null: they don't) */
+    contributionLagMonths: integer('contribution_lag_months'),
+    notes: text('notes'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [index('shareholder_loans_version_idx').on(t.versionId)],
+);
+
+/** A loan's dated drawdowns and repayments (custom schedules, and drawdowns of any loan). */
+export const loanEvents = pgTable('loan_events', {
+  id: serial('id').primaryKey(),
+  loanId: integer('loan_id')
+    .notNull()
+    .references(() => shareholderLoans.id, { onDelete: 'cascade' }),
+  date: day('date').notNull(),
+  /** DRAWDOWN / REPAYMENT */
+  kind: text('kind').notNull(),
+  amount: money('amount').notNull(),
+});
+
+/**
+ * Fixed deposits, entered by Finance (Finance → Fixed deposits): interest income by month (other income
+ * 52201 of the entity, replacing the typed figure), interest received, placements and maturities (cash).
+ */
+export const fixedDeposits = pgTable(
+  'fixed_deposits',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id')
+      .notNull()
+      .references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    bank: text('bank').notNull(),
+    reference: text('reference'),
+    entity: text('entity').notNull(),
+    amount: money('amount').notNull().default(0),
+    placementDate: day('placement_date'),
+    maturityDate: day('maturity_date'),
+    rate: decimal('rate').notNull().default(0),
+    dayBasis: text('day_basis').notNull().default('ACT/365'),
+    /** MATURITY / MONTHLY / QUARTERLY */
+    interestPayout: text('interest_payout').notNull().default('MATURITY'),
+    /** placed again at maturity, for the same term, at rolloverRate (null: the same rate) */
+    rollover: boolean('rollover').notNull().default(false),
+    rolloverRate: decimal('rollover_rate'),
+    notes: text('notes'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [index('fixed_deposits_version_idx').on(t.versionId)],
+);
+
+/** Contingencies, entered by Finance (Finance → Contingencies): a P&L line below EBITDA. */
+export const contingencies = pgTable(
+  'contingencies',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id')
+      .notNull()
+      .references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    entity: text('entity').notNull(),
+    description: text('description').notNull(),
+    category: text('category'),
+    amount: money('amount').notNull().default(0),
+    /** EVEN over 12 months, or all in `month` */
+    phasing: text('phasing').notNull().default('EVEN'),
+    month: integer('month'),
+    /** expected to be paid (cash flow) as well as provided */
+    cash: boolean('cash').notNull().default(true),
+    notes: text('notes'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [index('contingencies_version_idx').on(t.versionId)],
+);
+
+/**
+ * Budget of an entity the tool does not build line by line: ASRE (Arabian Spaces Real Estate, the mall
+ * operator, budgeted by its own finance team) — one amount a year per statement line, phased evenly.
+ * Blank until ASRE's budget arrives (user decision 11-Oct-2026, audit REG-004). See budget/asre.ts.
+ */
+export const entityBudget = pgTable(
+  'entity_budget',
+  {
+    versionId: integer('version_id')
+      .notNull()
+      .references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    entity: text('entity').notNull(),
+    line: text('line').notNull(),
+    amount: money('amount'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: integer('updated_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.entity, t.line] })],
+);
+
+/**
+ * Mappings that apply to every version, kept out of the code (audit FIN-019) and edited in Admin →
+ * Mappings: first reporting year, GL company → business unit, the Mall's property codes, whole-building
+ * leases. Missing keys take the defaults in src/lib/settings.ts.
+ */
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: integer('updated_by'),
+});
+
+/**
+ * What a locked version showed when it was locked, for the figures otherwise worked out live from data
+ * shared with other versions (audit FIN-004): the comparatives, the current-year rent forecast, the
+ * building overhead cells (water & electricity, municipal, phasing, contracts) and the PMA / AMA fees.
+ * Written on lock, removed when Admin reopens the version.
+ */
+export const versionSnapshots = pgTable(
+  'version_snapshots',
+  {
+    versionId: integer('version_id')
+      .notNull()
+      .references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    /** comparatives | forecast | boh | fees */
+    part: text('part').notNull(),
+    data: jsonb('data').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdBy: integer('created_by'),
+  },
+  (t) => [primaryKey({ columns: [t.versionId, t.part] })],
+);
+
+/**
+ * A past approved budget kept as read-only reference for the cost tabs (2026B from the 2026 budget
+ * workbook): building overheads by building × account, other income by property / General row × account,
+ * admin overheads by department × the workbook's cost line, payroll cost to company by department.
+ * Loaded by scripts/load-reference-budget.ts; never typed in the tool and never in the statements.
+ */
+export const budgetReference = pgTable(
+  'budget_reference',
+  {
+    id: serial('id').primaryKey(),
+    year: integer('year').notNull(),
+    /** boh | oi | admin | payroll */
+    module: text('module').notNull(),
+    propertyId: integer('property_id').references(() => properties.id),
+    /** the property code as in the workbook, 'G:<bu>' for a General row, or the department code */
+    scope: text('scope').notNull(),
+    /** GL account, or the workbook's cost line (admin), or 'CTC' (payroll) */
+    account: text('account').notNull(),
+    amount: money('amount').notNull(),
+    note: text('note'),
+    /** where it comes from: sheet!cell */
+    source: text('source'),
+    loadedAt: timestamp('loaded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('budget_reference_uq').on(t.year, t.module, t.scope, t.account)],
+);
+
+/**
+ * Lease lines a lease import removed (no longer in the Oracle report, or merged into a lease on several
+ * units), kept with their budget inputs so nothing typed is lost and a line can be looked up later.
+ */
+export const leaseLineArchive = pgTable(
+  'lease_line_archive',
+  {
+    id: serial('id').primaryKey(),
+    versionId: integer('version_id')
+      .notNull()
+      .references(() => budgetVersions.id, { onDelete: 'cascade' }),
+    /** lease_lines.id the line had */
+    lineId: integer('line_id').notNull(),
+    propertyId: integer('property_id'),
+    unitCode: text('unit_code'),
+    /** the line as it was (without the cached calculation) */
+    line: jsonb('line').$type<Record<string, unknown>>().notNull(),
+    hadInputs: boolean('had_inputs').notNull().default(false),
+    /** the lease import that removed it (import_plans.id) */
+    planId: integer('plan_id'),
+    removedAt: timestamp('removed_at', { withTimezone: true }).notNull().defaultNow(),
+    removedBy: integer('removed_by'),
+  },
+  (t) => [index('lease_line_archive_version_idx').on(t.versionId, t.propertyId)],
 );
 
 export const auditLog = pgTable(

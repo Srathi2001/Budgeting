@@ -1,4 +1,4 @@
-﻿// Applies grid edits to lease lines: validation, permissions, audit trail, recalculation.
+// Applies grid edits to lease lines: validation, permissions, audit trail, recalculation.
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@/db';
@@ -170,7 +170,7 @@ export async function applyLineChanges(
   });
 
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-  const editable = await editablePropertyIds(user, version);
+  const editable = await editablePropertyIds(user, version, 'PM');
   // return every requested row so the grid can roll back rejected edits
   const rows = await loadMasterRows(versionId, { lineIds: ids, editableProperties: editable });
   return { rows, errors };

@@ -16,7 +16,6 @@ import {
   FEE_ENTITIES,
   PAYERS,
   deptName,
-  feeAmount,
   SPLIT_ENTITIES,
   anpmOverheads,
   payrollSplit,
@@ -30,6 +29,8 @@ import {
 } from '@/lib/budget/admin-types';
 import { ITEM_KIND, SCHEDULE_ACCOUNT } from '@/lib/budget/admin-items';
 import { saveAdminCells } from './actions';
+import { ListAndForm } from '@/components/record-form';
+import { DeptForm, FeeForm, applyAdminChange } from './admin-forms';
 
 type Kind = 'amount' | 'int' | 'pct';
 
@@ -95,13 +96,15 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
   const [added, setAdded] = useState<Record<string, string[]>>({});
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [, start] = useTransition();
+  // the department or fee open in the side form
+  const [open, setOpen] = useState<{ dept: string } | { fee: FeeKind; entity: FeeEntity } | null>(null);
   const Y = data.year;
   const L = { a2: `${Y - 3}A`, a1: `${Y - 2}A`, ytd: data.cutoff ? `${Y - 1} Jan–${MONTHS[data.cutoff - 1]}` : `${Y - 1} YTD`, f: `${Y - 1}F`, b: `${Y}B` };
 
-  const save = (change: AdminChange, apply: (d: AdminData) => AdminData) =>
+  const save = (change: AdminChange) =>
     new Promise<boolean>((resolve) => {
       const before = data;
-      setData(apply);
+      setData((d) => applyAdminChange(d, change));
       setStatus({ kind: 'saving' });
       start(async () => {
         const res = await saveAdminCells(versionId, [change]);
@@ -117,26 +120,13 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
     });
 
   const setPayroll = (dept: string, field: PayrollField, value: number | null) =>
-    save({ kind: 'payroll', dept, field, value }, (d) => ({ ...d, payroll: d.payroll.map((p) => (p.dept === dept ? { ...p, [field]: value } : p)) }));
+    save({ kind: 'payroll', dept, field, value });
 
   const setAdmin = (dept: string, account: string, entity: string, value: number | null) =>
-    save({ kind: 'admin', dept, account, entity, value }, (d) => {
-      const exists = d.admin.some((r) => r.dept === dept && r.account === account);
-      const rows: AdminRow[] = exists
-        ? d.admin.map((r) => (r.dept === dept && r.account === account ? { ...r, b: { ...r.b, [entity]: value } } : r))
-        : [...d.admin, { dept, account, a2: null, a1: null, ytd: null, f: null, b: { ...Object.fromEntries(PAYERS.map((p) => [p.code, null])), [entity]: value }, items: Object.fromEntries(PAYERS.map((p) => [p.code, null])), schedule: SCHEDULE_ACCOUNT.get(account) ?? null }];
-      return { ...d, admin: rows };
-    });
+    save({ kind: 'admin', dept, account, entity, value });
 
   const setFee = (fee: FeeKind, entity: FeeEntity, field: 'rate' | 'base', value: number | null) =>
-    save({ kind: 'fee', fee, entity, field, value }, (d) => ({
-      ...d,
-      fees: d.fees.map((r) => {
-        if (r.fee !== fee || r.entity !== entity) return r;
-        const next = { ...r, [field]: value };
-        return { ...next, amount: feeAmount(next) };
-      }),
-    }));
+    save({ kind: 'fee', fee, entity, field, value });
 
 
   // ---- admin overheads by department ---------------------------------------------------------------------
@@ -162,10 +152,23 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
   const ohBudget = (rows: AdminRow[], payer?: string) => sum(rows.flatMap((r) => (payer ? [cellOf(r, payer)] : PAYERS.map((p) => cellOf(r, p.code)))));
   const allRows = byDept.flatMap((d) => d.rows);
   const enterable = (dept: string) => !locked && !DEPT.get(dept)?.elsewhere;
+  // last year's approved budget per department (reference): payroll cost to company, admin overheads
+  const prior = data.prior;
+  const diff = (b: number | null, pb: number | null) => (b === null && pb === null ? null : (b ?? 0) - (pb ?? 0));
+  const priorPay = (dept: string) => prior?.payroll[dept] ?? null;
+  const priorOh = (dept: string) => prior?.admin[dept] ?? null;
+  const refCells = (b: number | null, pb: number | null, cls = 'anh-num calc') =>
+    prior ? (
+      <>
+        <td className={cls === 'anh-num calc' ? 'anh-num locked' : cls}>{fmt(pb)}</td>
+        <td className={cls}>{fmt(diff(b, pb))}</td>
+      </>
+    ) : null;
+  const R = prior ? 2 : 0;
 
   // ---- payroll and the 2026 rules: capitalised and ASRE on payroll + what ANPM pays for the department ----
   const anpm = anpmOverheads(allRows);
-  const splits = data.payroll.map((p) => ({ p, s: payrollSplit(p, anpm.get(p.dept) ?? 0) }));
+  const splits = data.payroll.map((p) => ({ p, s: payrollSplit(p, anpm.get(p.dept) ?? 0, data.rules) }));
   const pay = {
     total: sum(splits.map(({ p, s }) => (p.ctc === null && p.newCtc === null ? null : s.total))),
     oh: sum(splits.map(({ s }) => s.oh || null)),
@@ -205,7 +208,52 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
     </>
   );
 
+  // the side form: departments in page order, then the fees
+  const deptList = byDept.filter(({ dept, rows }) => rows.length || data.payroll.some((p) => p.dept === dept) || enterable(dept)).map(({ dept }) => dept);
+  const feeList = data.fees.map((r) => ({ fee: r.fee, entity: r.entity }));
+  const onSaved = (changes: AdminChange[]) => changes.length && setData((d) => changes.reduce(applyAdminChange, d));
+  let form: React.ReactNode = null;
+  if (open && 'dept' in open) {
+    const i = deptList.indexOf(open.dept);
+    form = (
+      <DeptForm
+        key={open.dept}
+        dept={open.dept}
+        data={data}
+        rows={byDept.find((x) => x.dept === open.dept)?.rows ?? []}
+        enterable={enterable(open.dept)}
+        versionId={versionId}
+        year={Y}
+        locked={locked}
+        onSaved={onSaved}
+        onClose={() => setOpen(null)}
+        onPrev={i > 0 ? () => setOpen({ dept: deptList[i - 1] }) : undefined}
+        onNext={i >= 0 && i < deptList.length - 1 ? () => setOpen({ dept: deptList[i + 1] }) : undefined}
+      />
+    );
+  } else if (open) {
+    const i = feeList.findIndex((x) => x.fee === open.fee && x.entity === open.entity);
+    const row = data.fees[i];
+    if (row)
+      form = (
+        <FeeForm
+          key={`${row.fee}-${row.entity}`}
+          row={row}
+          prior={P}
+          versionId={versionId}
+          year={Y}
+          locked={locked}
+          onSaved={onSaved}
+          onClose={() => setOpen(null)}
+          onPrev={i > 0 ? () => setOpen(feeList[i - 1]) : undefined}
+          onNext={i < feeList.length - 1 ? () => setOpen(feeList[i + 1]) : undefined}
+        />
+      );
+  }
+  const isOpen = (dept: string) => !!open && 'dept' in open && open.dept === dept;
+
   return (
+    <ListAndForm form={form}>
     <div className="space-y-6 p-6">
       <header className="flex flex-wrap items-end gap-4">
         <div>
@@ -256,6 +304,11 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <th colSpan={5} style={{ textAlign: 'center' }}>
                   Budget {L.b}
                 </th>
+                {prior && (
+                  <th colSpan={2} style={{ textAlign: 'center' }}>
+                    Reference
+                  </th>
+                )}
                 <th colSpan={4} style={{ textAlign: 'center' }}>
                   Rules
                 </th>
@@ -268,6 +321,16 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <th className="anh-num">New hires</th>
                 <th className="anh-num">New hires cost</th>
                 <th className="anh-num">Total</th>
+                {prior && (
+                  <>
+                    <th className="anh-num" title="Cost to company per department in last year's approved budget (PayrollxCost)">
+                      {prior.label}
+                    </th>
+                    <th className="anh-num">
+                      {L.b} vs {prior.label}
+                    </th>
+                  </>
+                )}
                 <th className="anh-num">Capitalised %</th>
                 <th className="anh-num">To MJNH %</th>
                 <th className="anh-num">To ASRE %</th>
@@ -278,12 +341,12 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
             </thead>
             <tbody>
               {splits.map(({ p, s }) => {
-                const rule = ruleOf(p.dept);
+                const rule = ruleOf(p.dept, data.rules);
                 const has = p.ctc !== null || p.newCtc !== null;
                 const lbl = (x: string) => `${deptName(p.dept)} ${x}`;
                 return (
-                  <tr key={p.dept} className="child">
-                    <td>
+                  <tr key={p.dept} className={'child' + (isOpen(p.dept) ? ' is-selected' : '')}>
+                    <td className="cursor-pointer" onClick={() => setOpen({ dept: p.dept })} title="Open in the form">
                       <span className="anh-code mr-2">{p.dept}</span>
                       {deptName(p.dept)}
                     </td>
@@ -293,6 +356,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                     <Cell value={p.newHeadcount} kind="int" label={lbl('new hires')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'newHeadcount', v)} />
                     <Cell value={p.newCtc} kind="amount" label={lbl('new hires cost')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'newCtc', v)} />
                     <td className="anh-num calc">{has ? fmt(s.total) : ''}</td>
+                    {refCells(has ? s.total : null, priorPay(p.dept))}
                     <Cell value={p.capPct} kind="pct" placeholder={show(rule.cap, 'pct')} label={lbl('% capitalised')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'capPct', v)} />
                     <Cell value={p.mjnhPct} kind="pct" placeholder={show(rule.mjnh, 'pct')} label={lbl('% to MJNH')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'mjnhPct', v)} />
                     <Cell value={p.asrePct} kind="pct" placeholder={show(rule.asre, 'pct')} label={lbl('% to ASRE')} disabled={locked} onCommit={(v) => setPayroll(p.dept, 'asrePct', v)} />
@@ -311,6 +375,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 <td className="anh-num">{fmt(sum(data.payroll.map((p) => p.newHeadcount)))}</td>
                 <td className="anh-num">{fmt(sum(data.payroll.map((p) => p.newCtc)))}</td>
                 <td className="anh-num">{fmt(pay.total)}</td>
+                {refCells(pay.total, prior ? sum(data.payroll.map((p) => priorPay(p.dept))) : null, 'anh-num')}
                 <td colSpan={3} />
                 <td className="anh-num">{fmt(sum(data.payroll.map((p) => p.seniorCtc)))}</td>
               </tr>
@@ -322,13 +387,14 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                   </td>
                   <td colSpan={8} />
                   <td className="anh-num locked">{fmt(e.budget)}</td>
+                  {refCells(e.budget, priorPay(e.dept))}
                   <td colSpan={4} />
                 </tr>
               ))}
               <tr className="child">
                 <td>Salary allocated to buildings (63112: FM staff, watchmen)</td>
                 {four(data.allocation)}
-                <td colSpan={9} />
+                <td colSpan={9 + R} />
               </tr>
             </tbody>
           </table>
@@ -431,6 +497,11 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                   Budget {L.b} · paid by
                 </th>
                 <th className="anh-num" />
+                {prior && (
+                  <th colSpan={2} style={{ textAlign: 'center' }}>
+                    Reference · by department
+                  </th>
+                )}
               </tr>
               <tr className="h1">
                 <th>Account</th>
@@ -442,6 +513,16 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                   </th>
                 ))}
                 <th className="anh-num">vs {L.f}</th>
+                {prior && (
+                  <>
+                    <th className="anh-num" title="Last year's approved budget per department (Admin(GA)xOverheads, by cost line, not by GL account): on the department total">
+                      {prior.label}
+                    </th>
+                    <th className="anh-num">
+                      {L.b} vs {prior.label}
+                    </th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -451,8 +532,8 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                 const shown = new Set(rows.map((r) => r.account));
                 return (
                   <Fragment key={dept}>
-                    <tr className="section" id={`dept-${dept}`}>
-                      <td colSpan={2 + 4 + PAYERS.length + 1}>
+                    <tr className={'section cursor-pointer' + (isOpen(dept) ? ' is-selected' : '')} id={`dept-${dept}`} onClick={() => setOpen({ dept })} title="Open in the form">
+                      <td colSpan={2 + 4 + PAYERS.length + 1 + R}>
                         {dept} · {deptName(dept)}
                         {d?.elsewhere && <span className="ml-2 font-normal text-slate-500">in {d.elsewhere}</span>}
                       </td>
@@ -499,12 +580,13 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                             ),
                           )}
                           <td className="anh-num calc">{pct(rowBudget(r), r.f)}</td>
+                          {prior && <td colSpan={2} />}
                         </tr>
                       );
                     })}
                     {enterable(dept) && (
                       <tr className="child">
-                        <td colSpan={2 + 4 + PAYERS.length + 1}>
+                        <td colSpan={2 + 4 + PAYERS.length + 1 + R}>
                           <select
                             aria-label={`Add an account to ${deptName(dept)}`}
                             className="bg-transparent text-xs text-slate-600"
@@ -521,7 +603,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                         </td>
                       </tr>
                     )}
-                    {rows.length > 0 && (
+                    {(rows.length > 0 || (prior && priorOh(dept) !== null)) && (
                       <tr className="subtotal">
                         <td>Total {deptName(dept)}</td>
                         <td />
@@ -535,6 +617,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                           </td>
                         ))}
                         <td className="anh-num">{pct(ohBudget(rows), ohTotal(rows, 'f'))}</td>
+                        {refCells(ohBudget(rows), priorOh(dept), 'anh-num')}
                       </tr>
                     )}
                   </Fragment>
@@ -553,6 +636,7 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                   </td>
                 ))}
                 <td className="anh-num">{pct(ohBudget(allRows), ohTotal(allRows, 'f'))}</td>
+                {refCells(ohBudget(allRows), prior ? sum(Object.entries(prior.admin).filter(([d]) => !DEPT.get(d)?.elsewhere).map(([, v]) => v)) : null, 'anh-num')}
               </tr>
             </tbody>
           </table>
@@ -598,8 +682,8 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
                       {rows.map((r) => {
                         const who = FEE_ENTITIES.find((e) => e.key === r.entity)!.name;
                         return (
-                          <tr key={r.entity} className="child">
-                            <td>
+                          <tr key={r.entity} className={'child' + (open && 'fee' in open && open.fee === r.fee && open.entity === r.entity ? ' is-selected' : '')}>
+                            <td className="cursor-pointer" onClick={() => setOpen({ fee: r.fee, entity: r.entity })} title="Open in the form">
                               {f.name} · {f.base.toLowerCase()}
                             </td>
                             <td>{who}</td>
@@ -693,5 +777,6 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
         </section>
       </div>
     </div>
+    </ListAndForm>
   );
 }

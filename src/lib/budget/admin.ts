@@ -2,17 +2,20 @@
 // actuals by cost centre as reference, and the 2026 rules (PDD capitalised, recharges to MJNH / ASRE,
 // PMA and AMA fees). Finance only: it holds payroll. Phased evenly over 12 months, as in 2026.
 import 'server-only';
-import { and, desc, eq, gte, inArray, isNull, like, lte, max, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, like, lte, max, sql } from 'drizzle-orm';
+import { priorVersion } from './prior-version';
+import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import { isFinance, type Actor } from '@/lib/auth/permissions';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { bohAccountBudget } from './boh';
+import { referenceBudget } from './reference';
+import { frozen } from './snapshot-store';
 import {
   ADMIN_ACCOUNT,
   DEPTS,
   FEES,
   FEE_ENTITIES,
-  PAST_FEES,
   PAYERS,
   SALARY_ALLOCATION,
   feeAmount,
@@ -30,7 +33,7 @@ import {
   type PayrollRow,
   type SplitEntity,
 } from './admin-types';
-import { isMall, type EntityKey } from './group';
+import { isMall, quarterlyCash, type EntityKey } from './group';
 import { CAPEX, ITEM_KIND, SCHEDULE_ACCOUNT, cleanItem, isItemKind, type AdminItem, type ItemData, type ItemKind, type Posting } from './admin-items';
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
@@ -41,6 +44,7 @@ const WATCHMEN_ACCOUNT = '62603';
 
 /** the landlords' (REHL, REHL-MJN, the mall) budget rent of a version, by entity and month: the PMA fee base */
 export async function landlordRent(versionId: number): Promise<Record<FeeEntity, number[]>> {
+  await getSettings(); // the mappings (e.g. the Mall's codes) before any property is classified
   const rows = await db
     .select({ code: schema.properties.code, bu: schema.properties.buCode, month: schema.lineMonthly.month, revenue: sql<number>`sum(${schema.lineMonthly.revenue})::float` })
     .from(schema.lineMonthly)
@@ -54,6 +58,7 @@ export async function landlordRent(versionId: number): Promise<Record<FeeEntity,
 
 /** budget rent of REHL, REHL-MJN (without the mall) and the PMC: ANPM's G&A is shared on it (2026 PayrollxCost row 12) */
 async function splitRevenue(versionId: number): Promise<Record<SplitEntity, number>> {
+  await getSettings(); // the mappings (e.g. the Mall's codes) before any property is classified
   const rows = await db
     .select({ code: schema.properties.code, bu: schema.properties.buCode, revenue: sql<number>`sum(${schema.lineMonthly.revenue})::float` })
     .from(schema.lineMonthly)
@@ -70,14 +75,24 @@ type PriorFee = { fee: FeeKind; entity: FeeEntity; rate: number; base: number | 
 /** last budget's fees: a past budget kept outside the tool, or the fees of last year's version */
 async function priorFees(version: schema.BudgetVersion): Promise<{ label: string; rows: PriorFee[] } | null> {
   const Y = version.year - 1;
-  const past = PAST_FEES[Y];
-  if (past)
+  // a past budget kept outside the tool: its fees as loaded into the reference (2026: the workbook's
+  // PnLxREHLxANPM rows; scripts/load-reference-budget.ts); the base is the fee ÷ the rate
+  const ref = await referenceBudget(Y, 'fees');
+  if (ref.length) {
+    const pick = (fee: string, account: string) => ref.find((r) => r.scope === fee && r.account === account)?.amount ?? null;
     return {
       label: `${Y}B`,
-      rows: FEES.flatMap((f) => FEE_ENTITIES.map((e) => ({ fee: f.key, entity: e.key, rate: past[f.key].rate, base: r2(past[f.key].fee[e.key] / past[f.key].rate), amount: past[f.key].fee[e.key] }))),
+      rows: FEES.flatMap((f) =>
+        FEE_ENTITIES.map((e) => {
+          const rate = (pick(f.key, 'ratePct') ?? 0) / 100;
+          const amount = pick(f.key, e.key);
+          return { fee: f.key, entity: e.key, rate, base: amount !== null && rate ? r2(amount / rate) : null, amount };
+        }),
+      ),
     };
-  // the budget of last year (a working version before an imported one)
-  const [pv] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.year, Y)).orderBy(schema.budgetVersions.isBaseline, desc(schema.budgetVersions.id)).limit(1);
+  }
+  // last year's approved budget (prior-version.ts)
+  const pv = await priorVersion(version);
   if (!pv) return null;
   const { rows } = await managementFees(pv);
   return { label: `${Y}B`, rows: rows.map((r) => ({ fee: r.fee, entity: r.entity, rate: feeRate(r), base: feeBase(r), amount: r.amount })) };
@@ -87,7 +102,11 @@ async function priorFees(version: schema.BudgetVersion): Promise<{ label: string
  * The PMA and AMA fees of a version per landlord entity, and by month: the PMA fee follows the entity's
  * rent month by month, the AMA fee is even. Unset rates and bases take the defaults (see FeeRow).
  */
-export async function managementFees(version: schema.BudgetVersion): Promise<{ rows: FeeRow[]; prior: string | null; months: Record<FeeKind, Record<FeeEntity, number[]>> }> {
+export type ManagementFees = { rows: FeeRow[]; prior: string | null; months: Record<FeeKind, Record<FeeEntity, number[]>> };
+export async function managementFees(version: schema.BudgetVersion): Promise<ManagementFees> {
+  // a locked version keeps the fees it was locked with (the defaults read last year's budget and the rent)
+  const snap = await frozen<ManagementFees>(version, 'fees');
+  if (snap) return snap;
   const a = withDefaults(version.assumptions);
   const [stored, rent, prior] = await Promise.all([db.select().from(schema.adminFees).where(eq(schema.adminFees.versionId, version.id)), landlordRent(version.id), priorFees(version)]);
   const fallback: Record<FeeKind, number> = { PMA: a.pmaRate, AMA: a.amaRate };
@@ -208,7 +227,15 @@ export async function loadAdminOverheads(version: schema.BudgetVersion): Promise
   // watchmen: Building Overheads' security allocation (share × cost per watchman) or the amount entered
   const watch = await bohAccountBudget(version, WATCHMEN_ACCOUNT);
 
+  // last year's approved budget, reference only: payroll cost to company and admin overheads per
+  // department (the 2026 workbook budgets G&A by department and cost line, not by GL account)
+  const [refPay, refAdmin] = await Promise.all([referenceBudget(Y - 1, 'payroll'), referenceBudget(Y - 1, 'admin')]);
+  const byDept = (rows: typeof refPay) => rows.reduce<Record<string, number>>((m, r) => ({ ...m, [r.scope]: (m[r.scope] ?? 0) + r.amount }), {});
+  const prior = refPay.length || refAdmin.length ? { label: `${Y - 1}B`, payroll: byDept(refPay), admin: byDept(refAdmin) } : null;
+
   return {
+    rules: withDefaults(version.assumptions).payrollRules,
+    prior,
     year: Y,
     cutoff,
     payroll: payrollRows,
@@ -246,17 +273,21 @@ export async function saveAdminItem(
   if ('error' in clean) return { error: clean.error };
   const values = { versionId, kind: item.kind, dept: item.dept, payer: item.payer, data: clean.data, updatedAt: new Date(), updatedBy: user.id };
   let id = item.id;
-  if (id) {
-    const [row] = await db
-      .update(schema.adminItems)
-      .set(values)
-      .where(and(eq(schema.adminItems.id, id), eq(schema.adminItems.versionId, versionId)))
-      .returning({ id: schema.adminItems.id });
-    if (!row) return { error: 'Item not found' };
-  } else {
-    [{ id }] = await db.insert(schema.adminItems).values(values).returning({ id: schema.adminItems.id });
-  }
-  await db.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_item', entityId: String(id), action: item.id ? 'update' : 'create', changes: { kind: item.kind, dept: item.dept, payer: item.payer, data: clean.data } });
+  // the item and its audit row (before and after) land together
+  const found = await db.transaction(async (tx) => {
+    let before: typeof schema.adminItems.$inferSelect | undefined;
+    if (id) {
+      [before] = await tx.select().from(schema.adminItems).where(and(eq(schema.adminItems.id, id), eq(schema.adminItems.versionId, versionId)));
+      if (!before) return false;
+      await tx.update(schema.adminItems).set(values).where(eq(schema.adminItems.id, id));
+    } else {
+      [{ id }] = await tx.insert(schema.adminItems).values(values).returning({ id: schema.adminItems.id });
+    }
+    const after = { kind: item.kind, dept: item.dept, payer: item.payer, data: clean.data };
+    await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_item', entityId: String(id), action: before ? 'update' : 'create', changes: { from: before ? { kind: before.kind, dept: before.dept, payer: before.payer, data: before.data } : null, to: after } });
+    return true;
+  });
+  if (!found) return { error: 'Item not found' };
   return { id: id! };
 }
 
@@ -264,8 +295,10 @@ export async function deleteAdminItem(user: Actor, versionId: number, id: number
   if (!isFinance(user)) return { error: 'Admin overheads are entered by Finance' };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') return { error: 'This budget version is locked' };
-  const [row] = await db.delete(schema.adminItems).where(and(eq(schema.adminItems.id, id), eq(schema.adminItems.versionId, versionId))).returning();
-  if (row) await db.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_item', entityId: String(id), action: 'delete', changes: { kind: row.kind, dept: row.dept, data: row.data } });
+  await db.transaction(async (tx) => {
+    const [row] = await tx.delete(schema.adminItems).where(and(eq(schema.adminItems.id, id), eq(schema.adminItems.versionId, versionId))).returning();
+    if (row) await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_item', entityId: String(id), action: 'delete', changes: { from: { kind: row.kind, dept: row.dept, payer: row.payer, data: row.data }, to: null } });
+  });
   return {};
 }
 
@@ -287,6 +320,8 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         errors.push('Not a valid amount');
         continue;
       }
+      // the value it replaces, for the audit row
+      let from: number | null = null;
       if (c.kind === 'payroll') {
         const kind = PAYROLL_FIELDS[c.field];
         if (!DEPTS.some((d) => d.code === c.dept && !d.elsewhere)) {
@@ -297,6 +332,8 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
           errors.push(`${c.dept}: ${kind === 'pct' ? 'a share 0–100%' : 'a whole number'}`);
           continue;
         }
+        const [b] = await tx.select().from(schema.adminPayroll).where(and(eq(schema.adminPayroll.versionId, versionId), eq(schema.adminPayroll.dept, c.dept)));
+        from = (b?.[c.field] as number | null | undefined) ?? null;
         await tx
           .insert(schema.adminPayroll)
           .values({ versionId, dept: c.dept, [c.field]: v, updatedBy: user.id })
@@ -312,6 +349,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
           continue;
         }
         const where = and(eq(schema.adminBudget.versionId, versionId), eq(schema.adminBudget.dept, c.dept), eq(schema.adminBudget.account, c.account), eq(schema.adminBudget.entity, c.entity));
+        from = (await tx.select().from(schema.adminBudget).where(where))[0]?.amount ?? null;
         if (v === null) await tx.delete(schema.adminBudget).where(where);
         else
           await tx
@@ -331,6 +369,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
           continue;
         }
         const where = and(eq(schema.adminFees.versionId, versionId), eq(schema.adminFees.fee, c.fee), eq(schema.adminFees.entity, c.entity));
+        from = ((await tx.select().from(schema.adminFees).where(where))[0]?.[c.field] as number | null | undefined) ?? null;
         await tx
           .insert(schema.adminFees)
           .values({ versionId, fee: c.fee, entity: c.entity, [c.field]: v, updatedBy: user.id })
@@ -338,7 +377,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         // both back to the defaults: nothing to keep
         await tx.delete(schema.adminFees).where(and(where, isNull(schema.adminFees.rate), isNull(schema.adminFees.base)));
       }
-      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId: JSON.stringify({ ...c, value: undefined }), action: 'update', changes: { to: v } });
+      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId: JSON.stringify({ ...c, value: undefined }), action: 'update', changes: { from, to: v } });
       saved++;
     }
   });
@@ -390,14 +429,21 @@ export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{
       }
     }
   }
-  for (const b of budget) if (!SCHEDULE_ACCOUNT.has(b.account) && !scheduled.has(`${b.dept}|${b.account}|${b.entity}`)) into(oh, b.entity, flat(b.amount), b.dept);
+  // depreciation accounts are below EBITDA and not paid (as the 2026 budget)
+  const dep = new Map<string, number[]>();
+  for (const b of budget) {
+    if (SCHEDULE_ACCOUNT.has(b.account) || scheduled.has(`${b.dept}|${b.account}|${b.entity}`)) continue;
+    // (still part of the department's overheads the payroll rules apply to, as PayrollxCost)
+    if (ADMIN_ACCOUNT.get(b.account)?.group === 'Depreciation') into(dep, b.entity, flat(b.amount), b.dept);
+    else into(oh, b.entity, flat(b.amount), b.dept);
+  }
   // payroll: ANPM's, less what is capitalised (still paid) and what is recharged (received back), both
   // taken on payroll and the department's overheads as the 2026 rules
   let gross = 0;
   let cap = 0;
   let recharged = 0;
   for (const p of payroll) {
-    const s = payrollSplit(p, anpmOh.get(p.dept) ?? 0);
+    const s = payrollSplit(p, anpmOh.get(p.dept) ?? 0, withDefaults(version.assumptions).payrollRules);
     gross += s.total;
     cap += s.cap;
     recharged += s.mjnh + s.asre;
@@ -414,6 +460,10 @@ export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{
     lines.add('adminOh');
     costs.push({ entity: payer as EntityKey, line: 'adminOh', months });
   }
+  for (const [payer, months] of dep) {
+    lines.add('depreciation');
+    costs.push({ entity: payer as EntityKey, line: 'depreciation', months, cash: z12() });
+  }
   for (const [payer, months] of capex) {
     lines.add('gaCapex');
     costs.push({ entity: payer as EntityKey, line: 'gaCapex', months });
@@ -422,7 +472,8 @@ export async function adminEntityCosts(version: schema.BudgetVersion): Promise<{
   for (const r of fees.rows)
     if (r.fee === 'AMA' && r.amount) {
       lines.add('ama');
-      costs.push({ entity: r.entity, line: 'ama', months: fees.months.AMA[r.entity] });
+      // paid at each quarter end (Mar, Jun, Sep, Dec), as the 2026 budget; the expense stays monthly
+      costs.push({ entity: r.entity, line: 'ama', months: fees.months.AMA[r.entity], cash: quarterlyCash(fees.months.AMA[r.entity], 'arrears') });
     }
   return { costs, lines };
 }

@@ -132,8 +132,8 @@ export function BudgetVsForecastCard({ data }: { data: BudgetVsForecast }) {
         )}
 
         <p className="text-[11px] text-[var(--ink-muted)]">
-          {F} is Oracle&apos;s recognised rent to the last closed month plus the Lease Budget for the rest (·p = projected month).
-          {data.excluded > 0 && ` ${data.excluded} propert${data.excluded === 1 ? 'y' : 'ies'} without Oracle actuals (PMC) left out.`} Actuals are per property: the
+          {F} is Oracle&apos;s recognised rent to {m(data.lastActualMonth)} plus the leases as they run and the property managers&apos; inputs for the rest (·p = projected month).
+          {data.projectedOnly > 0 && ` ${data.projectedOnly} propert${data.projectedOnly === 1 ? 'y' : 'ies'} without Oracle actuals (PMC) projected for the whole year.`} Actuals are per property: the
           Category filter picks properties.
         </p>
       </div>

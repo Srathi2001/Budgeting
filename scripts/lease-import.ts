@@ -5,6 +5,7 @@
 //   npx tsx scripts/lease-import.ts <versionId> <report.xlsx> [--dump <Unit Dump.xls>] [--mf <MF Report.xls>]           preview only
 //   npx tsx scripts/lease-import.ts <versionId> <report.xlsx> [--dump <Unit Dump.xls>] [--mf <MF Report.xls>] --apply   import
 import 'dotenv/config';
+import { scriptActor } from './script-actor';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { db } from '../src/db';
@@ -41,7 +42,7 @@ async function main() {
     mf: mfFile ? parseMfReport(readFileSync(mfFile)) : null,
     files: [file, dumpFile, mfFile].filter((f): f is string => !!f).map((f) => basename(f)),
   };
-  if (flag === '--apply') show(await applyImport(Number(versionId), rows, null, basename(file), extras));
+  if (flag === '--apply') show(await applyImport(Number(versionId), rows, await scriptActor(), basename(file), extras));
   else show((await planImport(Number(versionId), rows, extras)).preview);
 }
 

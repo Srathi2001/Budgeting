@@ -15,6 +15,7 @@ import {
   previewLeaseImport,
   applyLeaseImport,
   applyGlActuals,
+  undoGlActuals,
   previewRevenueImport,
   applyRevenueImportAction,
 } from './actions';
@@ -50,19 +51,24 @@ export function VersionsPanel({
   versions: { id: number; name: string; year: number; status: 'OPEN' | 'LOCKED'; isBaseline: boolean; createdAt: string }[];
 }) {
   const { pending, run, Msg } = useAction();
-  const [locking, setLocking] = useState<{ id: number; name: string } | null>(null);
+  const [locking, setLocking] = useState<{ id: number; name: string; to: 'OPEN' | 'LOCKED' } | null>(null);
   const [rolling, setRolling] = useState<{ id: number; name: string; year: number } | null>(null);
   return (
     <div className="space-y-4">
       <ConfirmDialog
         open={!!locking}
         onOpenChange={(o) => !o && setLocking(null)}
-        title={locking ? `Lock ${locking.name}?` : ''}
-        body="Nobody can change anything in a locked version: inputs, statuses, imports. Finance can reopen it later."
-        confirmLabel="Lock"
-        onConfirm={async () => {
+        title={locking ? `${locking.to === 'LOCKED' ? 'Lock' : 'Reopen'} ${locking.name}?` : ''}
+        body={
+          locking?.to === 'OPEN'
+            ? 'Inputs, statuses and imports can change again until it is locked, and its figures follow the live data again. The reason is kept in the audit log.'
+            : 'Nobody can change anything in a locked version: inputs, statuses, imports. Its figures are frozen as they show now, including the comparatives, the rent forecast, building overheads and the PMA / AMA fees, so later actuals and imports do not move them. Admin can reopen it later, with a reason.'
+        }
+        confirmLabel={locking?.to === 'OPEN' ? 'Reopen' : 'Lock'}
+        note={locking?.to === 'OPEN' ? { label: 'Reason for reopening', required: true, placeholder: 'What needs to change' } : undefined}
+        onConfirm={async (reason) => {
           if (!locking) return null;
-          const r = await setVersionStatus(locking.id, 'LOCKED');
+          const r = await setVersionStatus(locking.id, locking.to, reason);
           return r.error ?? null;
         }}
       />
@@ -70,7 +76,7 @@ export function VersionsPanel({
         open={!!rolling}
         onOpenChange={(o) => !o && setRolling(null)}
         title={rolling ? `Roll ${rolling.name} forward to ${rolling.year + 1}` : ''}
-        body="For every unit, the contract in force on 1 January becomes the current contract; renewals are derived again from the RERA index and budget rates. RERA rows and manual other income are copied."
+        body="The new version starts with the same units and no lease details: import the Tenant and Lease Details Report into it. The comparatives and the RERA ranges carry over (property managers update the ranges); other income, building overheads, FM and admin overheads are entered afresh."
         confirmLabel="Create version"
         note={rolling ? { label: 'Name of the new version', required: true, initial: `${rolling.year + 1} Budget` } : undefined}
         onConfirm={async (name) => {
@@ -104,17 +110,21 @@ export function VersionsPanel({
                 <td className="text-xs text-slate-500">{v.createdAt.slice(0, 10)}</td>
                 <td className="flex gap-1">
                   {v.status === 'OPEN' ? (
-                    <button className="btn" disabled={pending} onClick={() => setLocking({ id: v.id, name: v.name })}>
+                    <button className="btn" disabled={pending} onClick={() => setLocking({ id: v.id, name: v.name, to: 'LOCKED' })}>
                       Lock
                     </button>
                   ) : (
-                    <button className="btn" disabled={pending} onClick={() => run(() => setVersionStatus(v.id, 'OPEN'))}>
-                      Reopen
+                    !v.isBaseline && (
+                      <button className="btn" disabled={pending} onClick={() => setLocking({ id: v.id, name: v.name, to: 'OPEN' })}>
+                        Reopen
+                      </button>
+                    )
+                  )}
+                  {!v.isBaseline && (
+                    <button className="btn" disabled={pending} onClick={() => run(() => recalcVersion(v.id))}>
+                      Recalculate
                     </button>
                   )}
-                  <button className="btn" disabled={pending} onClick={() => run(() => recalcVersion(v.id))}>
-                    Recalculate
-                  </button>
                   <button className="btn" disabled={pending} onClick={() => setRolling({ id: v.id, name: v.name, year: v.year })}>
                     Roll forward to {v.year + 1}
                   </button>
@@ -166,6 +176,7 @@ export function AssumptionsPanel({
         run(() =>
           saveAssumptions(versionId, {
             renewalTermDays: n(f.get('renewalTermDays')),
+            defaultVacancyDays: n(f.get('defaultVacancyDays')),
             staffDiscount: n(f.get('staffDiscount')) / 100,
             reraBands: bands,
             labourIncrease: n(f.get('labourIncrease')) / 100,
@@ -181,16 +192,17 @@ export function AssumptionsPanel({
       }
     >
       <h2 className="mb-2 font-semibold">Assumptions · {versionName}</h2>
-      {field('renewalTermDays', 'Renewal term', a.renewalTermDays, 'Length of a renewed / new contract', 1, 'days')}
+      {field('renewalTermDays', 'Renewal term', a.renewalTermDays, 'Length of a renewed / new contract. 365 = one calendar year (to the day before the same date next year, leap years included); 730 = two years; any other number is counted in days', 1, 'days')}
+      {field('defaultVacancyDays', 'Vacancy days (default)', a.defaultVacancyDays, 'Empty days before a new tenant when none are entered for the lease', 1, 'days')}
       {field('staffDiscount', 'Staff discount', a.staffDiscount, 'Grossed up when comparing staff rents with RERA', 100, '%')}
       {field('labourIncrease', 'Labour unit renewal increase', a.labourIncrease, 'R/C = L units outside the camps', 100, '%')}
       {field('campIncrease', 'Labour camp renewal increase', a.campIncrease, 'Camps (rate per bed)', 100, '%')}
       {field('defaultCheques', 'Cheques per contract', a.defaultCheques, 'Default when a unit has no cheque count', 1, '')}
       {field('chequeSpanDays', 'Cheque schedule span', a.chequeSpanDays, 'Cheque interval = span ÷ cheques (template: 370 ÷ 4 = 92.5 days)', 1, 'days')}
-      {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. Included in cash inflow', 100, '%')}
+      {field('vatRate', 'VAT', a.vatRate, 'On commercial & labour rent; residential rent exempt. For reference only: not in the cash flow (it passes through to the FTA, as the 2026 budget); non-recoverable VAT is a G&A line in Admin overheads', 100, '%')}
       {field('depositPct', 'Security deposit', a.depositPct, 'Of annual rent: received from new tenants, refunded when a tenant leaves', 100, '%')}
       {field('mfPct', 'Maintenance service fee', a.mfPct, 'Of the renewal / new-tenant rent, residential leases with MF: other income, in the month the contract starts', 100, '%')}
-      {field('actualsCutoffMonth', 'GL actuals cut-off month', a.actualsCutoffMonth, 'Last closed month of the GL actuals (1–12): other income YTD runs to it, the rest of the prior year is typed. Changing it needs a fresh GL import.', 1, '(1–12)')}
+      {field('actualsCutoffMonth', 'Actuals cut-off month', a.actualsCutoffMonth, 'Last month of actuals of the prior year (1–12; September for the 2027 budget). Rent forecast (e.g. 2026F): Oracle actuals to this month, then the leases as they run and the property managers’ inputs, on every screen. Other income: GL year to date to this month, the rest typed (changing it needs a fresh GL import).', 1, '(1–12)')}
 
       <div className="pt-3">
         <div className="text-sm font-medium text-slate-700">RERA increase bands</div>
@@ -398,8 +410,8 @@ type CompRow = {
   name: string;
   bu: string;
   values: Record<string, number | null>;
-  /** 'actual' / 'forecast': from the Revenue Recognition Summary (read only); 'manual': typed in */
-  sources: Record<string, 'actual' | 'forecast' | 'manual'>;
+  /** 'actual' / 'forecast' / 'projection': from the Revenue Recognition Summary and the leases (read only); 'manual': typed in */
+  sources: Record<string, 'actual' | 'forecast' | 'projection' | 'manual'>;
 };
 
 export function ComparativesPanel({
@@ -464,7 +476,15 @@ export function ComparativesPanel({
                   <td
                     key={l}
                     className={`num sep ${r.sources[l] !== 'manual' ? 'cell-derived' : ''}`}
-                    title={r.sources[l] === 'actual' ? 'Revenue Recognition Summary' : r.sources[l] === 'forecast' ? 'Actual to date + Lease Budget' : undefined}
+                    title={
+                      r.sources[l] === 'actual'
+                        ? 'Revenue Recognition Summary'
+                        : r.sources[l] === 'forecast'
+                          ? 'Actual to the cut-off month + the leases and the property managers’ inputs'
+                          : r.sources[l] === 'projection'
+                            ? 'No Oracle actuals: the leases and the property managers’ inputs for the whole year'
+                            : undefined
+                    }
                   >
                     {locked || r.sources[l] !== 'manual' ? (
                       fmt(r.values[l])
@@ -559,27 +579,33 @@ export function LeaseImportPanel({
   stats: { lines: number; leased: number; lastImport: string | null; lastFile: string | null };
 }) {
   const [files, setFiles] = useState<{ file?: File; dump?: File; mf?: File }>({});
-  const [form, setForm] = useState<FormData | null>(null);
+  const [asOf, setAsOf] = useState(() => new Date().toLocaleDateString('en-CA'));
+  const [planId, setPlanId] = useState<number | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, startCheck] = useTransition();
   const apply = useAction();
 
-  // any file change re-runs the preview with all three
-  const onFile = (key: 'file' | 'dump' | 'mf') => (e: React.ChangeEvent<HTMLInputElement>) => {
+  // any file or date change re-runs the preview with all three files
+  const check = (next: typeof files, date: string) => {
     setPreview(null);
+    setPlanId(null);
     setError(null);
-    const next = { ...files, [key]: e.target.files?.[0] };
-    setFiles(next);
-    if (!next.file) return setForm(null);
+    if (!next.file) return;
     const f = new FormData();
     for (const k of ['file', 'dump', 'mf'] as const) if (next[k]) f.set(k, next[k]!);
-    setForm(f);
+    f.set('asOf', date);
     startCheck(async () => {
       const r = await previewLeaseImport(versionId, f);
       setError(r.error ?? null);
       setPreview(r.preview ?? null);
+      setPlanId(r.planId ?? null);
     });
+  };
+  const onFile = (key: 'file' | 'dump' | 'mf') => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = { ...files, [key]: e.target.files?.[0] };
+    setFiles(next);
+    check(next, asOf);
   };
   const counts = (m: Record<string, number>) =>
     Object.entries(m)
@@ -598,8 +624,9 @@ export function LeaseImportPanel({
           line) and one per available unit, with unit type, area, status, tenant, contract dates, rent, deposit, other charges and contracted later
           years. Add the <b>Unit Dump</b> for landlord, merged unit no., unit usage and unit status, and the <b>Maintenance Fee Report</b> for MF
           Yes / No / Waived off, amount, paid and outstanding. Without them, those fields keep their last import. Choosing a file shows what would change; nothing is saved until you click{' '}
-          <b>Import</b>. The lines of <b>{versionName}</b> are rebuilt; budget inputs (outcome, budget rate, overrides, cheques, notes) stay with
-          their unit. Personal data in the report (phone, email, passport, Emirates ID) is not read.
+          <b>Import</b>, which writes exactly what the preview shows (it is refused if the lines changed in between). The lines of <b>{versionName}</b> are updated in place and
+          budget inputs (outcome, budget rate, overrides, cheques, notes) stay with their unit; lines no longer in the report are archived with their inputs. Submitted
+          and approved properties are not touched: what Oracle shows differently for them is listed below. Personal data in the report (phone, email, passport, Emirates ID) is not read.
         </p>
         <div className="mt-3 text-xs text-slate-600">
           {count(stats.leased)} of {count(stats.lines)} lines have a current lease · last import {stats.lastImport ?? 'never'}
@@ -622,15 +649,30 @@ export function LeaseImportPanel({
               <span className="font-medium">Maintenance Fee Report (optional)</span>
               <input type="file" accept=".xls,.xlsx,.htm,.html,.mht" onChange={onFile('mf')} className="text-xs" />
             </label>
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="font-medium">Contracts as of</span>
+              <input
+                type="date"
+                className="input"
+                value={asOf}
+                onChange={(e) => {
+                  setAsOf(e.target.value);
+                  check(files, e.target.value);
+                }}
+              />
+            </label>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {checking && <span className="text-sm text-slate-500">Reading the reports…</span>}
             <button
               className="btn-primary"
-              disabled={!form || !p || apply.pending}
-              onClick={() => form && apply.run(async () => {
-                const r = await applyLeaseImport(versionId, form);
-                if (!r.error) setPreview(null);
+              disabled={!planId || !p || apply.pending}
+              onClick={() => planId && apply.run(async () => {
+                const r = await applyLeaseImport(planId);
+                if (!r.error) {
+                  setPreview(null);
+                  setPlanId(null);
+                }
                 return r;
               })}
             >
@@ -694,8 +736,15 @@ export function LeaseImportPanel({
           </div>
           <div className="text-xs text-slate-500">{count(p.kept)} lines keep their unit code and budget inputs.</div>
           <ListBlock
+            title="Submitted or approved: not imported"
+            hint={`${count(p.heldProperties)} properties are left as submitted. Oracle shows these differences; return a property in Submissions and import again to take them`}
+            items={p.held}
+            cols={['Property', 'Status', 'Line', 'In Oracle']}
+            row={(x) => [x.property, x.status.toLowerCase(), x.line, x.change]}
+          />
+          <ListBlock
             title="Lines removed"
-            hint="not in the report, or now part of a lease covering several units; budget inputs on them are dropped"
+            hint="not in the report, or now part of a lease covering several units; archived with their budget inputs"
             items={p.removedLines}
             cols={['Property', 'Line', 'Tenant (before)', 'Had budget inputs']}
             row={(x) => [x.property, x.code, x.tenant ?? '', x.inputs ? 'Yes' : '']}
@@ -814,6 +863,8 @@ export function GlImportPanel({
   locked,
   last,
   cutoff = 9,
+  undo = null,
+  admin = false,
 }: {
   ledger: GlLedger;
   companies: string[];
@@ -824,12 +875,28 @@ export function GlImportPanel({
   last: { at: string; file: string | null } | null;
   /** the version's GL actuals cut-off month (1–12) */
   cutoff?: number;
+  /** the latest import of this ledger that can be undone */
+  undo?: { planId: number; at: string } | null;
+  /** an admin can confirm an import that replaces most of the actuals with fewer rows */
+  admin?: boolean;
 }) {
+  type Count = { existing: number; incoming: number };
   const [file, setFile] = useState<File | null>(null);
-  const [plan, setPlan] = useState<{ planId: number; preview: GlPreview; fm: { preview: FmActualsPreview } | null; boh: { preview: BohActualsPreview } | null; ga: { preview: AdminActualsPreview } | null } | null>(null);
+  const [plan, setPlan] = useState<{
+    planId: number;
+    preview: GlPreview;
+    fm: { preview: FmActualsPreview } | null;
+    boh: { preview: BohActualsPreview } | null;
+    ga: { preview: AdminActualsPreview } | null;
+    replace: { oi: Count; fm: Count | null; boh: Count | null; ga: Count | null };
+    kept: string[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+  const [force, setForce] = useState(false);
   const apply = useAction();
+  const undoing = useAction();
+  const replaced = (c: Count | null | undefined) => (c ? ` · replaces ${count(c.existing)} rows with ${count(c.incoming)}${c.existing > 0 && c.incoming < c.existing / 2 ? ' (held: fewer than half)' : ''}` : '');
   const label = { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: oiLabel('YTD', year, cutoff), OD: oiLabel('OD', year, cutoff) };
   const cutMon = oiLabel('YTD', year, cutoff).slice(-3);
 
@@ -864,12 +931,25 @@ export function GlImportPanel({
           {ledger === 'MJN HOLDING'
             ? 'Accounts 52xxx are read by property; company-level lines and properties not in the budget go to the General row of their business unit.'
             : 'Accounts 52xxx go to the General row of each company.'}{' '}
-          {ledger === 'MJN HOLDING' && 'The same file carries the FM cost actuals (627xx, 117xx), the building overhead actuals (Building Overheads tab) and the G&A actuals by department (Admin Overheads tab).'}{' '}
-          An import replaces this ledger&apos;s GL actuals; the other ledger, the {label.OD} forecast and budget inputs are kept.
+          {ledger === 'MJN HOLDING' && 'Run it for all accounts: the same file carries the FM cost actuals (627xx, 117xx), the building overhead actuals (Building Overheads tab) and the G&A actuals by department (Admin Overheads tab). A set the file does not carry is kept as it is; building overhead and G&A actuals are replaced only for the accounts in the file.'}{' '}
+          An import replaces this ledger&apos;s GL actuals; the other ledger, the {label.OD} forecast and budget inputs are kept. What it replaces is kept, so the last import can be undone.
         </p>
-        <div className="mt-3 text-xs text-slate-600">
-          Last import {last ? fmtDateTime(last.at) : 'never'}
-          {last?.file && <> ({last.file})</>}
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <span>
+            Last import {last ? fmtDateTime(last.at) : 'never'}
+            {last?.file && <> ({last.file})</>}
+          </span>
+          {undo && !locked && (
+            <button
+              className="btn btn-xs"
+              disabled={undoing.pending}
+              title="Puts back the GL actuals this import replaced"
+              onClick={() => undoing.run(() => undoGlActuals(undo.planId))}
+            >
+              {undoing.pending ? 'Undoing…' : `Undo the import of ${fmtDateTime(undo.at)}`}
+            </button>
+          )}
+          <undoing.Msg />
         </div>
         {locked ? (
           <div className="mt-3 text-xs text-amber-700">This version is locked.</div>
@@ -883,7 +963,7 @@ export function GlImportPanel({
               onClick={() =>
                 plan &&
                 apply.run(async () => {
-                  const r = await applyGlActuals(plan.planId);
+                  const r = await applyGlActuals(plan.planId, force);
                   if (!r.error) setPlan(null);
                   return r;
                 })
@@ -891,6 +971,11 @@ export function GlImportPanel({
             >
               {apply.pending ? 'Importing…' : plan && file ? `Import ${file.name}` : 'Import'}
             </button>
+            {admin && plan && (
+              <label className="flex items-center gap-1 text-xs" title="Imports even when a part would replace its actuals with fewer than half as many rows">
+                <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} /> Replace anyway
+              </label>
+            )}
             <apply.Msg />
             {error && <span className="text-sm text-red-600">{error}</span>}
           </div>
@@ -900,8 +985,9 @@ export function GlImportPanel({
       {p && (
         <div className="space-y-3">
           <div className="text-sm font-semibold">
-            Preview <span className="font-normal text-slate-500">· nothing saved yet</span>
+            Preview <span className="font-normal text-slate-500">· nothing saved yet · other income{replaced(plan?.replace.oi)}</span>
           </div>
+          {!!plan?.kept.length && <ListBlock title="Kept as they are" hint="not in this file" items={plan.kept} cols={['']} row={(x) => [x]} />}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Tile label="Report" value={p.ledger ?? '—'} sub={`${p.periodFrom} – ${p.periodTo} · ${count(p.accounts)} accounts · ${count(p.lines)} lines · all reconciled`} />
             <Tile label={label.A2} value={`AED ${fmt(p.totals.A2)}`} />
@@ -941,7 +1027,7 @@ export function GlImportPanel({
           {plan?.fm && (
             <>
               <div className="pt-2 text-sm font-semibold">
-                FM cost actuals <span className="font-normal">· {plan.fm.preview.from} to {plan.fm.preview.to}, replaced for these months</span>
+                FM cost actuals <span className="font-normal">· {plan.fm.preview.from} to {plan.fm.preview.to}, replaced for these months{replaced(plan.replace.fm)}</span>
               </div>
               <div className="frame max-w-xl">
                 <table className="tbl">
@@ -975,7 +1061,7 @@ export function GlImportPanel({
           {plan?.boh && (
             <>
               <div className="pt-2 text-sm font-semibold">
-                Building overhead actuals <span className="font-normal">· {plan.boh.preview.from} to {plan.boh.preview.to}, replaced for these months</span>
+                Building overhead actuals <span className="font-normal">· {plan.boh.preview.from} to {plan.boh.preview.to}, replaced for these months and the {plan.boh.preview.accounts.length} accounts in the file{replaced(plan.replace.boh)}</span>
               </div>
               <div className="frame">
                 <table className="tbl">
@@ -1017,7 +1103,7 @@ export function GlImportPanel({
           {plan?.ga && (
             <>
               <div className="pt-2 text-sm font-semibold">
-                G&amp;A actuals by department <span className="font-normal">· {plan.ga.preview.from} to {plan.ga.preview.to}, replaced for these months</span>
+                G&amp;A actuals by department <span className="font-normal">· {plan.ga.preview.from} to {plan.ga.preview.to}, replaced for these months and the {plan.ga.preview.accounts.length} accounts in the file{replaced(plan.replace.ga)}</span>
               </div>
               <div className="frame max-w-2xl">
                 <table className="tbl">

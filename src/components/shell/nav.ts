@@ -11,6 +11,8 @@ export interface NavPage {
   hint: string;
   /** Finance (ADMIN / FINANCE) only */
   finance?: boolean;
+  /** Admin only */
+  admin?: boolean;
   /** facilities management sees only pages marked fm */
   fm?: boolean;
 }
@@ -42,6 +44,7 @@ export const NAV: NavGroup[] = [
       { href: '/fm', label: 'FM Budget', icon: 'fm', hint: 'Maintenance and renewal works by facility', fm: true },
       { href: '/building-overheads', label: 'Building Overheads', icon: 'boh', hint: 'Utilities, insurance, service contracts per building' },
       { href: '/admin-overheads', label: 'Admin Overheads', icon: 'adminOh', hint: 'Head office cost and payroll (Finance)', finance: true },
+      { href: '/treasury', label: 'Treasury', icon: 'adminOh', hint: 'Shareholder loans, fixed deposits, contingencies (Finance)', finance: true },
     ],
   },
   {
@@ -56,23 +59,24 @@ export const NAV: NavGroup[] = [
     label: 'Workflow',
     pages: [
       { href: '/submissions', label: 'Submissions', icon: 'submissions', hint: 'Submit, approve and return properties' },
-      { href: '/imports', label: 'Imports', icon: 'imports', hint: 'Oracle extracts, GL actuals and templates (Finance)', finance: true },
+      { href: '/imports', label: 'Imports', icon: 'imports', hint: 'Oracle extracts and GL actuals (Admin)', admin: true },
     ],
   },
   {
     label: 'Admin',
-    pages: [{ href: '/admin', label: 'Admin', icon: 'admin', hint: 'Versions, users, properties (Finance)', finance: true }],
+    pages: [{ href: '/admin', label: 'Admin', icon: 'admin', hint: 'Versions, assumptions, users, properties (Admin)', admin: true }],
   },
 ];
 
 export interface NavViewer {
   finance: boolean;
   fm: boolean;
+  admin?: boolean;
 }
 
 /** The groups a viewer sees, with pages they may open. FM sees Home and the FM budget only. */
 export function navFor(v: NavViewer): NavGroup[] {
-  return NAV.map((g) => ({ ...g, pages: g.pages.filter((p) => (v.fm ? p.fm : !p.finance || v.finance)) })).filter((g) => g.pages.length);
+  return NAV.map((g) => ({ ...g, pages: g.pages.filter((p) => (v.fm ? p.fm : (!p.finance || v.finance) && (!p.admin || !!v.admin))) })).filter((g) => g.pages.length);
 }
 
 export const isActivePath = (href: string, path: string) => (href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`));

@@ -3,8 +3,8 @@
 // credit. Lines on a building whose account is a building overhead belong to Building Overheads and are
 // left out; the salary allocation (63112) is kept to show what moved to the buildings. An import
 // replaces the G&A actuals of the months the report covers.
-import { and, gte, lte } from 'drizzle-orm';
 import { db, schema, type DB } from '@/db';
+import { scopeWhere } from './gl-history';
 
 type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { ADMIN_ACCOUNT, SALARY_ALLOCATION, isPayrollAccount } from '@/lib/budget/admin-types';
@@ -27,6 +27,8 @@ export interface AdminActualsPreview {
   to: string;
   rows: number;
   byYear: { year: string; payroll: number; admin: number; allocation: number }[];
+  /** the G&A accounts in the file: only these are replaced */
+  accounts: string[];
 }
 
 const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -39,7 +41,9 @@ export async function planAdminActuals(scan: GlScan): Promise<{ rows: AdminActua
   if (scan.ledger?.trim().toUpperCase() !== ADMIN_LEDGER) return null;
   const from = monthOf(scan.periodFrom);
   const to = monthOf(scan.periodTo);
-  if (!from || !to) return null;
+  // only the accounts the file carries are replaced; a file without any keeps the actuals as they are
+  const accounts = [...new Set(scan.months.map((m) => glSegments(m.account).natural).filter(isAdminNatural))].sort();
+  if (!from || !to || !accounts.length) return null;
   const agg = new Map<string, AdminActual>();
   const years = new Map<string, { year: string; payroll: number; admin: number; allocation: number }>();
   for (const m of scan.months) {
@@ -69,14 +73,15 @@ export async function planAdminActuals(scan: GlScan): Promise<{ rows: AdminActua
       to,
       rows: rows.length,
       byYear: [...years.values()].sort((a, b) => a.year.localeCompare(b.year)).map((y) => ({ year: y.year, payroll: r0(y.payroll), admin: r0(y.admin), allocation: r0(y.allocation) })),
+      accounts,
     },
   };
 }
 
-/** Replaces the G&A actuals of the months `preview` covers. */
+/** Replaces the G&A actuals of the months and accounts `preview` covers (the scope of gl-history.ts). */
 export async function applyAdminActuals(rows: AdminActual[], preview: AdminActualsPreview, userId: number | null, file: string | null, on: Tx = db) {
   const run = async (tx: Tx) => {
-    await tx.delete(schema.adminActuals).where(and(gte(schema.adminActuals.month, preview.from), lte(schema.adminActuals.month, preview.to)));
+    await tx.delete(schema.adminActuals).where(scopeWhere('admin_actuals', { from: preview.from, to: preview.to, accounts: preview.accounts }));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.adminActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({ userId, entity: 'gl_import', action: 'admin_actuals', changes: { file, from: preview.from, to: preview.to, rows: rows.length, byYear: preview.byYear } });
   };

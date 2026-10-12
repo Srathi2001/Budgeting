@@ -2,11 +2,11 @@
 
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { db, schema } from '@/db';
-import { SESSION_COOKIE, sessionCookieOptions, signSession } from '@/lib/auth/session';
+import { SESSION_COOKIE, sessionCookieOptions, signSession, verifySession } from '@/lib/auth/session';
 import { loginThrottle, minutes } from '@/lib/auth/throttle';
 
 const LoginSchema = z.object({
@@ -40,7 +40,17 @@ export async function login(_prev: LoginState, form: FormData): Promise<LoginSta
   redirect(next && next.startsWith('/') && !next.startsWith('//') ? next : '/');
 }
 
+/** Signs out: the session is revoked on the server (session_version), not only removed from the browser. */
 export async function logout() {
-  (await cookies()).delete(SESSION_COOKIE);
+  const store = await cookies();
+  const session = await verifySession(store.get(SESSION_COOKIE)?.value);
+  if (session) {
+    await db
+      .update(schema.users)
+      .set({ sessionVersion: sql`${schema.users.sessionVersion} + 1` })
+      .where(eq(schema.users.id, session.uid));
+    await db.insert(schema.auditLog).values({ userId: session.uid, entity: 'session', action: 'sign_out', changes: null }).catch(() => undefined);
+  }
+  store.delete(SESSION_COOKIE);
   redirect('/login');
 }

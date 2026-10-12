@@ -2,14 +2,14 @@
 // an upload's changes are saved (through the page's own save function and its permission checks).
 import { withDefaults } from '@/lib/engine/assumptions';
 import 'server-only';
-import { isFinance, isFm, visibleProperties, editablePropertyIds, type CurrentUser } from '@/lib/auth/dal';
+import { entersData, isFm, visibleProperties, editablePropertyIds, type CurrentUser } from '@/lib/auth/dal';
 import type { schema } from '@/db';
 import { getFilters, filteredScope } from '@/lib/filters-server';
 import { loadOtherIncome, saveOtherIncome } from '@/lib/budget/other-income';
 import { OI_ACCOUNTS, oiCell, oiInput, oiLabel, type OiChange } from '@/lib/budget/other-income-types';
 import { loadBuildingOverheads, saveBuildingOverheads } from '@/lib/budget/boh';
-import { BOH_ACCOUNT, BOH_LINE_LABEL, CONTRACT_KIND, CONTRACT_TERMS, paidInOneMonth, type BohChange, type ContractKind } from '@/lib/budget/boh-types';
-import { contractAmount } from '@/lib/budget/boh-calc';
+import { BOH_ACCOUNT, BOH_LINE_LABEL, CONTRACT_KIND, CONTRACT_TERMS, paidInOneMonth, type BohChange, type ContractKind, type ContractTerms } from '@/lib/budget/boh-types';
+import { contractYear } from '@/lib/budget/boh-calc';
 import { loadContracts, saveContractsAs } from '@/lib/budget/boh-schedules';
 import { loadAdminOverheads, saveAdminItem, saveAdminOverheads } from '@/lib/budget/admin';
 import { itemSheets, itemsFromChanges, scheduleFormula } from './admin-item-sheets';
@@ -26,9 +26,9 @@ export const isTemplateKind = (s: unknown): s is TemplateKind => TEMPLATE_KINDS.
 
 /** null when the user may use the template, else why not */
 export function templateAccess(kind: TemplateKind, user: CurrentUser): string | null {
-  if (kind === 'fm-labour') return isFinance(user) || isFm(user) ? null : 'The FM staff budget is entered by facilities management';
+  if (kind === 'fm-labour') return entersData(user, 'FM') ? null : 'The FM staff budget is entered by facilities management';
   if (isFm(user)) return 'Facilities management enters the FM budget only';
-  if (kind === 'admin-overheads' && !isFinance(user)) return 'Admin overheads are entered by Finance';
+  if (kind === 'admin-overheads' && !entersData(user, 'FIN')) return 'Admin overheads are entered by Finance';
   return null;
 }
 
@@ -65,7 +65,7 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
   if (kind === 'other-income') {
     const props = await scoped();
     const f = filtered ? await getFilters() : null;
-    const blocks = (await loadOtherIncome(version, user, props, await editablePropertyIds(user, version))).filter(
+    const blocks = (await loadOtherIncome(version, user, props, await editablePropertyIds(user, version, 'PM'))).filter(
       // company-level (General) rows follow only the business unit filter, as on the page
       (b) => b.kind === 'P' || !f || ((!f.bu.length || f.bu.includes(b.buCode)) && !f.pm.length && !f.cat.length && !f.prop.length),
     );
@@ -123,13 +123,12 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
 
   if (kind === 'building-overheads') {
     const props = await scoped();
-    const { blocks } = await loadBuildingOverheads(version, props, await editablePropertyIds(user, version));
-    const finance = isFinance(user);
+    const { blocks } = await loadBuildingOverheads(version, props, await editablePropertyIds(user, version, 'PM'), await editablePropertyIds(user, version, 'FIN'));
     const rows: TplRow[] = blocks.flatMap((b) =>
       b.rows.map((r) => {
         const a = BOH_ACCOUNT.get(r.account)!;
         // calculated budgets (water, insurance, watchmen, contract lines) are changed where they are calculated
-        const may = b.editable && (a.owner === 'PM' || finance) && (r.calc === null || r.calc === 'forecast');
+        const may = (a.owner === 'PM' ? b.editable : b.finEditable) && (r.calc === null || r.calc === 'forecast');
         return {
           key: `${b.propertyId}|${r.account}`,
           values: {
@@ -304,18 +303,19 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
     const ck = kind.slice(4) as ContractKind;
     const info = CONTRACT_KIND.get(ck)!;
     const props = await scoped();
-    const editable = await editablePropertyIds(user, version);
+    const editable = await editablePropertyIds(user, version, 'PM');
     const byId = new Map(props.map((p) => [p.id, p]));
     const rows = await loadContracts(version.id, props.map((p) => p.id), ck);
     const acctText = (a: string) => `${a} ${BOH_ACCOUNT.get(a)?.name ?? ''}`.trim();
     const building = (id: number) => `${byId.get(id)?.code ?? ''} ${byId.get(id)?.name ?? ''}`.trim();
-    const OPEN = ['account', 'supplier', 'description', 'terms', 'start', 'quantity', 'rate', 'remarks'];
+    const OPEN = ['account', 'supplier', 'description', 'terms', 'startDate', 'endDate', 'quantity', 'rate', 'renewal', 'renewalRate', 'renewalTerms', 'remarks'];
     return {
       title: info.label,
       scope: `${props.length} buildings`,
       locked,
       instructions: [
-        `4. One row per contract or item: ${info.quantity.toLowerCase()} × ${info.rate.toLowerCase()} = the amount for ${Y}. Terms say when it is paid (monthly from the start month; quarterly, half-yearly, yearly or one-off in the start month).`,
+        `4. One row per contract: its start and end dates, and ${info.quantity.toLowerCase()} × ${info.rate.toLowerCase()} = its value for the whole period. Only the part of the period inside ${Y} is booked; terms say when it is paid (monthly; quarterly and half-yearly at the end of each part; yearly and one-off at the start).`,
+        `5. A contract that ends before 31-Dec-${Y}: say Renewed (with the new rate and, if they change, the new terms) or Ends. Until then it is flagged and the property can't be submitted.`,
         '5. Rows from Oracle purchase orders show the PO number and amount for reference; change the budget columns if the 2027 contract differs (set the quantity or rate to 0 to drop one).',
         '6. To add a contract, use a blank row at the bottom: choose the building, then fill the row.',
       ],
@@ -328,10 +328,14 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
             { key: 'supplier', header: 'Supplier', width: 26, kind: 'text', input: true, label: true },
             { key: 'description', header: 'Description', width: 50, kind: 'text', input: true, help: 'Scope of the contract or item.' },
             { key: 'terms', header: 'Terms', width: 12, kind: 'text', input: true, list: CONTRACT_TERMS, help: 'How it is paid.' },
-            { key: 'start', header: 'Start month', width: 10, kind: 'month', input: true, help: 'Blank = January (quarterly: March, half-yearly: June).' },
+            { key: 'startDate', header: 'Start', width: 12, kind: 'date', input: true, help: 'Contract start. Blank: 1 January for a year.' },
+            { key: 'endDate', header: 'End', width: 12, kind: 'date', input: true, help: 'Contract end.' },
             { key: 'quantity', header: info.quantity, width: 12, kind: 'number', input: true },
             { key: 'rate', header: info.rate, width: 13, kind: 'money', input: true },
-            { key: 'amount', header: `${Y}B amount`, width: 14, kind: 'money', help: 'Quantity × rate, as of the download.' },
+            { key: 'amount', header: `${Y}B amount`, width: 14, kind: 'money', help: 'The part of the contract inside the year, as of the download.' },
+            { key: 'renewal', header: 'If it ends before 31-Dec', width: 14, kind: 'text', input: true, list: ['Renewed', 'Ends'], help: 'Renewed or Ends (blank: not decided).' },
+            { key: 'renewalRate', header: `New ${info.rate.toLowerCase()}`, width: 13, kind: 'money', input: true, help: 'Renewed: the new rate (same quantity and length).' },
+            { key: 'renewalTerms', header: 'New terms', width: 12, kind: 'text', input: true, list: CONTRACT_TERMS, help: 'Renewed: if the terms change.' },
             { key: 'po', header: 'PO number', width: 15, kind: 'text' },
             { key: 'poAmount', header: 'PO amount', width: 13, kind: 'money' },
             { key: 'remarks', header: 'Remarks', width: 30, kind: 'text', input: true },
@@ -345,10 +349,14 @@ export async function buildInputTemplate(kind: TemplateKind, user: CurrentUser, 
               supplier: r.supplier,
               description: r.description,
               terms: r.terms,
-              start: r.startMonth,
+              startDate: r.startDate ?? contractYear(r, Y).start,
+              endDate: r.endDate ?? contractYear(r, Y).end,
               quantity: r.quantity,
               rate: r.rate,
-              amount: contractAmount(r),
+              amount: contractYear(r, Y).total,
+              renewal: r.renewal === 'RENEW' ? 'Renewed' : r.renewal === 'END' ? 'Ends' : null,
+              renewalRate: r.renewalRate,
+              renewalTerms: r.renewalTerms,
               po: r.poNumber,
               poAmount: r.poAmount,
               remarks: r.remarks,
@@ -481,7 +489,12 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
           terms,
           quantity: num(get('quantity')) ?? (terms === 'Monthly' ? 12 : 1),
           rate: num(get('rate')) ?? 0,
-          startMonth: num(get('start')),
+          startMonth: null,
+          startDate: (get('startDate') as string | null) ?? null,
+          endDate: (get('endDate') as string | null) ?? null,
+          renewal: get('renewal') === 'Renewed' ? ('RENEW' as const) : get('renewal') === 'Ends' ? ('END' as const) : null,
+          renewalRate: num(get('renewalRate')),
+          renewalTerms: ((get('renewalTerms') as string | null) ?? null) as ContractTerms | null,
           remarks: (get('remarks') as string | null) ?? null,
         },
       ];

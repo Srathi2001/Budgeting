@@ -33,10 +33,10 @@ const SUBTITLE: Record<View, string> = {
 /** what the numbers are, under each view */
 const BASIS: Record<View, string> = {
   summary: 'AED, ex VAT. Rent recognised by day over the lease; other income: maintenance fee in the contract month, the rest evenly over 12 months. Costs not budgeted yet show –.',
-  flow: 'AED. Rent cheques in their cheque month, with VAT; other income as booked; security deposits received less refunded. Costs not budgeted yet show –.',
-  group: 'AED, ex VAT, budget year totals. MJNH and MJN Private Office are outside the group.',
+  flow: 'AED, ex VAT (VAT passes through to the FTA, as the 2026 budget). Rent cheques in their cheque month; other income as booked; security deposits received less refunded. Costs not budgeted yet show –.',
+  group: 'AED, ex VAT, budget year totals. ANPM shows the PMA fee and the FM staff and watchmen it recharges; both sides are eliminated in the group. MJNH and MJN Private Office are outside the group.',
   revenue: 'AED, ex VAT. Rent recognised by day over the lease, from the Lease Budget.',
-  cash: 'AED. Cash inflow = rent cheques + VAT + security deposits received − refunded.',
+  cash: 'AED, ex VAT. Cash inflow = rent cheques + security deposits received − refunded.',
 };
 
 export default async function SummaryPage(props: PageProps<'/summary'>) {

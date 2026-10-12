@@ -97,7 +97,7 @@ export async function buildFmTemplate(
     '3. To change a cost already in the tool, change its white cells. To remove it, put Yes in Remove. Don’t change the Line ID.',
     '4. The Facilities sheet shows each facility with last year’s budget and actual for reference.',
     '5. Save the file as .xlsx and upload it in the tool: FM Budget → FM Budget Template → Import Excel. You see every change before it is applied.',
-    '6. The upload follows the same rules as the tool: facilities submitted to Finance (or approved) can’t be changed until Finance returns them. Anything else is listed as rejected.',
+    '6. The upload follows the same rules as the tool: facilities submitted (or approved) can’t be changed until Admin returns them. Anything else is listed as rejected.',
   ])
     line(s);
   if (ctx.locked) line('This budget version is locked: the template is for reference only.', true);

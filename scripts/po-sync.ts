@@ -3,6 +3,7 @@
 //   npx tsx scripts/po-sync.ts <versionId> [since YYYY-MM-DD]          preview only
 //   npx tsx scripts/po-sync.ts <versionId> [since YYYY-MM-DD] --apply  write
 import 'dotenv/config';
+import { scriptActor } from './script-actor';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../src/db';
 import { applyPurchaseOrders, readPurchaseOrders } from '../src/lib/import/fusion-po';
@@ -19,7 +20,7 @@ async function main() {
   const byAcct = new Map<string, number>();
   for (const l of read.lines) byAcct.set(l.account, (byAcct.get(l.account) ?? 0) + 1);
   console.log('by account:', Object.fromEntries([...byAcct].sort()));
-  if (apply) console.log(await applyPurchaseOrders(v.id, read, null));
+  if (apply) console.log(await applyPurchaseOrders(v.id, read, await scriptActor()));
 }
 
 // close the pool before exiting: an abrupt disconnect can jam the PGlite dev server

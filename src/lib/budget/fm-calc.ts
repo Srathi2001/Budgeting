@@ -6,7 +6,8 @@
 // - zone teams go to the buildings of their FM zone, the planned maintenance team to every building,
 //   both by maintain (M01–M04) cost; the vacant unit team by vacant unit preparation (R03).
 // Works: recurring types over 12 months; projects in the month planned (12 months when none is set).
-import { SUPERVISED_BUS, SUPERVISION_SPLIT, WORK_TYPE, WORK_TYPES, type StaffTeam, type WorkType } from './fm-types';
+import { WORK_TYPE, WORK_TYPES, type StaffTeam, type WorkType } from './fm-types';
+import { DEFAULT_FM_SUPERVISION, type FmSupervision } from '@/lib/engine/assumptions';
 
 export interface FmFacility {
   id: number;
@@ -46,7 +47,8 @@ const z12 = () => Array.from({ length: 12 }, () => 0);
 const emptyWorks = () => Object.fromEntries(WORK_TYPES.map((w) => [w.code, 0])) as Record<WorkType, number>;
 const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 
-export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff: FmStaffInput[]): FmResult {
+/** supervision: the version's split of the supervisory staff (Admin → Assumptions; default: 2026) */
+export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff: FmStaffInput[], supervision: FmSupervision = DEFAULT_FM_SUPERVISION): FmResult {
   const byProperty = new Map<number, FmPropertyResult>();
   const res = (id: number) => {
     let r = byProperty.get(id);
@@ -116,9 +118,9 @@ export function computeFm(facilities: FmFacility[], lines: FmLineInput[], staff:
 
   // supervisory: by work-type groups, over the supervised business units
   const sup = teamCost.SUPERVISORY ?? 0;
-  const supervised = facilities.filter((f) => SUPERVISED_BUS.includes(f.bu));
-  for (const part of SUPERVISION_SPLIT) {
-    allocate('SUPERVISORY', sup * part.share, supervised.map((f) => [f.id, sum(part.workTypes.map((w) => res(f.id).works[w]))]));
+  const supervised = facilities.filter((f) => supervision.bus.includes(f.bu));
+  for (const part of supervision.split) {
+    allocate('SUPERVISORY', sup * part.share, supervised.map((f) => [f.id, sum(part.workTypes.map((w) => res(f.id).works[w as WorkType] ?? 0))]));
   }
   // zone teams: buildings of the zone, by maintain cost
   for (const z of ['ZONE_1', 'ZONE_2', 'ZONE_3'] as const) {

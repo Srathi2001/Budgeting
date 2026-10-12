@@ -2,8 +2,8 @@
 // other income upload: the accounts in the building overhead list, debit − credit, by building and
 // month. Lines without a building (property 000000) are company G&A, not building overheads, and are
 // not kept. An import replaces the building overhead actuals of the months the report covers.
-import { and, gte, lte } from 'drizzle-orm';
 import { db, schema, type DB } from '@/db';
+import { scopeWhere } from './gl-history';
 
 type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { BOH_ACCOUNT, BOH_LINE_LABEL, BOH_LINES, isBohNatural } from '@/lib/budget/boh-types';
@@ -30,6 +30,8 @@ export interface BohActualsPreview {
   unmatched: { segment: string; amount: number }[];
   /** company-level lines (G&A), left out */
   companyLevel: number;
+  /** the building overhead accounts in the file: only these are replaced */
+  accounts: string[];
 }
 
 const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -42,7 +44,9 @@ export async function planBohActuals(scan: GlScan): Promise<{ rows: BohActual[];
   if (scan.ledger?.trim().toUpperCase() !== BOH_LEDGER) return null;
   const from = monthOf(scan.periodFrom);
   const to = monthOf(scan.periodTo);
-  if (!from || !to) return null;
+  // only the accounts the file carries are replaced; a file without any keeps the actuals as they are
+  const accounts = [...new Set(scan.months.filter((m) => isBohAccount(m.account)).map((m) => glSegments(m.account).natural))].sort();
+  if (!from || !to || !accounts.length) return null;
   const props = await db.select().from(schema.properties);
   const byKey = new Map(props.map((p) => [propertyKey(p.code), p]));
   const agg = new Map<string, BohActual>();
@@ -89,14 +93,15 @@ export async function planBohActuals(scan: GlScan): Promise<{ rows: BohActual[];
         })),
       unmatched: [...unmatched].map(([segment, amount]) => ({ segment, amount: r0(amount) })).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)),
       companyLevel: r0(companyLevel),
+      accounts,
     },
   };
 }
 
-/** Replaces the building overhead actuals of the months `preview` covers. */
+/** Replaces the building overhead actuals of the months and accounts `preview` covers (the scope of gl-history.ts). */
 export async function applyBohActuals(rows: BohActual[], preview: BohActualsPreview, userId: number | null, file: string | null, on: Tx = db) {
   const run = async (tx: Tx) => {
-    await tx.delete(schema.bohActuals).where(and(gte(schema.bohActuals.month, preview.from), lte(schema.bohActuals.month, preview.to)));
+    await tx.delete(schema.bohActuals).where(scopeWhere('boh_actuals', { from: preview.from, to: preview.to, accounts: preview.accounts }));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.bohActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({ userId, entity: 'gl_import', action: 'boh_actuals', changes: { file, from: preview.from, to: preview.to, rows: rows.length, byYear: preview.byYear } });
   };

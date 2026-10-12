@@ -5,8 +5,8 @@
 // - 117xx: debits on building lines only. Credits there, and the company-level lines, are transfers to
 //   fixed assets when an item is capitalised, not lower spending.
 // An import replaces the FM actuals of the months the report covers.
-import { and, gte, lte } from 'drizzle-orm';
 import { db, schema, type DB } from '@/db';
+import { scopeWhere } from './gl-history';
 
 type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { elementOfGl, isWorkType } from '@/lib/budget/fm-types';
@@ -43,11 +43,20 @@ const monthOf = (p: string | null) => {
   return m ? `20${m[2]}-${String(MON.indexOf(m[1].toUpperCase()) + 1).padStart(2, '0')}` : null;
 };
 
+/**
+ * Does the file carry the FM accounts? The FM actuals are replaced only when it has both the maintenance
+ * (627xx) and the capex (117xx) accounts: a file run for other accounts keeps them as they are.
+ */
+export function hasFmAccounts(scan: GlScan): boolean {
+  const naturals = new Set(scan.months.filter((m) => isFmAccount(m.account)).map((m) => glSegments(m.account).natural.slice(0, 3)));
+  return naturals.has('627') && naturals.has('117');
+}
+
 export async function planFmActuals(scan: GlScan): Promise<{ rows: FmActual[]; preview: FmActualsPreview } | null> {
   if (scan.ledger?.trim().toUpperCase() !== FM_LEDGER) return null;
   const from = monthOf(scan.periodFrom);
   const to = monthOf(scan.periodTo);
-  if (!from || !to) return null;
+  if (!from || !to || !hasFmAccounts(scan)) return null;
   const props = await db.select().from(schema.properties);
   const byKey = new Map(props.map((p) => [propertyKey(p.code), p]));
   const agg = new Map<string, FmActual>();
@@ -90,10 +99,10 @@ export async function planFmActuals(scan: GlScan): Promise<{ rows: FmActual[]; p
   };
 }
 
-/** Replaces the FM actuals of the months `preview` covers. */
+/** Replaces the FM actuals of the months `preview` covers (the scope of gl-history.ts). */
 export async function applyFmActuals(rows: FmActual[], preview: FmActualsPreview, userId: number | null, file: string | null, on: Tx = db) {
   const run = async (tx: Tx) => {
-    await tx.delete(schema.fmActuals).where(and(gte(schema.fmActuals.month, preview.from), lte(schema.fmActuals.month, preview.to)));
+    await tx.delete(schema.fmActuals).where(scopeWhere('fm_actuals', { from: preview.from, to: preview.to }));
     for (let i = 0; i < rows.length; i += 500) await tx.insert(schema.fmActuals).values(rows.slice(i, i + 500));
     await tx.insert(schema.auditLog).values({ userId, entity: 'gl_import', action: 'fm_actuals', changes: { file, from: preview.from, to: preview.to, rows: rows.length, byYear: preview.byYear } });
   };

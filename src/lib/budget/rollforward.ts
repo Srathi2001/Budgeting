@@ -1,6 +1,6 @@
 // Creates next year's budget version from an existing one: same unit lines as a starting point, but no
-// lease details, budget inputs or RERA index (the lease import rebuilds the lines from Oracle and the
-// PMs enter the rest). Only the comparatives carry over, plus the source budget as "<year>B".
+// lease details or budget inputs (the lease import rebuilds the lines from Oracle and the PMs enter the
+// rest). The comparatives and the RERA index carry over, plus the source budget as "<year>B".
 
 import { eq, sql } from 'drizzle-orm';
 import { type DB, schema } from '@/db';
@@ -40,7 +40,9 @@ export async function rollForward(db: DB, sourceVersionId: number, opts: { name?
       await tx.insert(leaseLines).values(newLines.slice(i, i + 500));
     }
 
-    // The RERA index is not carried over: property managers enter the new year's ranges.
+    // The RERA index carries over as the starting point: property managers update the ranges and add the
+    // missing ones (user decision 11-Oct-2026, audit FIN-014); submission waits until every renewal has one.
+    await tx.execute(sql`insert into rera_index (version_id, property_code, bedroom, unit_type, min, max) select ${target.id}, property_code, bedroom, unit_type, min, max from rera_index where version_id = ${source.id} on conflict do nothing`);
 
     // Comparatives: everything the source had, plus the source budget itself as "<year>B"
     await tx.execute(sql`

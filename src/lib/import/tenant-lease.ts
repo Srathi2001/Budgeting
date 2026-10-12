@@ -6,13 +6,16 @@
 // ID, addresses) are never read.
 //
 // planImport() works out what would change without writing anything (the preview);
-// applyImport() writes the same plan and recalculates the version.
+// applyImport() writes the same plan: submitted and approved properties are skipped (and their Oracle changes
+// listed), lines are updated in place, removed lines archived, every change audited per line.
 
+import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { dayFromExcelSerial, dayFromYMD, formatDay } from '@/lib/engine/dates';
 import { recalcLines } from '@/lib/budget/calc';
+import { changedFields } from '@/lib/audit-diff';
 import type { MfRow, UnitDumpRow } from './oracle-extras';
 
 // ---- parsing ---------------------------------------------------------------------------------
@@ -344,6 +347,14 @@ export interface ImportPreview {
   dump: { rows: number; matched: number; unmatched: number; status: Record<string, number> } | null;
   /** Maintenance Fee Report: leased lines matched, by MF status */
   mf: { rows: number; matched: number; unmatched: number; status: Record<string, number>; amount: number; outstanding: number } | null;
+  /**
+   * Submitted or approved properties are not touched (lines, inputs and unit details stay as submitted):
+   * what Oracle shows differently for them, for Admin to decide whether to return the property.
+   */
+  held: { property: string; status: string; line: string; change: string }[];
+  heldProperties: number;
+  /** the state of the version's lines the preview was made on: the import is refused if it has changed */
+  fingerprint: string;
 }
 
 /** The Unit Dump and the Maintenance Fee Report, uploaded with the lease report (both optional). */
@@ -462,6 +473,10 @@ export async function planImport(versionId: number, rows: ReportRow[], extras: I
   const unitById = new Map(allUnits.map((u) => [u.id, u]));
   const lines = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
   const lineByKey = new Map(lines.map((l) => [unitKey(unitById.get(l.unitId)!.unitCode), l]));
+  // submitted and approved properties stay as they were submitted
+  const subs = await db.select().from(schema.submissions).where(eq(schema.submissions.versionId, versionId));
+  const heldStatus = new Map(subs.filter((s) => s.status === 'SUBMITTED' || s.status === 'APPROVED').map((s) => [s.propertyId, s.status as string]));
+  const fingerprint = leaseFingerprint(lines, subs, props.length, allUnits.length, asOf);
 
   const conflicts: string[] = [];
   const skipped: ImportPreview['skipped'] = [];
@@ -550,9 +565,30 @@ export async function planImport(versionId: number, rows: ReportRow[], extras: I
     keep.push(p);
   }
 
-  // 4. preview
-  const carried = new Set(keep.map((p) => p.carryFrom?.id).filter(Boolean));
-  const hasInputs = (l: schema.LeaseLine) => l.budgetRate !== null || l.notes !== null || l.staffOwner !== null || l.increasePctOverride !== null || l.noRenewal || !l.renew1;
+  // 4. lines of submitted or approved properties are held: listed, not written
+  const heldOf = (p: PlannedLine) => {
+    const id = propByKey.get(p.propertyKey)?.id;
+    return (id !== undefined && heldStatus.has(id)) || (!!p.carryFrom && heldStatus.has(p.carryFrom.propertyId));
+  };
+  const heldPlans = keep.filter(heldOf);
+  const apply = keep.filter((p) => !heldOf(p));
+  const allCarried = new Set(keep.map((p) => p.carryFrom?.id).filter(Boolean));
+  const held: ImportPreview['held'] = [];
+  const heldName = (p: PlannedLine) => {
+    const prop = propById.get(p.carryFrom?.propertyId ?? -1) ?? propByKey.get(p.propertyKey);
+    return { property: prop ? `${prop.code} ${prop.name}` : p.unit.propertyName ?? p.propertyKey, status: (prop && heldStatus.get(prop.id)) ?? '' };
+  };
+  for (const p of heldPlans) for (const change of oracleChanges(p.carryFrom, p.facts)) held.push({ ...heldName(p), line: p.unit.code, change });
+  for (const l of lines) {
+    if (!heldStatus.has(l.propertyId) || allCarried.has(l.id)) continue;
+    const prop = propById.get(l.propertyId);
+    held.push({ property: prop ? `${prop.code} ${prop.name}` : '', status: heldStatus.get(l.propertyId)!, line: unitById.get(l.unitId)!.unitCode, change: 'Not a line of its own in the report any more (gone, or part of a lease on several units)' });
+  }
+  held.sort((a, b) => a.property.localeCompare(b.property) || a.line.localeCompare(b.line));
+
+  // 5. preview
+  const carried = new Set(apply.map((p) => p.carryFrom?.id).filter(Boolean));
+  const removed = lines.filter((l) => !carried.has(l.id) && !heldStatus.has(l.propertyId));
   const buNames = new Map((await db.select().from(schema.businessUnits)).map((b) => [b.code, b.name]));
   const buOf = (p: PlannedLine) => propByKey.get(p.propertyKey)?.buCode ?? newProps.get(p.propertyKey)?.buCode ?? '?';
   const byBu = new Map<string, { leases: number; rent: number }>();
@@ -603,20 +639,51 @@ export async function planImport(versionId: number, rows: ReportRow[], extras: I
       contractedLines: leased.filter((p) => p.facts!.renewals.length).length,
       byBu: [...byBu].map(([bu, e]) => ({ bu: `${bu} ${buNames.get(bu) ?? ''}`.trim(), leases: e.leases, rent: Math.round(e.rent) })).sort((a, b) => a.bu.localeCompare(b.bu)),
     },
-    kept: keep.filter((p) => p.carryFrom && lineByKey.get(p.unit.key) === p.carryFrom).length,
-    newLines: keep
+    kept: apply.filter((p) => p.carryFrom && lineByKey.get(p.unit.key) === p.carryFrom).length,
+    newLines: apply
       .filter((p) => !p.carryFrom)
       .map((p) => ({ code: p.unit.code, property: p.unit.propertyName ?? '', tenant: p.facts?.tenant ?? null, rent: p.facts?.currentRent ?? null, units: p.members.length })),
-    removedLines: lines
-      .filter((l) => !carried.has(l.id))
-      .map((l) => ({ code: unitById.get(l.unitId)!.unitCode, property: propById.get(l.propertyId)?.name ?? '', tenant: l.tenant, inputs: hasInputs(l) })),
+    removedLines: removed.map((l) => ({ code: unitById.get(l.unitId)!.unitCode, property: propById.get(l.propertyId)?.name ?? '', tenant: l.tenant, inputs: hasLineInputs(l) })),
     newProperties: [...newProps.values()].map((p) => ({ code: p.code, name: p.name, bu: p.buCode })),
     skipped,
     conflicts,
     dump: dumpStats,
     mf: mfStats,
+    held,
+    heldProperties: new Set(lines.filter((l) => heldStatus.has(l.propertyId)).map((l) => l.propertyId)).size,
+    fingerprint,
   };
-  return { plan: { lines: keep, newProperties: [...newProps.values()] }, preview };
+  return { plan: { lines: apply, newProperties: [...newProps.values()], removed, unitCodeOf: (l: schema.LeaseLine) => unitById.get(l.unitId)?.unitCode ?? null }, preview };
+}
+
+/** a line carries budget inputs someone typed */
+const hasLineInputs = (l: schema.LeaseLine) => l.budgetRate !== null || l.notes !== null || l.staffOwner !== null || l.increasePctOverride !== null || l.noRenewal || !l.renew1;
+
+/** a digest of what a plan depends on: the version's lines (and when each last changed), the statuses, the as-of date */
+function leaseFingerprint(lines: schema.LeaseLine[], subs: (typeof schema.submissions.$inferSelect)[], properties: number, units: number, asOf: string): string {
+  const parts = [
+    asOf,
+    properties,
+    units,
+    ...lines.map((l) => `${l.id}:${l.unitId}:${l.propertyId}:${l.updatedAt.getTime()}`).sort(),
+    ...subs.map((s) => `${s.propertyId}:${s.status}`).sort(),
+  ];
+  return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 32);
+}
+
+const money2 = (v: number | null) => (v === null ? '-' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
+/** What Oracle shows differently from the line as submitted (held properties). */
+export function oracleChanges(old: Pick<schema.LeaseLine, 'leaseNumber' | 'tenant' | 'currentStart' | 'currentEnd' | 'currentRent' | 'vacant' | 'contracted'> | null, f: Facts | null): string[] {
+  if (!old) return [f ? `New in Oracle: lease ${f.leaseNumber}, ${f.tenant ?? ''}, ${f.currentStart} to ${f.currentEnd}, rent ${money2(f.currentRent)}` : 'New available unit in Oracle'];
+  if (!f) return old.vacant ? [] : [`Lease ${old.leaseNumber ?? ''} is no longer current in Oracle: the unit shows available`];
+  const out: string[] = [];
+  if (old.leaseNumber !== f.leaseNumber) out.push(`Lease ${old.leaseNumber ?? '(none)'} → ${f.leaseNumber}`);
+  if ((old.tenant ?? null) !== (f.tenant ?? null)) out.push(`Tenant ${old.tenant ?? '(none)'} → ${f.tenant ?? '(none)'}`);
+  if (old.currentStart !== f.currentStart || old.currentEnd !== f.currentEnd) out.push(`Contract ${old.currentStart ?? '-'} to ${old.currentEnd ?? '-'} → ${f.currentStart} to ${f.currentEnd}`);
+  if ((old.currentRent ?? null) !== f.currentRent) out.push(`Rent ${money2(old.currentRent ?? null)} → ${money2(f.currentRent)}`);
+  if (old.contracted !== f.renewals.length) out.push(`Contracted later years ${old.contracted} → ${f.renewals.length}`);
+  return out;
 }
 
 // ---- apply ---------------------------------------------------------------------------------------
@@ -705,8 +772,25 @@ function factFields(line: Pick<schema.LeaseLine, 'leaseNumber' | 'currentStart' 
   };
 }
 
-export async function applyImport(versionId: number, rows: ReportRow[], userId: number | null, fileName?: string, extras: ImportExtras & { files?: string[] } = {}) {
+/** fields of a line whose value changed (for the per-line audit row) */
+export { changedFields } from '@/lib/audit-diff';
+
+/**
+ * Writes the plan: lines of submitted or approved properties are left alone; the other lines are updated
+ * in place (their ids, and so their history, stay), new ones added, and the ones no longer in the report
+ * archived with their inputs, then removed. One audit row per line changed, with the fields before and after.
+ * `opts.expect`: the preview's fingerprint; the import is refused if the lines changed since that preview.
+ */
+export async function applyImport(
+  versionId: number,
+  rows: ReportRow[],
+  userId: number | null,
+  fileName?: string,
+  extras: ImportExtras & { files?: string[] } = {},
+  opts: { expect?: string; planId?: number } = {},
+) {
   const { plan, preview } = await planImport(versionId, rows, extras);
+  if (opts.expect && opts.expect !== preview.fingerprint) throw new Error('The lease lines or submission statuses changed since the preview: choose the files again to see what the import would do now');
   const now = new Date();
 
   await db.transaction(async (tx) => {
@@ -714,9 +798,23 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
     const props = await tx.select().from(schema.properties);
     const propByKey = new Map(props.map((p) => [propertyKey(p.code), p]));
     const unitByKey = new Map((await tx.select().from(schema.units)).map((u) => [unitKey(u.unitCode), u]));
+    const audits: (typeof schema.auditLog.$inferInsert)[] = [];
 
-    // the version's lines are rebuilt from the report
-    await tx.delete(schema.leaseLines).where(eq(schema.leaseLines.versionId, versionId));
+    // 1. lines no longer in the report: archived with their inputs, then removed
+    for (const l of plan.removed) {
+      const { calc: _calc, ...line } = l;
+      void _calc;
+      const [a] = await tx
+        .insert(schema.leaseLineArchive)
+        .values({ versionId, lineId: l.id, propertyId: l.propertyId, unitCode: plan.unitCodeOf(l), line: line as Record<string, unknown>, hadInputs: hasLineInputs(l), planId: opts.planId ?? null, removedBy: userId })
+        .returning({ id: schema.leaseLineArchive.id });
+      audits.push({ userId, versionId, propertyId: l.propertyId, entity: 'lease_line', entityId: String(l.id), action: 'import_remove', changes: { unit: plan.unitCodeOf(l), tenant: l.tenant, archive: a.id } });
+    }
+    if (plan.removed.length) await tx.delete(schema.leaseLines).where(inArray(schema.leaseLines.id, plan.removed.map((l) => l.id)));
+
+    // 2. the report's lines: updated in place where the unit has a line, else added
+    const touched: number[] = [];
+    const claimed = new Set<number>();
     for (const p of plan.lines) {
       const prop = propByKey.get(p.propertyKey)!;
       // unit details come from the reports only; beds (capacity) have no source there and stay as entered.
@@ -725,19 +823,33 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
       let unit = unitByKey.get(p.unit.key);
       if (unit) await tx.update(schema.units).set(attrs).where(eq(schema.units.id, unit.id));
       else [unit] = await tx.insert(schema.units).values({ unitCode: p.unit.code, ...attrs }).returning();
-      const old = p.carryFrom;
-      await tx.insert(schema.leaseLines).values({
-        versionId,
+      const old = p.carryFrom && !claimed.has(p.carryFrom.id) ? p.carryFrom : null;
+      const values = {
         unitId: unit.id,
         propertyId: prop.id,
         renew1: true,
-        ...carriedInputs(old),
-        ...(p.facts ? factFields(old, p.facts, now) : { ...NO_LEASE, leaseSyncedAt: now }),
-        ...mfFields(p, old),
+        ...carriedInputs(p.carryFrom),
+        ...(p.facts ? factFields(p.carryFrom, p.facts, now) : { ...NO_LEASE, leaseSyncedAt: now }),
+        ...mfFields(p, p.carryFrom),
         ...renewalFields(p.facts),
         updatedBy: userId,
-      });
+      };
+      if (old) {
+        claimed.add(old.id);
+        const diff = changedFields(old as unknown as Record<string, unknown>, values, ['leaseSyncedAt', 'updatedBy']);
+        await tx
+          .update(schema.leaseLines)
+          .set({ ...values, ...(Object.keys(diff).length ? { updatedAt: now } : {}) })
+          .where(eq(schema.leaseLines.id, old.id));
+        touched.push(old.id);
+        if (Object.keys(diff).length) audits.push({ userId, versionId, propertyId: prop.id, entity: 'lease_line', entityId: String(old.id), action: 'import_update', changes: diff });
+      } else {
+        const [line] = await tx.insert(schema.leaseLines).values({ versionId, ...values }).returning({ id: schema.leaseLines.id });
+        touched.push(line.id);
+        audits.push({ userId, versionId, propertyId: prop.id, entity: 'lease_line', entityId: String(line.id), action: 'import_add', changes: { unit: p.unit.code, tenant: p.facts?.tenant ?? null, lease: p.facts?.leaseNumber ?? null, rent: p.facts?.currentRent ?? null } });
+      }
     }
+    for (let i = 0; i < audits.length; i += 500) await tx.insert(schema.auditLog).values(audits.slice(i, i + 500));
 
     await tx.insert(schema.auditLog).values({
       userId,
@@ -756,9 +868,15 @@ export async function applyImport(versionId: number, rows: ReportRow[], userId: 
         newLines: preview.newLines.length,
         removedLines: preview.removedLines.map((r) => r.code),
         newProperties: preview.newProperties.map((p) => p.code),
+        planId: opts.planId ?? null,
+        // submitted / approved properties left as they were, and what Oracle shows differently for them
+        heldProperties: preview.heldProperties,
+        heldChanges: preview.held.length,
+        linesChanged: audits.filter((a) => a.action === 'import_update').length,
       },
     });
-    await recalcLines(tx, versionId);
+    // only the lines written are recalculated: held properties keep their figures as submitted
+    if (touched.length) await recalcLines(tx, versionId, touched);
     // every property with lines needs a submission row in this version (inside the import's transaction)
     await tx.execute(sql`
       insert into submissions (version_id, property_id, status)

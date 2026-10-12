@@ -48,7 +48,7 @@ export default async function MasterPage(props: PageProps<'/master'>) {
   }
   const propertyIds = linked.length ? linked : scope.propertyIds;
   const categories = linked.length ? [] : scope.categories;
-  const editable = await editablePropertyIds(user, version);
+  const editable = await editablePropertyIds(user, version, 'PM');
   const rows = (await loadMasterRows(version.id, { propertyIds, editableProperties: editable })).filter(
     (r) => !categories.length || categories.includes(categoryOf(r, r.propertyKind)),
   );

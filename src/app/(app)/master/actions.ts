@@ -73,7 +73,7 @@ export async function addUnit(
   }).catch((e: Error) => e);
   if (lineId instanceof Error) return { error: lineId.message };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-  const [row] = await loadMasterRows(versionId, { lineIds: [lineId], editableProperties: await editablePropertyIds(user, version) });
+  const [row] = await loadMasterRows(versionId, { lineIds: [lineId], editableProperties: await editablePropertyIds(user, version, 'PM') });
   return { row };
 }
 
@@ -99,7 +99,7 @@ export async function saveRera(versionId: number, input: z.infer<typeof ReraSche
   if (saved.error) return { error: saved.error };
   const lineIds = saved.lineIds!;
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-  return { rows: await loadMasterRows(versionId, { lineIds, editableProperties: await editablePropertyIds(user, version) }) };
+  return { rows: await loadMasterRows(versionId, { lineIds, editableProperties: await editablePropertyIds(user, version, 'PM') }) };
 }
 
 export interface TemplateUploadResult {
@@ -124,7 +124,7 @@ export async function uploadTemplate(versionId: number, form: FormData, apply: b
   if (error) return { error, changes: [], errors: [] };
   if (!uploaded.length) return { error: 'No lines found in the “Lease Budget” sheet', changes: [], errors: [] };
 
-  const editable = await editablePropertyIds(user, version);
+  const editable = await editablePropertyIds(user, version, 'PM');
   const visible = new Set((await visibleProperties(user)).map((p) => p.id));
   const current = (await loadMasterRows(versionId, { lineIds: uploaded.map((u) => u.lineId), editableProperties: editable })).filter((r) => visible.has(r.propertyId));
   const diff = diffUpload(uploaded, new Map(current.map((r) => [r.lineId, r])), version.year);
@@ -170,7 +170,8 @@ export async function removeLine(versionId: number, lineId: number): Promise<{ e
       entity: 'lease_line',
       entityId: String(lineId),
       action: 'delete',
-      changes: { unit: line.u.unitCode, tenant: line.l.tenant, currentRent: line.l.currentRent },
+      // the whole line as it was (its inputs included), without the cached calculation
+      changes: { unit: line.u.unitCode, from: { ...line.l, calc: undefined }, to: null },
     });
   });
   return {};

@@ -7,7 +7,7 @@ import { db, schema } from '@/db';
 import { SESSION_COOKIE, verifySession } from './session';
 import { isFinance, type Actor } from './permissions';
 
-export { isFinance, isFm, visibleProperties, editablePropertyIds, canEditProperty, canEditFm, type EditCheck } from './permissions';
+export { isFinance, isAdmin, isFm, entersData, visibleProperties, editablePropertyIds, canEditProperty, canEditFm, type EditCheck, type InputOwner } from './permissions';
 
 export const VERSION_COOKIE = 'vid';
 
@@ -44,6 +44,13 @@ export async function requireUser(): Promise<CurrentUser> {
 export async function requireFinance(): Promise<CurrentUser> {
   const user = await requireUser();
   if (!isFinance(user)) throw new Error('Finance access required');
+  return user;
+}
+
+/** approvals, versions, assumptions, imports, comparatives, properties and users */
+export async function requireAdmin(): Promise<CurrentUser> {
+  const user = await requireUser();
+  if (user.role !== 'ADMIN') throw new Error('Admin access required');
   return user;
 }
 

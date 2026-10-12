@@ -5,10 +5,11 @@
 //   Revenue sheet -> daily rate x days of each contract falling in each month
 //   Cash sheet    -> equal cheques spaced chequeSpanDays / cheques apart, unless the contract has an
 //                    actual cheque schedule (current lease from Fusion, or one edited for a renewal)
-//   Cash inflow   -> rent cheques + VAT on commercial / labour rent + security deposits in / out
+//   Cash inflow   -> rent cheques + security deposits in / out. VAT on commercial / labour rent is worked
+//                    out for reference only: it passes through to the FTA (as the 2026 budget).
 
 import { type Assumptions } from './assumptions';
-import { type Day, monthsOfYear, overlapDays, dayFromYMD } from './dates';
+import { type Day, monthsOfYear, overlapDays, dayFromYMD, termEnd } from './dates';
 
 export type RC = 'R' | 'C' | 'L';
 export type StaffOwner = 'STAFF' | 'OWNER' | null;
@@ -110,7 +111,7 @@ export interface Contract {
 export interface MonthlySeries {
   revenue: number[];
   cash: number[];
-  /** Output VAT collected with rent cheques (commercial / labour rent; residential is exempt). */
+  /** Output VAT on rent cheques (commercial / labour rent; residential is exempt): for reference, not cash inflow. */
   vat: number[];
   depositIn: number[];
   depositOut: number[];
@@ -132,7 +133,7 @@ export interface LeaseResult extends MonthlySeries {
    * contract with MF starts (the fee is collected at the start of the lease).
    */
   maintenance: number[];
-  /** cash = rent cheques (ex VAT); cashFlow = rent + VAT + deposits in - deposits out */
+  /** cash = rent cheques (ex VAT); cashFlow = rent cheques + deposits in - deposits out (VAT passes through) */
   totals: { revenue: number; cash: number; cashFlow: number; maintenance: number };
   warnings: string[];
 }
@@ -166,6 +167,21 @@ function reraIncrease(
   const band = [...a.reraBands].sort((x, y) => y.gapAbove - x.gapAbove).find((b) => gap > b.gapAbove);
   return { increase: band ? band.increase : 0, gap, avg };
 }
+
+/**
+ * A contract's length in years: whole years when it runs to the day before the same date one (two …)
+ * years later, a leap day included; otherwise its days ÷ 365.
+ */
+export function yearsOf(start: Day, end: Day): number {
+  for (let n = 1; n <= 10; n++) if (termEnd(start, 365 * n) === end) return n;
+  return (end - start + 1) / 365;
+}
+
+/** A contract's rent for a year (the rent of a 15-month contract is not a year's rent: audit FIN-005). */
+export const annualRent = (rent: number, start: Day, end: Day) => {
+  const y = yearsOf(start, end);
+  return y > 0 ? rent / y : rent;
+};
 
 function newTenantRent(input: LeaseInput): number | null {
   if (input.budgetRate === null) return null;
@@ -244,11 +260,10 @@ export function buildContracts(
   let r1Start = input.r1Start;
   let r1StartDerived = r1Start === null;
   if (hasCurrent && !renews) {
-    // new tenant after a current lease: the vacancy days entered for this lease decide the start
-    // (a start date typed earlier doesn't override them); without them the letting isn't budgeted
-    r1Start = input.vacancyDays !== null ? input.currentEnd! + input.vacancyDays + 1 : null;
+    // new tenant after a current lease: the vacancy days entered for this lease decide the start (a start
+    // date typed earlier doesn't override them); none entered: the default (60 days, Admin → Assumptions)
+    r1Start = input.currentEnd! + (input.vacancyDays ?? a.defaultVacancyDays) + 1;
     r1StartDerived = true;
-    if (input.vacancyDays === null) warnings.push('New tenant: enter the vacancy days');
   } else if (r1Start === null && hasCurrent) {
     // renewal: the day after the lease ends
     r1Start = input.currentEnd! + 1;
@@ -257,11 +272,16 @@ export function buildContracts(
 
   let r1End = input.r1End;
   const r1EndDerived = r1End === null;
-  if (r1End === null) r1End = r1Start + a.renewalTermDays - 1;
+  // one calendar year (a leap year has 366 days), not a fixed 365 days: see termEnd
+  if (r1End === null) r1End = termEnd(r1Start, a.renewalTermDays);
 
   let r1Rent = input.r1Rent;
   const r1RentDerived = r1Rent === null;
-  const inc = reraIncrease(input, a, rera);
+  // the increase and the RERA comparison work on a year's rent, and the renewal's rent is that for its
+  // own length (a calendar year: one year's rent) (user decision 11-Oct-2026, audit FIN-005)
+  const currentAnnual = hasCurrent ? annualRent(input.currentRent ?? 0, input.currentStart!, input.currentEnd!) : (input.currentRent ?? 0);
+  const r1Years = yearsOf(r1Start, r1End);
+  const inc = reraIncrease({ ...input, currentRent: currentAnnual }, a, rera);
   reraGap = inc.gap;
   reraAverage = inc.avg;
   if (renews) {
@@ -269,12 +289,13 @@ export function buildContracts(
     if (r1Rent === null) {
       // zero-rent units (e.g. bulk leases billed on one unit) have nothing to compare with RERA
       if (inc.warning && input.increasePctOverride === null && (input.currentRent ?? 0) > 0) warnings.push(inc.warning);
-      r1Rent = (input.currentRent ?? 0) * (1 + increasePct);
+      r1Rent = currentAnnual * (1 + increasePct) * r1Years;
     }
   } else if (r1Rent === null) {
-    r1Rent = newTenantRent(input);
+    const rate = newTenantRent(input);
+    r1Rent = rate === null ? null : rate * r1Years;
     if (r1Rent === null) {
-      r1Rent = input.currentRent ?? 0;
+      r1Rent = currentAnnual * r1Years;
       warnings.push('New-tenant lease has no budget rate: using current rent');
     }
   }
@@ -305,16 +326,23 @@ export function buildContracts(
     'CUSTOM',
   );
 
+  // a later renewal is increased the same way as the 1st (user decision 11-Oct-2026, audit FIN-006): the
+  // RERA band on the rent it renews (labour and camps: their fixed rates), or the increase entered
+  const renewedRent = (prev: Contract, start: Day, end: Day) => {
+    const annual = annualRent(prev.rent, prev.start, prev.end);
+    return annual * (1 + (input.increasePctOverride ?? reraIncrease({ ...input, currentRent: annual }, a, rera).increase)) * yearsOf(start, end);
+  };
+
   // ---- 2nd renewal (Main!W..AA: only when the 1st renewal ends inside the budget year) ----
   const r2Wanted = input.r2Start !== null || r1.end < yearEnd;
   let r2: Contract | null = null;
   if (r2Wanted && input.r2Renew !== false) {
     const r2Start = input.r2Start ?? r1.end + 1;
-    const r2End = input.r2End ?? r2Start + a.renewalTermDays - 1;
+    const r2End = input.r2End ?? termEnd(r2Start, a.renewalTermDays);
     r2 = add(
       {
         kind: 'RENEWAL2',
-        rent: input.r2Rent ?? r1.rent,
+        rent: input.r2Rent ?? renewedRent(r1, r2Start, r2End),
         start: r2Start,
         end: r2End,
         mf: input.r2Mf ?? r1.mf,
@@ -335,11 +363,11 @@ export function buildContracts(
   const r3Wanted = !!r2 && (input.r3Start !== null || r2.end < yearEnd);
   if (r2 && r3Wanted && input.r3Renew !== false) {
     const r3Start = input.r3Start ?? r2.end + 1;
-    const r3End = input.r3End ?? r3Start + a.renewalTermDays - 1;
+    const r3End = input.r3End ?? termEnd(r3Start, a.renewalTermDays);
     add(
       {
         kind: 'RENEWAL3',
-        rent: input.r3Rent ?? r2.rent,
+        rent: input.r3Rent ?? renewedRent(r2, r3Start, r3End),
         start: r3Start,
         end: r3End,
         mf: input.r3Mf ?? r2.mf,
@@ -394,7 +422,7 @@ export function computeLease(
 
     // Security deposit received from a new tenant when the lease starts
     const si = monthIndexOf(c.start);
-    if (si >= 0 && c.newTenant) s.depositIn[si] += c.rent * a.depositPct;
+    if (si >= 0 && c.newTenant) s.depositIn[si] += annualRent(c.rent, c.start, c.end) * a.depositPct;
 
     // Maintenance service fee (other income): in full in the month the contract starts
     if (si >= 0) {
@@ -411,7 +439,7 @@ export function computeLease(
   const leaves = cur && (!r1 || r1.newTenant) && input.staffOwner !== 'OWNER';
   if (cur && leaves) {
     const mi = monthIndexOf(cur.end + 1);
-    if (mi >= 0) s.depositOut[mi] += input.securityDeposit ?? cur.rent * a.depositPct;
+    if (mi >= 0) s.depositOut[mi] += input.securityDeposit ?? annualRent(cur.rent, cur.start, cur.end) * a.depositPct;
   }
 
   // Vacancy loss: days between a non-renewed lease ending and the new tenant starting,
@@ -440,13 +468,13 @@ export function computeLease(
     totals: {
       revenue: sum(out.revenue),
       cash: sum(out.cash),
-      cashFlow: round2(sum(out.cash) + sum(out.vat) + sum(out.depositIn) - sum(out.depositOut)),
+      cashFlow: round2(sum(out.cash) + sum(out.depositIn) - sum(out.depositOut)),
       maintenance: sum(maintenance),
     },
   };
 }
 
-/** Total cash inflow for one month: rent cheques + VAT + deposits received - deposits refunded. */
+/** Total cash inflow for one month: rent cheques + deposits received - deposits refunded (VAT passes through to the FTA). */
 export function cashFlowOf(s: MonthlySeries, i: number) {
-  return s.cash[i] + s.vat[i] + s.depositIn[i] - s.depositOut[i];
+  return s.cash[i] + s.depositIn[i] - s.depositOut[i];
 }

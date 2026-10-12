@@ -1,10 +1,12 @@
-// Dashboard card: last year's budget (the prior budget version) against last year's forecast —
-// Oracle revenue actuals to the last closed month plus the Lease Budget projection of the rest
-// (the same figure as Revenue Analysis (Y-1)F). Properties without Oracle actuals (PMC) are left out.
+// Dashboard card: last year's budget (the prior budget version) against last year's forecast, the one
+// current-year forecast of forecast.ts (the same figure as Revenue Analysis (Y-1)F): Oracle actuals to the
+// cut-off month, then the leases and the property managers' inputs; properties without Oracle actuals
+// (PMC) projected for the whole year.
 import 'server-only';
-import { and, eq, inArray, like, max } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { StoredCalc } from './calc';
+import { loadPriorForecast } from './forecast';
 
 export interface BvfProperty {
   id: number;
@@ -20,7 +22,7 @@ export interface BudgetVsForecast {
   /** the year compared (budget year − 1) */
   year: number;
   budgetName: string;
-  /** last month of actuals (1–12) */
+  /** last month of actuals (1–12): the version's actuals cut-off */
   lastActualMonth: number;
   budget: number;
   forecast: number;
@@ -32,8 +34,8 @@ export interface BudgetVsForecast {
   bus: { code: string; name: string; budget: number; forecast: number; next: number }[];
   properties: BvfProperty[];
   months: { budget: number[]; actual: (number | null)[]; projected: (number | null)[] };
-  /** properties in view left out for want of Oracle actuals */
-  excluded: number;
+  /** properties in view without Oracle actuals: projected for the whole year */
+  projectedOnly: number;
 }
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
@@ -46,13 +48,9 @@ export async function loadBudgetVsForecast(
   if (!prior || !properties.length) return null;
   const Y = version.year - 1;
   const ids = properties.map((p) => p.id);
-
-  const [last] = await db
-    .select({ m: max(schema.revenueActuals.month) })
-    .from(schema.revenueActuals)
-    .where(and(eq(schema.revenueActuals.kind, 'A'), like(schema.revenueActuals.month, `${Y}-%`)));
-  const cutoff = last?.m ? Number(last.m.slice(5)) : 0;
-  if (!cutoff) return null;
+  // the one current-year forecast: actuals to the cut-off month, then the leases and the PMs' inputs
+  const pf = await loadPriorForecast(version, ids);
+  const cutoff = pf.cutoff;
 
   // budget: the prior version, by property and month
   const budget = new Map<number, number[]>();
@@ -66,55 +64,36 @@ export async function loadBudgetVsForecast(
     budget.set(x.p, a);
   }
 
-  // actuals to the cut-off
-  const actual = new Map<number, number[]>();
-  const am = await db
-    .select()
-    .from(schema.revenueActuals)
-    .where(and(eq(schema.revenueActuals.kind, 'A'), inArray(schema.revenueActuals.propertyId, ids), like(schema.revenueActuals.month, `${Y}-%`)));
-  for (const x of am) {
-    const a = actual.get(x.propertyId) ?? z12();
-    a[Number(x.month.slice(5)) - 1] += x.amount;
-    actual.set(x.propertyId, a);
-  }
-
-  // projection after the cut-off: the current version's leases run through year Y
-  const projected = new Map<number, number[]>();
+  // this version's own budget year, for "2026B → 2026F → 2027B"
   const next = new Map<number, number>();
   const lines = await db
     .select({ p: schema.leaseLines.propertyId, calc: schema.leaseLines.calc })
     .from(schema.leaseLines)
     .where(and(eq(schema.leaseLines.versionId, version.id), inArray(schema.leaseLines.propertyId, ids)));
-  for (const l of lines) {
-    // this version's own budget year, for "2026B → 2026F → 2027B"
-    next.set(l.p, (next.get(l.p) ?? 0) + ((l.calc as StoredCalc | null)?.totals.revenue ?? 0));
-    const pr = (l.calc as StoredCalc | null)?.priorRevenue;
-    if (!pr) continue;
-    const a = projected.get(l.p) ?? z12();
-    for (let i = cutoff; i < 12; i++) a[i] += pr[i];
-    projected.set(l.p, a);
-  }
+  for (const l of lines) next.set(l.p, (next.get(l.p) ?? 0) + ((l.calc as StoredCalc | null)?.totals.revenue ?? 0));
 
-  const covered = properties.filter((p) => actual.has(p.id));
   const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
-  const rows: (BvfProperty & { act: number[]; proj: number[]; bud: number[] })[] = covered.map((p) => {
-    const bud = budget.get(p.id) ?? z12();
-    const act = actual.get(p.id)!;
-    const proj = projected.get(p.id) ?? z12();
-    return { id: p.id, name: p.name, bu: p.buCode, budget: sum(bud), forecast: sum(act.slice(0, cutoff)) + sum(proj.slice(cutoff)), next: next.get(p.id) ?? 0, act, proj, bud };
-  });
+  const rows: (BvfProperty & { act: number[]; proj: number[]; bud: number[]; all: number[] })[] = properties
+    .filter((p) => pf.properties.has(p.id) || budget.has(p.id))
+    .map((p) => {
+      const f = pf.properties.get(p.id);
+      const bud = budget.get(p.id) ?? z12();
+      const all = f?.months ?? z12();
+      return { id: p.id, name: p.name, bu: p.buCode, budget: sum(bud), forecast: sum(all), next: next.get(p.id) ?? 0, act: f?.actual ?? z12(), proj: f?.projected ?? z12(), bud, all };
+    });
+  // the months to the cut-off are actual (projected for a property without Oracle actuals), the rest projected
   const months = {
     budget: z12().map((_, i) => sum(rows.map((r) => r.bud[i]))),
-    actual: z12().map((_, i) => (i < cutoff ? sum(rows.map((r) => r.act[i])) : null)),
-    projected: z12().map((_, i) => (i >= cutoff ? sum(rows.map((r) => r.proj[i])) : null)),
+    actual: z12().map((_, i) => (i < cutoff ? sum(rows.map((r) => r.all[i])) : null)),
+    projected: z12().map((_, i) => (i >= cutoff ? sum(rows.map((r) => r.all[i])) : null)),
   };
   const buNames = new Map(properties.map((p) => [p.buCode, p.buName]));
   const bus = [...new Set(rows.map((r) => r.bu))].sort().map((code) => {
     const rs = rows.filter((r) => r.bu === code);
     return { code, name: buNames.get(code) ?? code, budget: sum(rs.map((r) => r.budget)), forecast: sum(rs.map((r) => r.forecast)), next: sum(rs.map((r) => r.next)) };
   });
-  const forecastActual = sum(months.actual.map((v) => v ?? 0));
-  const forecastProjected = sum(months.projected.map((v) => v ?? 0));
+  const forecastActual = sum(rows.map((r) => sum(r.act)));
+  const forecastProjected = sum(rows.map((r) => sum(r.proj)));
   return {
     year: Y,
     budgetName: prior.name,
@@ -128,6 +107,6 @@ export async function loadBudgetVsForecast(
     bus,
     properties: rows.map(({ id, name, bu, budget: b, forecast: f, next: n }) => ({ id, name, bu, budget: b, forecast: f, next: n })),
     months,
-    excluded: properties.length - covered.length,
+    projectedOnly: rows.filter((r) => pf.properties.has(r.id) && !pf.properties.get(r.id)!.hasActuals).length,
   };
 }

@@ -2,9 +2,10 @@
 // actuals; one facility opened in a side form with its facts from the tool and its budgeted costs) and
 // the labour allocation (FM staff by team, spread over the facilities).
 import 'server-only';
-import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte } from 'drizzle-orm';
+import { priorVersion } from './prior-version';
 import { db, schema } from '@/db';
-import { isFinance, isFm, type CurrentUser } from '@/lib/auth/dal';
+import { entersData, isAdmin, type CurrentUser } from '@/lib/auth/dal';
 import type { FmPropertyResult } from './fm-calc';
 import { loadFmBudget } from './fm';
 import { WORK_TYPES, isWorkType, type StaffTeam } from './fm-types';
@@ -96,7 +97,8 @@ export interface FmPageData {
   canEditStaff: boolean;
   /** why the staff budget can't be changed right now (facilities submitted or approved) */
   staffLockedReason: string | null;
-  finance: boolean;
+  /** Admin approves and returns facilities */
+  admin: boolean;
 }
 
 const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
@@ -104,9 +106,8 @@ const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 /** why the user can't change a facility's FM budget (null: they can); the save path checks the same */
 export function fmEditReason(locked: boolean, user: CurrentUser, status: Status): string | null {
   if (locked) return 'This budget version is locked';
-  if (isFinance(user)) return null;
-  if (!isFm(user)) return 'The FM budget is entered by facilities management';
-  if (status === 'SUBMITTED' || status === 'APPROVED') return `This facility is ${status.toLowerCase()}; ask Finance to return it for changes`;
+  if (!entersData(user, 'FM')) return 'The FM budget is entered by facilities management';
+  if (status === 'SUBMITTED' || status === 'APPROVED') return `This facility is ${status.toLowerCase()}; Admin returns it for changes`;
   return null;
 }
 
@@ -147,12 +148,8 @@ const worksOf = (r: FmPropertyResult) => sum(Object.values(r.works));
 
 export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUser, propertyIds: number[], selected: number | null): Promise<FmPageData> {
   const year = version.year;
-  const [prior] = await db
-    .select()
-    .from(schema.budgetVersions)
-    .where(eq(schema.budgetVersions.year, year - 1))
-    .orderBy(desc(schema.budgetVersions.id))
-    .limit(1);
+  // last year's approved budget (prior-version.ts)
+  const prior = await priorVersion(version);
   const ids = propertyIds.length ? propertyIds : [-1];
   const [props, bus, subs, cur, prev, actuals, staffRows, priorStaffRows, lineCounts] = await Promise.all([
     db.select().from(schema.properties).where(inArray(schema.properties.id, ids)).orderBy(schema.properties.buCode, schema.properties.code),
@@ -204,7 +201,7 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
       };
     });
 
-  const finance = isFinance(user);
+  const admin = isAdmin(user);
   const locked = version.status === 'LOCKED';
   let detail: FmFacilityDetail | null = null;
   const pick = selected ? facilities.find((f) => f.id === selected) : undefined;
@@ -297,8 +294,8 @@ export async function loadFmPage(version: schema.BudgetVersion, user: CurrentUse
       prior: prev ? { ctc: rawPrior.get(t)?.ctc ?? 0, overtime: rawPrior.get(t)?.overtime ?? 0, cost: t === 'GA' ? 0 : (prev.result.teamCost[t] ?? 0) } : null,
     })),
     unallocated: cur.result.unallocated,
-    canEditStaff: !locked && (finance || isFm(user)) && !staffEditBlocked(user, subs.map((x) => x.status)),
+    canEditStaff: !locked && !staffEditBlocked(user, subs.map((x) => x.status)),
     staffLockedReason: locked ? 'This budget version is locked' : staffEditBlocked(user, subs.map((x) => x.status)),
-    finance,
+    admin,
   };
 }

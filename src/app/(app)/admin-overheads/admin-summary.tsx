@@ -29,7 +29,7 @@ export function AdminSummary({ data: s }: { data: Data }) {
 
   // payroll and its 2026 rules: capitalised and ASRE on payroll + what ANPM pays for the department
   const anpm = anpmOverheads(ohRows);
-  const splits = d.payroll.map((p) => ({ p, s: payrollSplit(p, anpm.get(p.dept) ?? 0), entered: p.ctc !== null || p.newCtc !== null }));
+  const splits = d.payroll.map((p) => ({ p, s: payrollSplit(p, anpm.get(p.dept) ?? 0, d.rules), entered: p.ctc !== null || p.newCtc !== null }));
   const pay = { b: sum(splits.map((x) => x.s.total)), f: sum(d.payroll.map((p) => p.f)), cap: sum(splits.map((x) => x.s.cap)), rech: sum(splits.map((x) => x.s.mjnh + x.s.asre)) };
   const hc = sum(d.payroll.map((p) => (p.headcount ?? 0) + (p.newHeadcount ?? 0)));
   const oh = { b: sum(ohRows.map(rowB)), f: sum(ohRows.map((r) => r.f)), anpm: sum(ohRows.map((r) => cell(r, '521'))) };

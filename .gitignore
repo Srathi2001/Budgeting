@@ -46,3 +46,7 @@ next-env.d.ts
 # downloaded Fusion data (tenant details)
 /tmp
 
+
+# audit reports (financial findings) and agent scratch output: keep off GitHub
+/audit
+/Claude outputs

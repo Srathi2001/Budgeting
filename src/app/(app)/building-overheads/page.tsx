@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { requireUser, visibleProperties, editablePropertyIds, isFinance, requireVersion } from '@/lib/auth/dal';
+import { requireUser, visibleProperties, editablePropertyIds, entersData, isAdmin, requireVersion } from '@/lib/auth/dal';
 import { loadBuildingOverheads } from '@/lib/budget/boh';
 import { loadContracts, loadInsurance, loadWatchmen } from '@/lib/budget/boh-schedules';
 import { CONTRACT_KINDS, isContractKind } from '@/lib/budget/boh-types';
@@ -34,12 +34,12 @@ export default async function BuildingOverheadsPage({ searchParams }: PageProps<
   const sp = await searchParams;
   const tab = TABS.some((t) => t.key === sp.tab) ? String(sp.tab) : 'overview';
   const props = await visibleProperties(user);
-  const editable = await editablePropertyIds(user, version);
-  const { blocks, cutoff } = await loadBuildingOverheads(version, props, editable);
+  // each department enters its own accounts: property managers theirs, Finance its own (Admin either)
+  const { blocks, cutoff, priorLabel } = await loadBuildingOverheads(version, props, await editablePropertyIds(user, version, 'PM'), await editablePropertyIds(user, version, 'FIN'));
   const locked = version.status === 'LOCKED';
-  const finance = isFinance(user);
+  const finance = entersData(user, 'FIN');
   const ids = props.map((p) => p.id);
-  const common = { blocks, versionId: version.id, year: version.year, cutoff, locked, finance };
+  const common = { blocks, versionId: version.id, year: version.year, cutoff, locked, finance, admin: isAdmin(user) };
 
   let body: React.ReactNode;
   // each tab starts afresh when its saved data changes (the server's figures replace what was typed)
@@ -57,7 +57,7 @@ export default async function BuildingOverheadsPage({ searchParams }: PageProps<
   } else if (isContractKind(tab)) {
     const rows = await loadContracts(version.id, ids, tab);
     body = <ContractSchedule key={`${tab}-${fingerprint(rows)}`} {...common} kind={tab} rows={rows} />;
-  } else body = <BuildingOverheads blocks={blocks} versionId={version.id} versionName={version.name} year={version.year} cutoff={cutoff} locked={locked} finance={finance} />;
+  } else body = <BuildingOverheads blocks={blocks} versionId={version.id} versionName={version.name} year={version.year} cutoff={cutoff} locked={locked} priorLabel={priorLabel} />;
 
   return (
     <div className="ui-fill flex min-h-0 flex-col">

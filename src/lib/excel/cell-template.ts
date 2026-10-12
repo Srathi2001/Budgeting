@@ -8,7 +8,8 @@
 import ExcelJS from 'exceljs';
 import { XL } from '@/lib/format';
 
-export type CellKind = 'text' | 'money' | 'number' | 'int' | 'pct' | 'month';
+/** date: an ISO day (YYYY-MM-DD) in the tool, a real date in Excel */
+export type CellKind = 'text' | 'money' | 'number' | 'int' | 'pct' | 'month' | 'date';
 export type CellValue = string | number | null;
 
 export interface TplCol {
@@ -76,9 +77,9 @@ const FILL = {
 };
 const THIN = { style: 'thin', color: { argb: 'FFBFBFBF' } } as ExcelJS.Border;
 const BOX = { top: THIN, bottom: THIN, left: THIN, right: THIN };
-const FMT: Record<CellKind, string | undefined> = { text: undefined, money: XL.amount, number: '#,##0.##', int: XL.count, pct: XL.pct, month: undefined };
+const FMT: Record<CellKind, string | undefined> = { text: undefined, money: XL.amount, number: '#,##0.##', int: XL.count, pct: XL.pct, month: undefined, date: 'dd-mmm-yyyy' };
 
-const show = (kind: CellKind, v: CellValue) => (kind === 'month' && typeof v === 'number' ? MONTHS[v - 1] : v);
+const show = (kind: CellKind, v: CellValue) => (kind === 'month' && typeof v === 'number' ? MONTHS[v - 1] : kind === 'date' && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T00:00:00Z`) : v);
 
 export async function buildTemplate(t: Template, ctx: { versionName: string; user: string }): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
@@ -167,6 +168,7 @@ export async function buildTemplate(t: Template, ctx: { versionName: string; use
         if (!open) return;
         const list = c.kind === 'month' ? MONTHS : c.list;
         if (list) cell.dataValidation = { type: 'list', allowBlank: true, formulae: [listRange(list)], showErrorMessage: true, error: 'Choose from the list' };
+        else if (c.kind === 'date') cell.dataValidation = { type: 'date', operator: 'greaterThan', allowBlank: true, formulae: [new Date(Date.UTC(2000, 0, 1))], showErrorMessage: true, error: 'A date' };
         else if (c.kind !== 'text')
           cell.dataValidation = {
             type: c.kind === 'int' ? 'whole' : 'decimal',
@@ -224,6 +226,16 @@ function parse(kind: CellKind, v: unknown, list?: readonly string[]): CellValue 
     if (typeof v === 'number') return Number.isInteger(v) && v >= 1 && v <= 12 ? v : 'bad';
     const i = MONTHS.findIndex((m) => String(v).trim().toLowerCase().startsWith(m.toLowerCase()));
     return i >= 0 ? i + 1 : 'bad';
+  }
+  if (kind === 'date') {
+    // a date cell, an Excel serial, YYYY-MM-DD or dd-Mmm-yyyy → YYYY-MM-DD
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === 'number') return Number.isFinite(v) && v > 20000 ? new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10) : 'bad';
+    const s = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = /^(\d{1,2})[-\s/]([A-Za-z]{3})[-\s/](\d{4})$/.exec(s);
+    const mi = m ? MONTHS.findIndex((x) => x.toLowerCase() === m[2].toLowerCase()) : -1;
+    return m && mi >= 0 ? new Date(Date.UTC(Number(m[3]), mi, Number(m[1]))).toISOString().slice(0, 10) : 'bad';
   }
   if (kind === 'text') {
     const s = String(v).trim();

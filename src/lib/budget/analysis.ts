@@ -1,10 +1,13 @@
 // Data behind Revenue Analysis: unit-level monthly budget (current + prior budget version) and
 // property-level comparatives (forecast, actuals), for roll-up / drill-down in any order.
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
+import { priorVersion } from './prior-version';
+import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import type { StoredCalc } from './calc';
 import { categoryOf, type Category } from './category';
 import { resolveComparatives, type CompSource } from './comparatives';
+import { entityOf, isMall } from './group';
 
 export interface AnalysisUnit {
   key: string; // unit id
@@ -55,22 +58,13 @@ export async function loadAnalysisData(
   propertyIds: number[],
   commentable: Set<number>,
 ): Promise<AnalysisData> {
+  await getSettings(); // the mappings (e.g. the Mall's codes) before any property is classified
   const y = version.year;
   const labels = { budget: `${y}B`, forecast: `${y - 1}F`, prior: `${y - 1}B`, actuals: [`${y - 2}A`, `${y - 3}A`] };
   const ids = propertyIds.length ? propertyIds : [-1];
 
-  // prior-year budget: the version this one was rolled from, else the latest version of last year
-  let [priorV] = version.sourceVersionId
-    ? await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, version.sourceVersionId))
-    : [];
-  if (!priorV || priorV.year !== y - 1) {
-    [priorV] = await db
-      .select()
-      .from(schema.budgetVersions)
-      .where(eq(schema.budgetVersions.year, y - 1))
-      .orderBy(desc(schema.budgetVersions.status), desc(schema.budgetVersions.id))
-      .limit(1);
-  }
+  // prior-year budget: last year's approved version (one rule for every screen: prior-version.ts)
+  const priorV = await priorVersion(version);
 
   const props = await db
     .select({ p: schema.properties, buName: schema.businessUnits.name })
@@ -146,8 +140,9 @@ export async function loadAnalysisData(
         id: p.id,
         code: p.code,
         name: p.name,
-        bu: p.buCode,
-        buName,
+        // the Mall reports on its own, as in the budget
+        bu: entityOf(p.buCode, p.code),
+        buName: isMall(p.code) ? 'Mall' : buName,
         pm: p.coordinator ?? '—',
         kind: p.kind,
         comps: c,

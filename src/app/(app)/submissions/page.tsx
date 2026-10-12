@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { requireUser, isFinance, requireVersion } from '@/lib/auth/dal';
+import { requireUser, isAdmin, requireVersion } from '@/lib/auth/dal';
 import { filteredScope } from '@/lib/filters-server';
 import { propertyRollups } from '@/lib/budget/reports';
 import { sum } from '@/lib/format';
@@ -19,7 +19,8 @@ export default async function SubmissionsPage() {
   const rolls = await propertyRollups(v.id, ids);
   const subs = await db.select().from(schema.submissions).where(eq(schema.submissions.versionId, v.id));
   const byId = new Map(subs.map((s) => [s.propertyId, s]));
-  const finance = isFinance(user);
+  // Admin approves and returns; the property manager (or Admin) submits
+  const finance = isAdmin(user);
   const open = v.status === 'OPEN';
 
   const rows: BoardRow[] = rolls.map((r) => ({
@@ -48,7 +49,7 @@ export default async function SubmissionsPage() {
 
   return (
     <div className="anh-main">
-      <PageHeader eyebrow="Workflow" title="Submissions" sub={`${v.name} · property managers submit each property when its inputs are complete; Finance approves, or returns it with a note. Revenue is the year's budget, ex VAT.`} />
+      <PageHeader eyebrow="Workflow" title="Submissions" sub={`${v.name} · property managers submit each property when its inputs are complete; Admin approves, or returns it with a reason. Nobody changes a submitted or approved property. Revenue is the year's budget, ex VAT.`} />
       {!open && (
         <Banner kind="info" title={`${v.name} is locked`}>
           Statuses cannot change in a locked version.

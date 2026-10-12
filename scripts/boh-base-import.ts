@@ -7,6 +7,7 @@
 //   npx tsx scripts/boh-base-import.ts <versionId> insurance <file> [--apply]
 //   npx tsx scripts/boh-base-import.ts <versionId> watchmen <file> [--apply]
 import 'dotenv/config';
+import { scriptActor } from './script-actor';
 import { readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import { eq } from 'drizzle-orm';
@@ -17,6 +18,7 @@ import { propertyKey } from '../src/lib/import/tenant-lease';
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
+  const actor = apply ? await scriptActor() : null;
   const [versionId, what, file] = args.filter((a) => a !== '--apply');
   const [v] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, Number(versionId)));
   if (!v || !file || !['insurance', 'watchmen'].includes(what)) throw new Error('usage: boh-base-import.ts <versionId> insurance|watchmen <file> [--apply]');
@@ -49,7 +51,7 @@ async function main() {
             .insert(schema.bohInsurance)
             .values({ versionId: v.id, propertyId, ...x })
             .onConflictDoUpdate({ target: [schema.bohInsurance.versionId, schema.bohInsurance.propertyId], set: { ...x, updatedAt: new Date() } });
-        await tx.insert(schema.auditLog).values({ versionId: v.id, entity: 'boh_insurance', action: 'import', changes: { file, buildings: out.size } });
+        await tx.insert(schema.auditLog).values({ userId: actor, versionId: v.id, entity: 'boh_insurance', action: 'import', changes: { file, buildings: out.size } });
       });
   } else {
     const cost = withDefaults(v.assumptions).watchmanCost;
@@ -75,7 +77,7 @@ async function main() {
             .insert(schema.bohWatchmen)
             .values({ versionId: v.id, propertyId, share })
             .onConflictDoUpdate({ target: [schema.bohWatchmen.versionId, schema.bohWatchmen.propertyId], set: { share, updatedAt: new Date() } });
-        await tx.insert(schema.auditLog).values({ versionId: v.id, entity: 'boh_watchmen', action: 'import', changes: { file, buildings: out.size } });
+        await tx.insert(schema.auditLog).values({ userId: actor, versionId: v.id, entity: 'boh_watchmen', action: 'import', changes: { file, buildings: out.size } });
       });
   }
   if (unmatched.length) console.log('not in the budget:', unmatched.join(', '));

@@ -12,6 +12,7 @@ import {
   OI_ACCOUNT,
   OI_ACCOUNTS,
   OI_COLUMNS,
+  OI_VIEW_COLUMNS,
   oiCell,
   oiInput,
   oiLabel,
@@ -23,6 +24,8 @@ import {
 import { GROUP_NAME, classifyOtherIncome, type GroupClass } from '@/lib/budget/group';
 import { saveOtherIncomeCells } from './actions';
 import { TemplateButtons } from '@/components/template-buttons';
+import { ListAndForm } from '@/components/record-form';
+import { OiForm } from './oi-form';
 
 /** what is taken out of the total to reach the group's other income */
 const ADJUSTMENTS: { cls: GroupClass; label: string }[] = [
@@ -60,6 +63,9 @@ export function OtherIncome({
   cutoff?: number;
 }) {
   const [blocks, setBlocks] = useState(initial);
+  // last year's approved budget (reference) and the change against it, when loaded
+  const ref = initial.some((b) => b.prior);
+  const SHOWN = ref ? OI_VIEW_COLUMNS : OI_COLUMNS;
   // the shared page filters (BU, PM, category, property)
   const { filters, universe } = useFilters();
   const [allAccounts, setAllAccounts] = useState(false);
@@ -68,6 +74,8 @@ export function OtherIncome({
   const [bad, setBad] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [, start] = useTransition();
+  // the property (or General row) open in the side form
+  const [open, setOpen] = useState<string | null>(null);
 
   const propInfo = useMemo(() => new Map(universe.map((p) => [p.id, p])), [universe]);
   /** property rows follow every filter; a BU's General (company-level) row only the business unit one */
@@ -80,7 +88,7 @@ export function OtherIncome({
   /** accounts shown in a block */
   const accountsOf = (b: OiBlock) =>
     OI_ACCOUNTS.filter((a) => {
-      const hasData = OI_COLUMNS.some((c) => oiCell(b, a.code, c) !== null) || OI_COLUMNS.some((c) => dirty.has(key(b.scope, a.code, c)));
+      const hasData = SHOWN.some((c) => oiCell(b, a.code, c) !== null) || SHOWN.some((c) => dirty.has(key(b.scope, a.code, c)));
       if (hasData) return true;
       return allAccounts && (b.kind === 'G' ? !!a.general : !a.general);
     });
@@ -119,7 +127,7 @@ export function OtherIncome({
       }
     return any ? s : null;
   };
-  const adjustments = ADJUSTMENTS.filter((adj) => OI_COLUMNS.some((c) => Math.abs(classTotal(c, adj.cls) ?? 0) >= 0.5));
+  const adjustments = ADJUSTMENTS.filter((adj) => SHOWN.some((c) => Math.abs(classTotal(c, adj.cls) ?? 0) >= 0.5));
 
   const commit = (b: OiBlock, account: string, period: OiPeriod) => {
     const k = key(b.scope, account, period);
@@ -187,7 +195,7 @@ export function OtherIncome({
         </td>
       );
     }
-    const calc = c === 'F' || (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF' && b.kind === 'P') || (c === 'B' && b.calcB?.[account] !== undefined);
+    const calc = c === 'F' || c === 'CH' || (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF' && b.kind === 'P') || (c === 'B' && b.calcB?.[account] !== undefined);
     return (
       <td key={c} className={`anh-num ${calc ? 'calc' : 'locked'}`}>
         {fmt(v)}
@@ -201,8 +209,36 @@ export function OtherIncome({
     return [...m.values()];
   }, [view]);
 
-  const cols = OI_COLUMNS.length + 4;
+  const cols = SHOWN.length + 4;
+  const openIdx = view.findIndex((b) => b.scope === open);
+  const openBlock = openIdx >= 0 ? view[openIdx] : null;
+  const applySaved = (changes: OiChange[]) =>
+    setBlocks((all) =>
+      all.map((x) => {
+        const mine = changes.filter((c) => c.scope === x.scope);
+        if (!mine.length) return x;
+        const values = { ...x.values };
+        for (const c of mine) values[c.account] = { ...values[c.account], [c.period]: c.amount };
+        return { ...x, values };
+      }),
+    );
+  const form = openBlock && (
+    <OiForm
+      key={openBlock.scope}
+      block={openBlock}
+      columns={SHOWN}
+      year={year}
+      cutoff={cutoff}
+      locked={locked}
+      versionId={versionId}
+      onSaved={applySaved}
+      onClose={() => setOpen(null)}
+      onPrev={openIdx > 0 ? () => setOpen(view[openIdx - 1].scope) : undefined}
+      onNext={openIdx < view.length - 1 ? () => setOpen(view[openIdx + 1].scope) : undefined}
+    />
+  );
   return (
+    <ListAndForm form={form}>
     <div className="space-y-4 p-6">
       <header className="flex flex-wrap items-end gap-4">
         <div>
@@ -240,6 +276,7 @@ export function OtherIncome({
             <i className="dirty" />
             Unsaved
           </span>
+          <span>Click a property to open it in the form</span>
         </div>
         <span className="anh-muted text-xs">AED</span>
       </div>
@@ -255,14 +292,17 @@ export function OtherIncome({
               <th colSpan={2} style={{ textAlign: 'center' }}>
                 Forecast {year - 1}
               </th>
-              <th className="anh-num">Budget</th>
+              <th colSpan={ref ? 2 : 1} style={{ textAlign: 'center' }}>
+                Budget
+              </th>
+              {ref && <th className="anh-num">Change</th>}
             </tr>
             <tr className="h1">
               <th>Account</th>
               <th>BU</th>
               <th>GL</th>
               <th>LL / ANPM</th>
-              {OI_COLUMNS.map((c) => (
+              {SHOWN.map((c) => (
                 <th key={c} className="anh-num" title={c === 'B' ? `Maintenance service fee: ${Math.round(mfPct * 100)}% of renewal / new-tenant rent, from the Lease Budget` : undefined}>
                   {c === 'F' && <span className="fx">fx</span>}
                   {oiLabel(c, year, cutoff)}
@@ -275,7 +315,7 @@ export function OtherIncome({
               <Fragment key={group[0].buCode}>
                 {group.map((b) => (
                   <Fragment key={b.scope}>
-                    <tr className="section">
+                    <tr className={`section cursor-pointer ${open === b.scope ? 'is-selected' : ''}`} onClick={() => setOpen(b.scope)} title="Open in the form">
                       <td colSpan={cols}>
                         {b.kind === 'G' ? `General · ${b.buCode} ${b.buName}` : `${b.code} · ${b.name}`}
                         {b.pm && <span className="ml-2 font-normal text-slate-500">{b.pm}</span>}
@@ -289,7 +329,7 @@ export function OtherIncome({
                           <span className="anh-code">{a.code}</span>
                         </td>
                         <td>{a.side === 'LL' ? 'Landlord' : (a.side ?? '')}</td>
-                        {OI_COLUMNS.map((c) => cell(b, a.code, c))}
+                        {SHOWN.map((c) => cell(b, a.code, c))}
                       </tr>
                     ))}
                     <tr className="subtotal">
@@ -297,7 +337,7 @@ export function OtherIncome({
                       <td>{b.buCode}</td>
                       <td />
                       <td />
-                      {OI_COLUMNS.map((c) => (
+                      {SHOWN.map((c) => (
                         <td key={c} className="anh-num">
                           {fmt(total([b], c))}
                         </td>
@@ -312,7 +352,7 @@ export function OtherIncome({
                   <td>{group[0].buCode}</td>
                   <td />
                   <td />
-                  {OI_COLUMNS.map((c) => (
+                  {SHOWN.map((c) => (
                     <td key={c} className="anh-num">
                       {fmt(total(group, c))}
                     </td>
@@ -325,7 +365,7 @@ export function OtherIncome({
                 <tr className="section">
                   <td colSpan={cols}>By account · {view.length === blocks.length ? 'all' : 'filtered'}</td>
                 </tr>
-                {OI_ACCOUNTS.filter((a) => OI_COLUMNS.some((c) => total(view, c, a.code) !== null)).map((a) => (
+                {OI_ACCOUNTS.filter((a) => SHOWN.some((c) => total(view, c, a.code) !== null)).map((a) => (
                   <tr key={a.code} className="child">
                     <td>{a.name}</td>
                     <td>{filters.bu.length === 1 ? filters.bu[0] : 'All'}</td>
@@ -333,7 +373,7 @@ export function OtherIncome({
                       <span className="anh-code">{a.code}</span>
                     </td>
                     <td>{a.side === 'LL' ? 'Landlord' : (a.side ?? '')}</td>
-                    {OI_COLUMNS.map((c) => (
+                    {SHOWN.map((c) => (
                       <td key={c} className="anh-num calc">
                         {fmt(total(view, c, a.code))}
                       </td>
@@ -345,7 +385,7 @@ export function OtherIncome({
                   <td />
                   <td />
                   <td />
-                  {OI_COLUMNS.map((c) => (
+                  {SHOWN.map((c) => (
                     <td key={c} className="anh-num">
                       {fmt(total(view, c))}
                     </td>
@@ -359,7 +399,7 @@ export function OtherIncome({
                         <td />
                         <td />
                         <td />
-                        {OI_COLUMNS.map((c) => (
+                        {SHOWN.map((c) => (
                           <td key={c} className="anh-num calc">
                             {fmt(-(classTotal(c, adj.cls) ?? 0))}
                           </td>
@@ -371,7 +411,7 @@ export function OtherIncome({
                       <td />
                       <td />
                       <td />
-                      {OI_COLUMNS.map((c) => (
+                      {SHOWN.map((c) => (
                         <td key={c} className="anh-num">
                           {fmt(classTotal(c, 'group'))}
                         </td>
@@ -392,5 +432,6 @@ export function OtherIncome({
         </table>
       </div>
     </div>
+    </ListAndForm>
   );
 }

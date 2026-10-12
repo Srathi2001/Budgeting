@@ -3,6 +3,7 @@
 //   npx tsx scripts/fmd-import.ts <FMD_Budget_2026_….xlsx>           preview only
 //   npx tsx scripts/fmd-import.ts <FMD_Budget_2026_….xlsx> --apply   import
 import 'dotenv/config';
+import { scriptActor } from './script-actor';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { db } from '../src/db';
@@ -12,7 +13,7 @@ async function main() {
   const [file, flag] = process.argv.slice(2);
   if (!file) throw new Error('usage: fmd-import.ts <FMD budget file.xlsx> [--apply]');
   const parsed = parseFmdFile(readFileSync(file));
-  const p = flag === '--apply' ? await applyFmdImport(parsed, null, basename(file)) : await previewFmdImport(parsed);
+  const p = flag === '--apply' ? await applyFmdImport(parsed, await scriptActor(), basename(file)) : await previewFmdImport(parsed);
   console.log(`FMD ${p.year} → ${p.budgetVersion ?? '(no version)'}: ${p.lines} lines, AED ${p.total.toLocaleString('en-US')} on ${p.facilities} facilities`);
   console.log('by work type:', p.byWorkType);
   console.log(`staff (cost to company + overtime + G&A): AED ${p.staff.toLocaleString('en-US')}`);

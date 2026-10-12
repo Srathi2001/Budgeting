@@ -2,7 +2,7 @@
 // edits, overrides, permissions, validation, locked versions, audit trail. Restores data at the end.
 import './allow-server-only';
 import 'dotenv/config';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../src/db';
 import { applyLineChanges } from '../src/lib/budget/save';
 import { fmTransitionAs, saveFmLinesAs } from '../src/lib/budget/fm-save';
@@ -125,7 +125,7 @@ async function main() {
   oi = await saveOtherIncome(fin, open.id, [{ scope: own, account: '52703', period: 'YTD', amount: 1 }]);
   check('actuals are not typed', oi.saved === 0, oi.errors[0]);
   await db.delete(schema.otherIncome).where(and(eq(schema.otherIncome.versionId, open.id), eq(schema.otherIncome.scope, own), eq(schema.otherIncome.account, '52703')));
-  await db.delete(schema.auditLog).where(and(eq(schema.auditLog.entity, 'other_income'), eq(schema.auditLog.entityId, `${own}|52703|B`)));
+  // the test's audit rows stay: the audit log is append-only (it is meant for a throw-away copy)
 
   // 4. Permissions
   res = await applyLineChanges(pm, open.id, [{ lineId: theirs.l.id, patch: { notes: 'HACK' } }]);
@@ -191,13 +191,12 @@ async function main() {
     if (keep.length) await db.insert(schema.fmLines).values(keep);
     await db.delete(schema.fmSubmissions).where(and(eq(schema.fmSubmissions.versionId, open.id), eq(schema.fmSubmissions.propertyId, fid)));
     if (subBefore) await db.insert(schema.fmSubmissions).values(subBefore);
-    await db.delete(schema.auditLog).where(and(eq(schema.auditLog.propertyId, fid), inArray(schema.auditLog.entity, ['fm_lines', 'fm_submission'])));
+    // the test's audit rows stay: the audit log is append-only (it is meant for a throw-away copy)
   } else console.log('SKIP  FM checks: no fmd@budget.local user');
 
   // 6. Building overheads: calculated budgets, the municipal default, contract schedules
   {
     const pid = original.propertyId;
-    const startAt = new Date();
     let b = await saveBuildingOverheads(fin, open.id, [{ propertyId: pid, account: '62324', amount: 1000, dueMonth: null }]);
     check('water & electricity is calculated, not typed', /calculated/.test(b.errors[0] ?? ''), b.errors[0]);
     b = await saveBuildingOverheads(fin, open.id, [{ propertyId: pid, account: '64802', amount: 500, dueMonth: null }]);
@@ -219,7 +218,7 @@ async function main() {
     }
     // restore
     await db.delete(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, open.id), eq(schema.bohContracts.supplier, 'TEST PEST')));
-    await db.delete(schema.auditLog).where(and(inArray(schema.auditLog.entity, ['boh_budget', 'boh_contracts']), sql`${schema.auditLog.at} >= ${startAt}`));
+    // the test's audit rows stay: the audit log is append-only (it is meant for a throw-away copy)
   }
 
   // restore
@@ -241,7 +240,7 @@ async function main() {
     })
     .where(eq(schema.leaseLines.id, original.id));
   await recalcLines(db, open.id, [original.id]);
-  await db.delete(schema.auditLog).where(eq(schema.auditLog.entityId, String(original.id)));
+  // the test's audit rows stay: the audit log is append-only (it is meant for a throw-away copy)
   console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
   process.exitCode = failures ? 1 : 0;
 }

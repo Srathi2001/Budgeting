@@ -2,7 +2,9 @@
 // browser, so every chart and tile re-renders against the same slice; the rent per sq ft card is
 // computed here for the shared filters (the dashboard refreshes when they change).
 import 'server-only';
-import { and, desc, eq, inArray, like } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
+import { priorVersion } from './prior-version';
+import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import { parseDay } from '@/lib/engine/dates';
 import type { Contract } from '@/lib/engine/lease';
@@ -12,6 +14,8 @@ import { categoryOf, type Category } from './category';
 import { locationOf } from './location';
 import { buildRentPsf, type PsfLine, type RentPsf } from './rent-psf';
 import { loadBudgetVsForecast, type BudgetVsForecast } from './budget-vs-forecast';
+import { loadPriorForecast } from './forecast';
+import { entityOf, isMall } from './group';
 
 /** What follows a contract that falls due (a year already contracted in Oracle counts as Renew). */
 export type ExpiryOutcome = 'Renew' | 'New tenant' | 'Not re-let';
@@ -122,13 +126,10 @@ function dueEvents(d: DashUnit, l: schema.LeaseLine, contracts: Contract[], year
 }
 
 export async function loadDashboardData(version: schema.BudgetVersion, propertyIds: number[], filters: Filters): Promise<DashboardData> {
+  await getSettings(); // the mappings (e.g. the Mall's codes) before any property is classified
   const ids = propertyIds.length ? propertyIds : [-1];
-  const [prior] = await db
-    .select()
-    .from(schema.budgetVersions)
-    .where(eq(schema.budgetVersions.year, version.year - 1))
-    .orderBy(desc(schema.budgetVersions.status), desc(schema.budgetVersions.id))
-    .limit(1);
+  // last year's approved budget (prior-version.ts)
+  const prior = await priorVersion(version);
 
   const props = await db
     .select({ p: schema.properties, bu: schema.businessUnits.name })
@@ -146,14 +147,16 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
 
   const yearStart = parseDay(`${version.year}-01-01`)!;
   const today = parseDay(new Date().toISOString().slice(0, 10))!;
+  // last year's forecast: the one rule (forecast.ts), split over the units of each building
+  const pf = await loadPriorForecast(version, propertyIds);
   const units = new Map<number, DashUnit>();
   const make = (u: schema.Unit, propertyId: number): DashUnit => {
     const pp = propById.get(propertyId)!;
     return {
       unitId: u.id,
       propertyId,
-      bu: pp.bu,
-      buCode: pp.p.buCode,
+      bu: isMall(pp.p.code) ? 'Mall' : pp.bu,
+      buCode: entityOf(pp.p.buCode, pp.p.code),
       pm: pp.p.coordinator ?? '—',
       category: categoryOf(u, pp.p.kind),
       revenue: null,
@@ -177,8 +180,7 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     d.leased = !!l.currentEnd;
     d.vacancyLoss = c?.vacancyLoss ?? 0;
     d.issues = c?.warnings.length ?? 0;
-    // the Lease Budget's projection of last year (actuals replace the closed months below)
-    d.forecast = c?.priorRevenue ? [...c.priorRevenue] : Array(12).fill(0);
+    d.forecast = pf.lines.get(l.id) ?? Array(12).fill(0);
     if (c && l.staffOwner !== 'OWNER') dueEvents(d, l, c.contracts, version.year, yearStart, today);
     units.set(u.id, d);
     // rent per sq ft: passing rent = the current contract, annualised (rent ÷ contract days × 365)
@@ -187,7 +189,7 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     psfLines.push({
       propertyId: l.propertyId,
       propertyName: pp.p.name,
-      buCode: pp.p.buCode,
+      buCode: entityOf(pp.p.buCode, pp.p.code),
       pm: d.pm,
       category: d.category,
       area: u.area && u.area > 0 ? u.area : 0,
@@ -207,38 +209,17 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
   }
 
   const list = [...units.values()];
-
-  // last year's forecast: actuals (by building) to the last closed month, split over the building's units
-  // by their projection (equally where there is none), then the projection
-  const Y1 = version.year - 1;
-  const actuals = await db
-    .select({ p: schema.revenueActuals.propertyId, m: schema.revenueActuals.month, a: schema.revenueActuals.amount })
-    .from(schema.revenueActuals)
-    .where(and(eq(schema.revenueActuals.kind, 'A'), inArray(schema.revenueActuals.propertyId, ids), like(schema.revenueActuals.month, `${Y1}-%`)));
-  const cutoff = actuals.reduce((m, x) => Math.max(m, Number(x.m.slice(5))), 0);
-  const actualBy = new Map<number, number[]>();
-  for (const x of actuals) {
-    const arr = actualBy.get(x.p) ?? Array(12).fill(0);
-    arr[Number(x.m.slice(5)) - 1] += x.a;
-    actualBy.set(x.p, arr);
-  }
-  for (const [pid, act] of actualBy) {
-    const us = list.filter((d) => d.propertyId === pid && d.revenue);
-    if (!us.length) continue;
-    for (let i = 0; i < cutoff; i++) {
-      const proj = us.reduce((s, d) => s + d.forecast[i], 0);
-      for (const d of us) d.forecast[i] = proj > 0 ? (act[i] * d.forecast[i]) / proj : act[i] / us.length;
-    }
-  }
+  const Y1 = pf.year;
+  const cutoff = pf.cutoff;
   // budget vs forecast is per property (Oracle actuals have no unit detail): the category filter
   // keeps the properties with units in it
   const cats = new Map<number, Set<Category>>();
   for (const d of list) cats.set(d.propertyId, (cats.get(d.propertyId) ?? new Set()).add(d.category));
   const pass = (sel: string[], v: string) => sel.length === 0 || sel.includes(v);
   const bvfProps = props
-    .filter(({ p }) => pass(filters.bu, p.buCode) && pass(filters.pm, p.coordinator ?? '—') && pass(filters.prop, String(p.id)))
+    .filter(({ p }) => pass(filters.bu, entityOf(p.buCode, p.code)) && pass(filters.pm, p.coordinator ?? '—') && pass(filters.prop, String(p.id)))
     .filter(({ p }) => !filters.cat.length || [...(cats.get(p.id) ?? [])].some((c) => filters.cat.includes(c)))
-    .map(({ p, bu }) => ({ id: p.id, name: p.name, buCode: p.buCode, buName: bu }));
+    .map(({ p, bu }) => ({ id: p.id, name: p.name, buCode: entityOf(p.buCode, p.code), buName: isMall(p.code) ? 'Mall' : bu }));
   return {
     year: version.year,
     versionName: version.name,
@@ -247,9 +228,9 @@ export async function loadDashboardData(version: schema.BudgetVersion, propertyI
     forecastCutoff: cutoff,
     units: list,
     properties: props.map(({ p, bu }) => ({ id: p.id, code: p.code, name: p.name, bu, pm: p.coordinator ?? '—' })),
-    bus: [...new Set(props.map((x) => x.bu))].sort(),
+    bus: [...new Set(props.map((x) => (isMall(x.p.code) ? 'Mall' : x.bu)))].sort(),
     pms: [...new Set(props.map((x) => x.p.coordinator ?? '—'))].sort(),
-    rentPsf: buildRentPsf(psfLines, filters),
-    budgetVsForecast: await loadBudgetVsForecast(version, prior, bvfProps),
+    rentPsf: buildRentPsf(psfLines, filters, (await getSettings()).wholeBuildingNames),
+    budgetVsForecast: await loadBudgetVsForecast(version, prior ?? undefined, bvfProps),
   };
 }

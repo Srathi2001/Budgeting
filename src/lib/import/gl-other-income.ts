@@ -7,13 +7,15 @@
 // goes to General rows. Periods for budget year Y: Y-3 → A2, Y-2 → A1, Y-1 Jan to the cut-off month → YTD.
 // Income is credit − debit. An import replaces that ledger's GL actuals; typed inputs are untouched.
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { getSettings } from '@/lib/settings';
 import { db, schema, type DB } from '@/db';
 import { withDefaults } from '@/lib/engine/assumptions';
 
 type Tx = Parameters<Parameters<DB['transaction']>[0]>[0] | DB;
 import { OI_ACCOUNT } from '@/lib/budget/other-income-types';
 import { glSegments, scanAccountAnalysis, type GlScan } from './gl-analysis';
+import { scopeWhere, type GlScope } from './gl-history';
 import { propertyKey } from './tenant-lease';
 
 interface LedgerSetup {
@@ -105,7 +107,9 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
   const ledger = scan.ledger?.trim().toUpperCase();
   if (!isGlLedger(ledger)) throw new Error(`Ledger ${scan.ledger ?? '(none)'}: expected ${GL_LEDGER_NAMES.join(' or ')}`);
   if (expected && ledger !== expected) throw new Error(`This is the ${ledger} report, not ${expected}: upload it under ${ledger}`);
-  const setup: LedgerSetup = GL_LEDGERS[ledger];
+  // GL company → business unit: a mapping (Admin → Mappings), the ledger's defaults otherwise
+  const mapped = (await getSettings()).glCompanies[ledger];
+  const setup: LedgerSetup = { ...GL_LEDGERS[ledger], companies: mapped && Object.keys(mapped).length ? mapped : GL_LEDGERS[ledger].companies };
   if (scan.mismatches.length) throw new Error(`The report does not add up for ${scan.mismatches.length} account(s), e.g. ${scan.mismatches[0].account}: not imported`);
   const Y = version.year;
   const periodOf = (month: string): GlPeriod | null => {
@@ -200,6 +204,9 @@ export async function planGlImport(versionId: number, scan: GlScan, expected?: G
   };
 }
 
+/** what a GL import replaces in Other Income: the version's GL periods of the ledger's business units */
+export const glOtherIncomeScope = (versionId: number, ledger: GlLedger): GlScope => ({ versionId, bus: ledgerBus(ledger), periods: [...GL_PERIODS] });
+
 /** Replaces the GL actuals (A2, A1, YTD) of the preview's ledger with `values`; other ledgers are kept. */
 export async function applyGlImport(versionId: number, values: GlValue[], userId: number | null, info: { file: string | null; preview: GlPreview }, on: Tx = db) {
   const [version] = await on.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
@@ -211,9 +218,7 @@ export async function applyGlImport(versionId: number, values: GlValue[], userId
   if (outside) throw new Error(`Business unit ${outside.buCode} is not in ledger ${ledger}`);
   const run = async (tx: Tx) => {
     for (const b of GL_LEDGERS[ledger].bus) await tx.insert(schema.businessUnits).values(b).onConflictDoNothing();
-    await tx
-      .delete(schema.otherIncome)
-      .where(and(eq(schema.otherIncome.versionId, versionId), inArray(schema.otherIncome.period, [...GL_PERIODS]), inArray(schema.otherIncome.buCode, bus)));
+    await tx.delete(schema.otherIncome).where(scopeWhere('other_income', glOtherIncomeScope(versionId, ledger)));
     for (let i = 0; i < values.length; i += 500) {
       await tx.insert(schema.otherIncome).values(
         values.slice(i, i + 500).map((v) => ({ versionId, buCode: v.buCode, propertyId: v.propertyId, scope: v.scope, account: v.account, period: v.period, amount: v.amount, updatedBy: userId })),

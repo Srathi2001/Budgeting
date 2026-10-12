@@ -14,7 +14,7 @@ export type BohLine = 'utilities' | 'watchmen' | 'insurance' | 'cleaning' | 'ove
  */
 export type BohPhasing = 'flat' | 'seasonal' | 'due';
 
-/** PM: the property manager (and Finance); FIN: Finance only */
+/** whose input the account is: PM the property manager's, FIN Finance's (Admin may enter either) */
 export type BohOwner = 'PM' | 'FIN';
 
 export interface BohAccount {
@@ -122,6 +122,10 @@ export interface BohRow {
   dueMonth: number | null;
   /** due month used when none is entered: last year's largest payment, else January */
   defaultDue: number;
+  /** last year's approved budget (e.g. 2026B from the 2026 workbook), reference only */
+  pb?: number | null;
+  /** how the reference figure was budgeted, when it differs from the account (e.g. all insurance on one line) */
+  pbNote?: string | null;
 }
 
 export interface BohBlock {
@@ -131,9 +135,13 @@ export interface BohBlock {
   buCode: string;
   buName: string;
   pm: string | null;
-  /** the property can be edited by the user (PM lines); Finance lines need Finance as well */
+  /** the user may change the property manager's accounts and contracts of this building */
   editable: boolean;
+  /** the user may change Finance's accounts of this building */
+  finEditable: boolean;
   rows: BohRow[];
+  /** last year's budget on accounts the tool does not have (reference only) */
+  pbOther?: { account: string; amount: number; note: string | null }[];
 }
 
 export interface BohChange {
@@ -197,6 +205,13 @@ export interface ContractRow {
   quantity: number;
   rate: number;
   startMonth: number | null;
+  /** the contract's period (blank: from the start month for a year; see boh-calc contractPeriod) */
+  startDate: string | null;
+  endDate: string | null;
+  /** ends before 31 December: RENEW / END; null = not decided yet */
+  renewal: 'RENEW' | 'END' | null;
+  renewalRate: number | null;
+  renewalTerms: ContractTerms | null;
   remarks: string | null;
   source: 'PO' | 'PM';
   poNumber: string | null;

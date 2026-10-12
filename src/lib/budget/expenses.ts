@@ -5,10 +5,12 @@
 // items are in the cash flow only.
 import 'server-only';
 import { eq, inArray } from 'drizzle-orm';
+import { asreExpenseLines } from './asre';
 import { db, schema } from '@/db';
 import { loadFmBudget } from './fm';
 import { bohMonthly } from './boh';
 import { adminEntityCosts } from './admin';
+import { treasuryForStatements } from './treasury';
 
 export interface ExpenseLine {
   key: string;
@@ -19,7 +21,7 @@ export interface ExpenseLine {
    * Where the line sits, as the 2026 budget: operating cost (in gross profit), below gross profit
    * (major repairs), or the cash flow only (capex items, not in the P&L)
    */
-  section: 'opex' | 'belowGp' | 'ga' | 'cashOnly' | 'gaCash';
+  section: 'opex' | 'belowGp' | 'ga' | 'belowEbitda' | 'tax' | 'cashOnly' | 'gaCash';
 }
 
 export const EXPENSE_LINES: ExpenseLine[] = [
@@ -31,6 +33,9 @@ export const EXPENSE_LINES: ExpenseLine[] = [
   { key: 'cleaning', label: 'Cleaning & security', short: 'Cleaning & sec.', section: 'opex' },
   { key: 'overheads', label: 'Miscellaneous overheads', short: 'Misc OH', section: 'opex' },
   { key: 'land', label: 'DREC / land', short: 'DREC / land', section: 'opex' },
+  // ASRE's (the mall operator's) own lines: its lease of the Mall from REHL-MJN and its running costs
+  { key: 'mallLease', label: 'Mall lease to REHL-MJN (ASRE)', short: 'Mall lease', section: 'opex' },
+  { key: 'asreOpex', label: 'Mall operating costs (ASRE)', short: 'ASRE costs', section: 'opex' },
   { key: 'repairs', label: 'Major repairs & refurbishment', short: 'Major repairs', section: 'belowGp' },
   // general & administration: entity level (ANPM's payroll and the companies' admin overheads), not by building
   { key: 'payroll', label: 'Payroll & staff costs', short: 'Payroll', section: 'ga' },
@@ -38,6 +43,15 @@ export const EXPENSE_LINES: ExpenseLine[] = [
   { key: 'payrollRecharge', label: 'Recharged to MJNH / ASRE', short: 'Recharged', section: 'ga' },
   { key: 'adminOh', label: 'Admin overheads', short: 'Admin OH', section: 'ga' },
   { key: 'ama', label: 'AMA fee to MJNH', short: 'AMA fee', section: 'ga' },
+  // below EBITDA, as the 2026 budget (ConsolidatedxRealEstate): depreciation (Admin overheads' depreciation
+  // accounts; the fixed-asset register later), shareholder loan interest (Finance → Shareholder loans), the
+  // right-of-use lines (IFRS 16: on hold), contingencies (Finance → Contingencies); then corporate tax
+  { key: 'depreciation', label: 'Depreciation', short: 'Depreciation', section: 'belowEbitda' },
+  { key: 'loanInterest', label: 'Shareholder loan interest', short: 'Loan interest', section: 'belowEbitda' },
+  { key: 'rouInterest', label: 'Unwinding interest on RTU assets', short: 'RTU interest', section: 'belowEbitda' },
+  { key: 'rouAmort', label: 'Amortisation of RTU assets', short: 'RTU amort.', section: 'belowEbitda' },
+  { key: 'contingencies', label: 'Contingencies', short: 'Contingencies', section: 'belowEbitda' },
+  { key: 'corporateTax', label: 'Corporate tax', short: 'Tax', section: 'tax' },
   { key: 'capexItems', label: 'Capex items', short: 'Capex items', section: 'cashOnly' },
   // office & IT capex of the departments: paid, not expensed
   { key: 'gaCapex', label: 'Office & IT capex', short: 'Office capex', section: 'gaCash' },
@@ -46,8 +60,12 @@ export const OPEX_LINES = EXPENSE_LINES.filter((l) => l.section === 'opex');
 export const BELOW_GP_LINES = EXPENSE_LINES.filter((l) => l.section === 'belowGp');
 export const GA_LINES = EXPENSE_LINES.filter((l) => l.section === 'ga');
 export const GA_CASH_LINES = EXPENSE_LINES.filter((l) => l.section === 'gaCash');
-/** the lines of a building (everything but general & administration) */
-export const BUILDING_LINES = EXPENSE_LINES.filter((l) => l.section !== 'ga' && l.section !== 'gaCash');
+export const BELOW_EBITDA_LINES = EXPENSE_LINES.filter((l) => l.section === 'belowEbitda');
+export const TAX_LINES = EXPENSE_LINES.filter((l) => l.section === 'tax');
+/** non-cash lines added back for the cash profit (2026: depreciation and the right-of-use amortisation) */
+export const NON_CASH_LINES = ['depreciation', 'rouAmort'];
+/** the lines of a building (everything but company-level G&A and what is below EBITDA) */
+export const BUILDING_LINES = EXPENSE_LINES.filter((l) => !['ga', 'gaCash', 'belowEbitda', 'tax'].includes(l.section));
 export const CASH_ONLY_LINES = EXPENSE_LINES.filter((l) => l.section === 'cashOnly');
 /** expense lines that are in the P&L (everything but capex items) */
 export const isPnlLine = (key: string) => !['cashOnly', 'gaCash'].includes(EXPENSE_LINES.find((l) => l.key === key)?.section ?? '');
@@ -105,5 +123,7 @@ export async function budgetedExpenseLines(versionId: number): Promise<Set<strin
   const out = new Set<string>((await loadFmBudget(versionId)).budgeted ? FM_EXPENSE_KEYS : []);
   if (version) for (const l of (await bohMonthly(version)).lines) out.add(l);
   if (version) for (const l of (await adminEntityCosts(version)).lines) out.add(l);
+  for (const l of await asreExpenseLines(versionId)) out.add(l);
+  if (version) for (const l of (await treasuryForStatements(version)).lines) out.add(l);
   return out;
 }

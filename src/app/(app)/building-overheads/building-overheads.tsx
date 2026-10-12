@@ -11,6 +11,8 @@ import { propertyPasses } from '@/lib/filters';
 import { BOH_ACCOUNT, BOH_ACCOUNTS, BOH_CALC_NOTE, BOH_LINES, BOH_LINE_LABEL, paidInOneMonth, type BohBlock, type BohChange, type BohRow } from '@/lib/budget/boh-types';
 import { saveBuildingOverheadCells } from './actions';
 import { TemplateButtons } from '@/components/template-buttons';
+import { ListAndForm } from '@/components/record-form';
+import { BohForm, applyBohChange } from './boh-form';
 
 const key = (propertyId: number, account: string) => `${propertyId}|${account}`;
 const omit = (d: Record<string, string>, k: string) => Object.fromEntries(Object.entries(d).filter(([x]) => x !== k));
@@ -24,8 +26,10 @@ function parseAmount(s: string): number | null | 'bad' {
 
 type Col = 'a2' | 'a1' | 'ytd' | 'f' | 'b';
 const COLS: Col[] = ['a2', 'a1', 'ytd', 'f', 'b'];
-const hasData = (r: BohRow) => COLS.some((c) => r[c] !== null && Math.abs(r[c]!) >= 0.5);
+const hasData = (r: BohRow) => COLS.some((c) => r[c] !== null && Math.abs(r[c]!) >= 0.5) || Math.abs(r.pb ?? 0) >= 0.5;
 const pct = (b: number | null, f: number | null) => (b === null || !f ? null : (b - f) / Math.abs(f));
+/** this year's budget less last year's (reference), either may be missing */
+const change = (b: number | null, pb: number | null) => (b === null && pb === null ? null : (b ?? 0) - (pb ?? 0));
 /** calculated where it comes from (Assumptions, Security allocation, the contract schedule), not typed */
 const fixed = (r: BohRow) => r.calc !== null && r.calc !== 'forecast';
 
@@ -36,7 +40,7 @@ export function BuildingOverheads({
   year,
   cutoff,
   locked,
-  finance,
+  priorLabel = null,
 }: {
   blocks: BohBlock[];
   versionId: number;
@@ -45,7 +49,8 @@ export function BuildingOverheads({
   /** last month of Y-1 in the GL actuals (0 = none) */
   cutoff: number;
   locked: boolean;
-  finance: boolean;
+  /** last year's approved budget shown for reference (e.g. 2026B), null: none loaded */
+  priorLabel?: string | null;
 }) {
   const [blocks, setBlocks] = useState(initial);
   // the shared page filters (BU, PM, category, property)
@@ -56,6 +61,8 @@ export function BuildingOverheads({
   const [bad, setBad] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [, start] = useTransition();
+  // the building open in the side form
+  const [open, setOpen] = useState<number | null>(null);
 
   const label: Record<Col, string> = {
     a2: `${year - 3}A`,
@@ -66,7 +73,8 @@ export function BuildingOverheads({
   };
 
   const propInfo = useMemo(() => new Map(universe.map((p) => [p.id, p])), [universe]);
-  const canEnter = (b: BohBlock, account: string) => !locked && b.editable && (finance || BOH_ACCOUNT.get(account)?.owner === 'PM');
+  // each account is entered by its owner: the property manager's by the PM, Finance's by Finance
+  const canEnter = (b: BohBlock, account: string) => !locked && (BOH_ACCOUNT.get(account)?.owner === 'FIN' ? b.finEditable : b.editable);
   /** accounts shown for a building: with figures or typed, or every account the user can enter (All accounts) */
   const rowsOf = (b: BohBlock) => b.rows.filter((r) => hasData(r) || dirty.has(key(b.propertyId, r.account)) || (allAccounts && canEnter(b, r.account)));
 
@@ -162,7 +170,7 @@ export function BuildingOverheads({
       );
     if (!canEnter(b, r.account))
       return (
-        <td className="anh-num locked" title={BOH_ACCOUNT.get(r.account)?.owner === 'FIN' && !finance ? 'Entered by Finance' : undefined}>
+        <td className="anh-num locked" title={locked ? undefined : BOH_ACCOUNT.get(r.account)?.owner === 'FIN' ? 'Entered by Finance' : 'Entered by the property manager'}>
           {fmt(r.b)}
         </td>
       );
@@ -235,24 +243,70 @@ export function BuildingOverheads({
     return [...m.values()];
   }, [view]);
 
+  /** last year's budget (reference) of the rows matched, with what it had on accounts the tool does not have */
+  const refTotal = (bs: BohBlock[], match?: (account: string) => boolean) => {
+    let s = 0;
+    let any = false;
+    for (const b of bs) {
+      for (const r of b.rows)
+        if ((!match || match(r.account)) && r.pb != null) {
+          s += r.pb;
+          any = true;
+        }
+      for (const o of b.pbOther ?? [])
+        if (!match || match(o.account)) {
+          s += o.amount;
+          any = true;
+        }
+    }
+    return any ? s : null;
+  };
+
   const nums = (bs: BohBlock[], match?: (account: string) => boolean) => {
     const f = total(bs, 'f', match);
     const b = total(bs, 'b', match);
+    const pb = ref ? refTotal(bs, match) : null;
     return (
       <>
         {COLS.map((c) => (
-          <td key={c} className="anh-num">
-            {fmt(total(bs, c, match))}
-          </td>
+          <Fragment key={c}>
+            {c === 'b' && ref && <td className="anh-num">{fmt(pb)}</td>}
+            <td className="anh-num">{fmt(total(bs, c, match))}</td>
+          </Fragment>
         ))}
         <td />
         <td className="anh-num">{pct(b, f) === null ? '' : pctOf(pct(b, f))}</td>
+        {ref && <td className="anh-num">{fmt(change(b, pb))}</td>}
       </>
     );
   };
 
-  const cols = 4 + COLS.length + 2;
+  const ref = !!priorLabel;
+  const cols = 4 + COLS.length + 2 + (ref ? 2 : 0);
+  const openIdx = view.findIndex((b) => b.propertyId === open);
+  const openBlock = openIdx >= 0 ? view[openIdx] : null;
+  const form = openBlock && (
+    <BohForm
+      key={openBlock.propertyId}
+      block={openBlock}
+      rows={openBlock.rows.filter((r) => hasData(r) || canEnter(openBlock, r.account))}
+      year={year}
+      locked={locked}
+      priorLabel={priorLabel}
+      versionId={versionId}
+      onSaved={(changes) => {
+        for (const c of changes) {
+          const r = openBlock.rows.find((x) => x.account === c.account);
+          if (r) update(openBlock, c.account, applyBohChange(r, c));
+        }
+      }}
+      onClose={() => setOpen(null)}
+      onPrev={openIdx > 0 ? () => setOpen(view[openIdx - 1].propertyId) : undefined}
+      onNext={openIdx < view.length - 1 ? () => setOpen(view[openIdx + 1].propertyId) : undefined}
+    />
+  );
   return (
+    <ListAndForm form={form}>
     <div className="space-y-4 p-6">
       <header className="flex flex-wrap items-end gap-4">
         <div>
@@ -290,6 +344,7 @@ export function BuildingOverheads({
             <i className="dirty" />
             Unsaved
           </span>
+          <span>Click a building to open it in the form</span>
         </div>
         <span className="anh-muted text-xs">AED</span>
       </div>
@@ -303,8 +358,11 @@ export function BuildingOverheads({
                 Actual
               </th>
               <th className="anh-num">Forecast</th>
-              <th colSpan={3} style={{ textAlign: 'center' }}>
+              <th colSpan={ref ? 3 : 2} style={{ textAlign: 'center' }}>
                 Budget
+              </th>
+              <th colSpan={ref ? 2 : 1} style={{ textAlign: 'center' }}>
+                Change
               </th>
             </tr>
             <tr className="h1">
@@ -313,13 +371,21 @@ export function BuildingOverheads({
               <th>P&amp;L line</th>
               <th>By</th>
               {COLS.map((c) => (
-                <th key={c} className="anh-num" title={c === 'f' ? `Contracts: ${label.ytd} ÷ ${cutoff || 12} months × 12 · water & electricity: ${label.ytd} + last year's remaining months · lump sums: this year's payment once made, else last year's` : undefined}>
+                <Fragment key={c}>
+                {c === 'b' && ref && (
+                  <th className="anh-num" title="The approved budget of last year, from its workbook: reference only">
+                    {priorLabel}
+                  </th>
+                )}
+                <th className="anh-num" title={c === 'f' ? `Contracts: ${label.ytd} ÷ ${cutoff || 12} months × 12 · water & electricity: ${label.ytd} + last year's remaining months · lump sums: this year's payment once made, else last year's` : undefined}>
                   {c === 'f' && <span className="fx">fx</span>}
                   {label[c]}
                 </th>
+                </Fragment>
               ))}
               <th title="When the budget is booked: monthly, the portfolio's seasonal pattern, or the month paid; insurance is expensed monthly and paid (cash flow) in the month shown">Phasing</th>
               <th className="anh-num">vs {label.f}</th>
+              {ref && <th className="anh-num">{label.b} vs {priorLabel}</th>}
             </tr>
           </thead>
           <tbody>
@@ -329,7 +395,7 @@ export function BuildingOverheads({
                   const rows = rowsOf(b);
                   return (
                     <Fragment key={b.propertyId}>
-                      <tr className="section">
+                      <tr className={'section cursor-pointer' + (open === b.propertyId ? ' is-selected' : '')} onClick={() => setOpen(b.propertyId)} title="Open in the form">
                         <td colSpan={cols}>
                           {b.code} · {b.name}
                           {b.pm && <span className="ml-2 font-normal text-slate-500">{b.pm}</span>}
@@ -350,12 +416,33 @@ export function BuildingOverheads({
                             <td className="anh-num locked">{fmt(r.a1)}</td>
                             <td className="anh-num locked">{fmt(r.ytd)}</td>
                             <td className="anh-num calc">{fmt(r.f)}</td>
+                            {ref && (
+                              <td className="anh-num locked" title={r.pbNote ?? undefined}>
+                                {fmt(r.pb ?? null)}
+                              </td>
+                            )}
                             {amountCell(b, r)}
                             {dueCell(b, r)}
                             <td className="anh-num calc">{p === null ? '' : pctOf(p)}</td>
+                            {ref && <td className="anh-num calc">{fmt(change(r.b, r.pb ?? null))}</td>}
                           </tr>
                         );
                       })}
+                      {ref &&
+                        (b.pbOther ?? []).map((o) => (
+                          <tr key={`ref-${o.account}`} className="child">
+                            <td title={o.note ?? undefined}>{o.note ?? 'In the last budget only'}</td>
+                            <td>
+                              <span className="anh-code">{o.account}</span>
+                            </td>
+                            <td />
+                            <td />
+                            <td colSpan={4} />
+                            <td className="anh-num locked">{fmt(o.amount)}</td>
+                            <td colSpan={3} />
+                            <td className="anh-num calc">{fmt(-o.amount)}</td>
+                          </tr>
+                        ))}
                       <tr className="subtotal">
                         <td>Total {b.code}</td>
                         <td />
@@ -382,7 +469,7 @@ export function BuildingOverheads({
                 <tr className="section">
                   <td colSpan={cols}>By Building P&amp;L line · {view.length} building{view.length === 1 ? '' : 's'}</td>
                 </tr>
-                {BOH_LINES.filter((l) => COLS.some((c) => total(view, c, (acc) => BOH_ACCOUNT.get(acc)?.line === l.key) !== null)).map((l) => (
+                {BOH_LINES.filter((l) => COLS.some((c) => total(view, c, (acc) => BOH_ACCOUNT.get(acc)?.line === l.key) !== null) || (ref && refTotal(view, (acc) => BOH_ACCOUNT.get(acc)?.line === l.key) !== null)).map((l) => (
                   <tr key={l.key} className="child">
                     <td>{l.label}</td>
                     <td />
@@ -391,6 +478,15 @@ export function BuildingOverheads({
                     {nums(view, (acc) => BOH_ACCOUNT.get(acc)?.line === l.key)}
                   </tr>
                 ))}
+                {ref && refTotal(view, (acc) => !BOH_ACCOUNT.has(acc)) !== null && (
+                  <tr className="child">
+                    <td>In the last budget only (no account in the tool)</td>
+                    <td />
+                    <td />
+                    <td />
+                    {nums(view, (acc) => !BOH_ACCOUNT.has(acc))}
+                  </tr>
+                )}
                 <tr className="total">
                   <td>Total building overheads</td>
                   <td />
@@ -411,5 +507,6 @@ export function BuildingOverheads({
         </table>
       </div>
     </div>
+    </ListAndForm>
   );
 }

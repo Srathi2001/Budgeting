@@ -1,5 +1,6 @@
 import 'server-only';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { FD_INTEREST_ACCOUNT } from './treasury';
 import { db, schema } from '@/db';
 import { categoryOf, type Category } from './category';
 import { OI_ACCOUNT, OI_ACCOUNTS } from './other-income-types';
@@ -128,9 +129,9 @@ export async function propertyRollups(versionId: number, propertyIds?: number[],
   return [...map.values()].filter((r) => !lineIds || r.units > 0);
 }
 
-/** Total cash inflow by month: rent cheques + VAT + security deposits received - deposits refunded. */
+/** Total cash inflow by month: rent cheques + security deposits received - deposits refunded (VAT passes through to the FTA, as the 2026 budget). */
 export function cashFlow(r: PropertyRollup): number[] {
-  return r.revenue.map((_, i) => r.cash[i] + r.vat[i] + r.depositIn[i] - r.depositOut[i]);
+  return r.revenue.map((_, i) => r.cash[i] + r.depositIn[i] - r.depositOut[i]);
 }
 
 /** Budget-year other income of one Other Income row (property or General) and account, by month. */
@@ -143,6 +144,8 @@ export interface OiMonthly {
   months: number[];
   /** an intergroup fee: what each paying entity is charged, by month (the PMA fee) */
   payers?: { entity: EntityKey; months: number[] }[];
+  /** received by month, when it differs from the income (deposit interest paid out at maturity) */
+  cash?: number[];
 }
 
 /**
@@ -176,6 +179,8 @@ export async function otherIncomeMonthly(
     if (!acct || !r.amount) continue;
     if (r.propertyId !== null ? !ids.has(r.propertyId) || acct.calc === 'MF' : !generalBus(r.buCode)) continue;
     if (r.scope === PMA_FEE.scope && r.account === PMA_FEE.account) continue; // calculated below
+    // deposit interest of the companies comes from Finance → Fixed deposits (it replaced the typed figure)
+    if (r.propertyId === null && r.account === FD_INTEREST_ACCOUNT) continue;
     for (let i = 0; i < 12; i++) add(r.scope, r.buCode, r.propertyId, r.account, i, Number(r.amount) / 12);
   }
 

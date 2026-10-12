@@ -30,10 +30,11 @@ export interface RrReport {
   to: string | null;
 }
 
-const num = (v: unknown) => {
-  if (v === null || v === undefined || v === '') return 0;
+/** a blank cell is no figure (the month is missing, not zero: audit FIN-016) */
+const num = (v: unknown): number | null => {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
   const n = typeof v === 'number' ? v : Number(String(v).replace(/[,\s]/g, ''));
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
 };
 const monthOf = (h: string) => {
   const m = /^([A-Za-z]{3})-(\d{4})$/.exec(h.trim());
@@ -67,7 +68,17 @@ export function parseRevenueRecognition(data: Buffer): RrReport {
       const code = String(r[iCode] ?? '').trim();
       if (!code) continue;
       const p: RrProperty = { code, name: String(r[iName] ?? '').trim(), businessUnit: String(r[iBu] ?? '').trim(), actual: {}, forecast: {} };
-      for (const m of months) (m.i < iSplit ? p.actual : p.forecast)[m.month] = num(r[m.i]);
+      // blanks (audit FIN-016): a property with no figure at all in the accounted months is missing (no
+      // rows: not "covered", the forecast projects it); a property with figures has nothing recognised in
+      // its blank months (e.g. a lease that ended), so those are zero
+      const accountedValues = months.filter((m) => m.i < iSplit).map((m) => num(r[m.i]));
+      const anyActual = accountedValues.some((v) => v !== null);
+      for (const m of months) {
+        const v = num(r[m.i]);
+        if (m.i < iSplit) {
+          if (anyActual) p.actual[m.month] = v ?? 0;
+        } else if (v !== null) p.forecast[m.month] = v;
+      }
       properties.push(p);
     }
     const accounted = months.filter((m) => m.i < iSplit).map((m) => m.month).sort();

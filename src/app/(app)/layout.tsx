@@ -5,10 +5,11 @@ import { logout } from '@/app/login/actions';
 import { AppShell } from '@/components/shell/app-shell';
 import { FilterBar, FiltersProvider } from '@/components/filter-bar';
 import { ExportTables } from '@/components/export-tables';
-import { filterUniverse, getFilters } from '@/lib/filters-server';
+import { filterBusinessUnits, filterUniverse, getFilters } from '@/lib/filters-server';
 import { ToastProvider } from '@/components/ui/toast';
 import { EmptyState } from '@/components/ui/status';
 import { MobileNote } from '@/components/shell/mobile-note';
+import { IdleWatch } from '@/components/shell/idle-watch';
 
 export default async function AppLayout({ children }: LayoutProps<'/'>) {
   const user = await requireUser();
@@ -20,7 +21,7 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
   return (
     <AppShell
       user={{ name: user.name, role: user.role, coordinator: user.coordinator }}
-      viewer={{ finance, fm }}
+      viewer={{ finance, fm, admin: user.role === 'ADMIN' }}
       versions={all.map((v) => ({ id: v.id, name: v.name, status: v.status }))}
       currentVersion={version?.id ?? null}
       theme={theme}
@@ -28,16 +29,17 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
       signOut={logout}
       tools={<ExportTables />}
     >
+      <IdleWatch />
       <ToastProvider>
         {version ? (
-          <FiltersProvider initial={await getFilters()} universe={universe}>
+          <FiltersProvider initial={await getFilters()} universe={universe} bus={await filterBusinessUnits(user)}>
             <MobileNote />
             <FilterBar />
             {children}
           </FiltersProvider>
         ) : (
           <div className="p-8">
-            <EmptyState title="No budget version yet">{finance ? 'Create the first version in Admin → Budget versions, or run the import script.' : 'Finance has not opened a budget version yet.'}</EmptyState>
+            <EmptyState title="No budget version yet">{user.role === 'ADMIN' ? 'Create the first version in Admin → Budget versions, or run the import script.' : 'Admin has not opened a budget version yet.'}</EmptyState>
           </div>
         )}
       </ToastProvider>

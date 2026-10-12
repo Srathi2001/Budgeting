@@ -2,7 +2,8 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@/db';
-import { canEditFm, isFinance, isFm, type Actor } from '@/lib/auth/permissions';
+import { canEditFm, entersData, isAdmin, type Actor } from '@/lib/auth/permissions';
+import { changedFields, pick } from '@/lib/audit-diff';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, WORK_TYPE, isWorkType, type StaffTeam, type WorkType } from './fm-types';
 
 export type FmResult = { error?: string; ok?: string };
@@ -48,12 +49,19 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
   for (const l of lines) if (l.id !== null && !existing.has(l.id)) return { error: 'A line is not on this facility' };
   let added = 0;
   let changed = 0;
+  // one audit row per line, with its fields before and after
+  const FIELDS = ['workType', 'element', 'subElement', 'description', 'businessNeed', 'kind', 'amount', 'month', 'remarks'] as const;
+  const trail: (typeof schema.auditLog.$inferInsert)[] = [];
+  const log = (id: number, action: string, changes: unknown) => trail.push({ userId: user.id, versionId, propertyId, entity: 'fm_line', entityId: String(id), action, changes });
   await db.transaction(async (tx) => {
     if (deleted.length) await tx.delete(schema.fmLines).where(and(where, inArray(schema.fmLines.id, deleted)));
+    for (const id of deleted) log(id, 'delete', { from: pick(existing.get(id)!, FIELDS), to: null });
     for (const l of lines) {
       if (l.id === null) {
         // recurring work is spread over the year; projects go in the month planned
-        await tx.insert(schema.fmLines).values({ ...l, id: undefined, month: spreads(l.workType) ? null : l.month, versionId, propertyId, source: 'FM', updatedBy: user.id });
+        const v = { ...l, id: undefined, month: spreads(l.workType) ? null : l.month };
+        const [row] = await tx.insert(schema.fmLines).values({ ...v, versionId, propertyId, source: 'FM', updatedBy: user.id }).returning({ id: schema.fmLines.id });
+        log(row.id, 'create', { from: null, to: pick(v, FIELDS) });
         added++;
         continue;
       }
@@ -78,10 +86,10 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
         .update(schema.fmLines)
         .set({ ...set, updatedAt: new Date(), updatedBy: user.id })
         .where(and(where, eq(schema.fmLines.id, l.id)));
+      log(l.id, 'update', { fields: changedFields(before as unknown as Record<string, unknown>, set) });
       changed++;
     }
-    if (added || changed || deleted.length)
-      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, propertyId, entity: 'fm_lines', action: 'save', changes: { added, changed, deleted } });
+    for (let i = 0; i < trail.length; i += 500) await tx.insert(schema.auditLog).values(trail.slice(i, i + 500));
   });
   return { ok: added || changed || deleted.length ? `Saved: ${added} added, ${changed} changed, ${deleted.length} removed` : 'No changes' };
 }
@@ -97,18 +105,18 @@ const Staff = z
   .max(7);
 
 /**
- * The staff budget is spread over every facility, so a change moves cost inside facilities that FMD has
- * already submitted or Finance has approved. FM may change it only while no facility is submitted or
- * approved; Finance may always (the audit row keeps the figures before and after).
+ * The staff budget is spread over every facility, so a change moves cost inside facilities already
+ * submitted or approved. Facilities management (or Admin) may change it only while no facility is
+ * submitted or approved; Finance does not enter it.
  */
 export function staffEditBlocked(user: Pick<Actor, 'role'>, statuses: string[]): string | null {
-  if (user.role === 'ADMIN' || user.role === 'FINANCE') return null;
+  if (user.role !== 'ADMIN' && user.role !== 'FM') return 'The FM staff budget is entered by facilities management';
   const n = statuses.filter((s) => s === 'SUBMITTED' || s === 'APPROVED').length;
-  return n ? `${n} ${n === 1 ? 'facility is' : 'facilities are'} submitted or approved: the staff budget is fixed; ask Finance to return them or to change it` : null;
+  return n ? `${n} ${n === 1 ? 'facility is' : 'facilities are'} submitted or approved: the staff budget is fixed; Admin returns them for changes` : null;
 }
 
 export async function saveFmStaffAs(user: Actor, versionId: number, input: unknown): Promise<FmResult> {
-  if (!isFinance(user) && !isFm(user)) return { error: 'The FM staff budget is entered by facilities management' };
+  if (!entersData(user, 'FM')) return { error: 'The FM staff budget is entered by facilities management' };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') return { error: 'This budget version is locked' };
   const subs = await db.select({ status: schema.fmSubmissions.status }).from(schema.fmSubmissions).where(eq(schema.fmSubmissions.versionId, versionId));
@@ -131,19 +139,20 @@ export async function saveFmStaffAs(user: Actor, versionId: number, input: unkno
 }
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'RETURNED';
-const TRANSITIONS: Record<'submit' | 'approve' | 'return', { from: Status[]; to: Status; finance: boolean }> = {
-  submit: { from: ['DRAFT', 'RETURNED'], to: 'SUBMITTED', finance: false },
-  approve: { from: ['SUBMITTED'], to: 'APPROVED', finance: true },
-  return: { from: ['SUBMITTED', 'APPROVED'], to: 'RETURNED', finance: true },
+const TRANSITIONS: Record<'submit' | 'approve' | 'return', { from: Status[]; to: Status; admin: boolean }> = {
+  submit: { from: ['DRAFT', 'RETURNED'], to: 'SUBMITTED', admin: false },
+  approve: { from: ['SUBMITTED'], to: 'APPROVED', admin: true },
+  return: { from: ['SUBMITTED', 'APPROVED'], to: 'RETURNED', admin: true },
 };
 
-/** FM submits a facility; Finance approves or returns it. */
+/** FM submits a facility; Admin approves or returns it. */
 export async function fmTransitionAs(user: Actor, versionId: number, propertyId: number, action: keyof typeof TRANSITIONS, note: string | null): Promise<FmResult> {
   const t = TRANSITIONS[action];
   if (!t) return { error: 'Unknown action' };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version || version.status === 'LOCKED') return { error: 'This budget version is locked' };
-  if (t.finance ? !isFinance(user) : !isFinance(user) && !isFm(user)) return { error: t.finance ? 'Only Finance can do this' : 'Only facilities management can submit' };
+  if (t.admin ? !isAdmin(user) : !entersData(user, 'FM')) return { error: t.admin ? 'Only Admin approves or returns' : 'Only facilities management can submit' };
+  if (action === 'return' && !note?.trim()) return { error: 'Give a reason for returning it' };
   const where = and(eq(schema.fmSubmissions.versionId, versionId), eq(schema.fmSubmissions.propertyId, propertyId));
   const [sub] = await db.select().from(schema.fmSubmissions).where(where);
   const current: Status = sub?.status ?? 'DRAFT';
@@ -157,5 +166,5 @@ export async function fmTransitionAs(user: Actor, versionId: number, propertyId:
       .onConflictDoUpdate({ target: [schema.fmSubmissions.versionId, schema.fmSubmissions.propertyId], set: { status: t.to, note: n, updatedAt: new Date(), updatedBy: user.id } });
     await tx.insert(schema.auditLog).values({ userId: user.id, versionId, propertyId, entity: 'fm_submission', action, changes: { from: current, to: t.to, note: n } });
   });
-  return { ok: action === 'submit' ? 'Submitted to Finance' : action === 'approve' ? 'Approved' : 'Returned to facilities management' };
+  return { ok: action === 'submit' ? 'Submitted to Admin' : action === 'approve' ? 'Approved' : 'Returned to facilities management' };
 }

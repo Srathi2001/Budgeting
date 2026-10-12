@@ -102,7 +102,8 @@ describe('renewal derivation', () => {
     expect(res.increasePct).toBe(0.1);
     expect(r1.rent).toBeCloseTo(55000);
     expect(formatDay(r1.start)).toBe('2027-03-01');
-    expect(formatDay(r1.end)).toBe('2028-02-28');
+    // one calendar year: to the day before 1-Mar-2028, which is 29-Feb (2028 is a leap year)
+    expect(formatDay(r1.end)).toBe('2028-02-29');
     expect(r1.derived.rent).toBe(true);
   });
 
@@ -125,14 +126,15 @@ describe('renewal derivation', () => {
     expect(r1.rent).toBe(65000);
     expect(r1.mf).toBe(true);
     expect(r1.newTenant).toBe(true);
-    // vacancy loss: the 59 empty days at the new tenant's daily rate
-    expect(res.vacancyLoss).toBeCloseTo((59 * 65000) / 365, 0);
+    // vacancy loss: the 59 empty days at the new tenant's daily rate (29-Apr-2027 to 28-Apr-2028 is 366 days)
+    expect(res.vacancyLoss).toBeCloseTo((59 * 65000) / 366, 0);
   });
 
-  it('new tenant without vacancy days: not budgeted, flagged', () => {
+  it('new tenant without vacancy days: the default 60 days apply (audit FIN-020)', () => {
     const res = computeLease(input({ ...base, renew1: false, budgetRate: 65000 }), 2027, A);
-    expect(res.contracts.find((c) => c.kind === 'RENEWAL1')).toBeUndefined();
-    expect(res.warnings.join()).toMatch(/vacancy days/);
+    // ends 28-Feb-2027; 60 empty days (1 Mar – 29 Apr); the new tenant from 30-Apr
+    expect(formatDay(res.contracts.find((c) => c.kind === 'RENEWAL1')!.start)).toBe('2027-04-30');
+    expect(res.warnings.join()).not.toMatch(/vacancy days/);
   });
 
   it('new tenant: the vacancy days win over a start date typed earlier', () => {
@@ -239,7 +241,8 @@ describe('cheque schedules, VAT and deposits', () => {
     const r = computeLease(input({ ...base, r1Rent: 100000 }), 2027, A);
     expect(c.vat[6]).toBeCloseTo(25000 * 0.05); // July renewal cheque
     expect(r.vat.every((v) => v === 0)).toBe(true);
-    expect(c.totals.cashFlow).toBeCloseTo(c.totals.cash * 1.05);
+    // VAT is worked out but not in the cash flow: it passes through to the FTA (2026 budget)
+    expect(c.totals.cashFlow).toBeCloseTo(c.totals.cash);
   });
 
   it('deposit refunded when the tenant leaves, new deposit taken from the new tenant', () => {
@@ -300,5 +303,77 @@ describe('maintenance service fee (other income)', () => {
   it('current lease starting inside the year: its billed MF in its first month', () => {
     const res = computeLease(input({ currentRent: 60000, currentStart: d('2027-02-01'), currentEnd: d('2028-01-31'), mfCurrent: true, currentMfAmount: 2900 }), 2027, A, rera);
     expect(res.maintenance[1]).toBe(2900);
+  });
+});
+
+describe('renewal term: one calendar year, leap years included (audit FIN-001)', () => {
+  // a lease ending 31-Dec-2027 renews from 1-Jan-2028; 2028 has 366 days
+  const lease = input({ rc: 'R', mfCurrent: true, currentRent: 120000, currentStart: d('2027-01-01'), currentEnd: d('2027-12-31'), increasePctOverride: 0, cheques: 4 });
+  it('ends the renewal on 31-Dec-2028, with no extra one-day renewal on 31-Dec', () => {
+    const res = computeLease(lease, 2028, A, null);
+    const r1 = res.contracts.find((c) => c.kind === 'RENEWAL1')!;
+    expect(formatDay(r1.start)).toBe('2028-01-01');
+    expect(formatDay(r1.end)).toBe('2028-12-31');
+    expect(res.contracts.some((c) => c.kind === 'RENEWAL2')).toBe(false);
+  });
+  it('books one year of rent, four cheques and one maintenance fee in 2028', () => {
+    const res = computeLease(lease, 2028, A, null);
+    expect(res.totals.revenue).toBeCloseTo(120000, 0);
+    expect(res.totals.cash).toBeCloseTo(120000, 0);
+    expect(res.maintenance.filter((m) => m > 0)).toHaveLength(1);
+  });
+  it('runs a renewal from 29 February to 28 February of the next year', () => {
+    const res = computeLease(input({ ...lease, currentStart: d('2027-03-01'), currentEnd: d('2028-02-28'), r1Start: d('2028-02-29') }), 2028, A, null);
+    expect(formatDay(res.contracts.find((c) => c.kind === 'RENEWAL1')!.end)).toBe('2029-02-28');
+  });
+  it('keeps a renewal from 1-Jan in an ordinary year to 31-Dec', () => {
+    const res = computeLease(input({ ...lease, currentStart: d('2026-01-01'), currentEnd: d('2026-12-31') }), 2027, A, null);
+    expect(formatDay(res.contracts.find((c) => c.kind === 'RENEWAL1')!.end)).toBe('2027-12-31');
+  });
+});
+
+describe('2nd and 3rd renewals are increased like the 1st (audit FIN-006)', () => {
+  it('labour unit: each renewal adds the labour increase to the rent it renews', () => {
+    const res = computeLease(
+      input({ rc: 'L', currentRent: 10000, currentStart: d('2027-01-01'), currentEnd: d('2027-03-31'), r1End: d('2027-06-30') }),
+      2027,
+      A,
+      null,
+    );
+    const r = (k: string) => res.contracts.find((c) => c.kind === k)!;
+    // 10,000 for 90 days is 40,555.56 a year; the 1st renewal runs 91 days, the 2nd a calendar year
+    const annual = (10000 * 365) / 90;
+    expect(r('RENEWAL1').rent).toBeCloseTo(((annual * (1 + A.labourIncrease)) * 91) / 365);
+    expect(r('RENEWAL2').rent).toBeCloseTo(annual * (1 + A.labourIncrease) ** 2);
+  });
+  it('residential: the RERA band is read again on the renewed rent', () => {
+    // avg 70,000: 50,000 is 28.6% below (10%); 55,000 is 21.4% below (10%); typed short 1st renewal
+    const res = computeLease(input({ currentRent: 50000, currentStart: d('2026-03-01'), currentEnd: d('2027-02-28'), r1End: d('2027-08-31') }), 2027, A, { min: 60000, max: 80000 });
+    expect(res.contracts.find((c) => c.kind === 'RENEWAL2')!.rent).toBeCloseTo(60500);
+  });
+  it('an increase entered for the unit applies to every renewal; a typed rent stays', () => {
+    const base = { rc: 'L' as const, currentRent: 10000, currentStart: d('2027-01-01'), currentEnd: d('2027-03-31'), r1End: d('2027-06-30') };
+    expect(computeLease(input({ ...base, increasePctOverride: 0.05 }), 2027, A, null).contracts.find((c) => c.kind === 'RENEWAL2')!.rent).toBeCloseTo(((10000 * 365) / 90) * 1.05 ** 2);
+    expect(computeLease(input({ ...base, r2Rent: 12000 }), 2027, A, null).contracts.find((c) => c.kind === 'RENEWAL2')!.rent).toBe(12000);
+  });
+});
+
+describe('the increase is on a year of rent, not on the contract amount (audit FIN-005)', () => {
+  it('a 15-month contract: renewal = the annual rent plus the increase', () => {
+    // 150,000 for 1-Oct-2026 to 31-Dec-2027 (457 days) is 119,803.06 a year
+    const res = computeLease(input({ rc: 'R', currentRent: 150000, currentStart: d('2026-10-01'), currentEnd: d('2027-12-31'), increasePctOverride: 0.1 }), 2028, A, null);
+    const r1 = res.contracts.find((c) => c.kind === 'RENEWAL1')!;
+    expect(r1.rent).toBeCloseTo(((150000 * 365) / 457) * 1.1, 2);
+    expect(res.totals.revenue).toBeCloseTo(((150000 * 365) / 457) * 1.1, 0);
+  });
+  it('the RERA band is read on the annual rent', () => {
+    // 6 months at 30,000 is 60,000 a year: 14.3% below the 70,000 average → 5% band (not 57% below → 20%)
+    const res = computeLease(input({ rc: 'R', currentRent: 30000, currentStart: d('2027-01-01'), currentEnd: d('2027-06-30') }), 2027, A, { min: 60000, max: 80000 });
+    expect(res.increasePct).toBe(0.05);
+    expect(res.contracts.find((c) => c.kind === 'RENEWAL1')!.rent).toBeCloseTo(((30000 * 365) / 181) * 1.05, 2);
+  });
+  it('a one-year contract is unchanged', () => {
+    const res = computeLease(input({ rc: 'L', currentRent: 100000, currentStart: d('2027-03-01'), currentEnd: d('2028-02-29') }), 2028, A, null);
+    expect(res.contracts.find((c) => c.kind === 'RENEWAL1')!.rent).toBeCloseTo(110000);
   });
 });

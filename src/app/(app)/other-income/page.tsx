@@ -19,7 +19,7 @@ export default async function OtherIncomePage({ searchParams }: PageProps<'/othe
   const sp = await searchParams;
   const tab = sp.tab === 'summary' ? 'summary' : 'input';
   const props = await visibleProperties(user);
-  const editable = await editablePropertyIds(user, version);
+  const editable = await editablePropertyIds(user, version, 'PM');
   const blocks = await loadOtherIncome(version, user, props, editable);
   // ?p=12: a property opened from the Summary (taken over as the shared Property filter)
   const linked = typeof sp.p === 'string' ? props.find((p) => p.id === Number(sp.p))?.id : undefined;

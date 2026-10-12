@@ -15,6 +15,55 @@
       "when": 1791527712075,
       "tag": "0001_import_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791707567374,
+      "tag": "0002_import_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791709911079,
+      "tag": "0003_lease_line_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791710741406,
+      "tag": "0004_budget_reference",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791715370879,
+      "tag": "0005_version_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791715371664,
+      "tag": "0006_audit_log_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791736440722,
+      "tag": "0007_asre_and_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791785638656,
+      "tag": "0008_treasury_contract_periods",
+      "breakpoints": true
     }
   ]
 }

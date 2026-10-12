@@ -6,13 +6,22 @@ import type { Filters } from '@/lib/filters';
 import type { Category } from './category';
 import { otherIncomeMonthly, type PropertyRollup } from './reports';
 import { OI_ACCOUNTS } from './other-income-types';
-import { BELOW_GP_LINES, CASH_ONLY_LINES, GA_CASH_LINES, GA_LINES, OPEX_LINES, budgetedExpenseLines, isPnlLine, propertyExpenses, type ExpenseLine } from './expenses';
-import { ENTITIES, GROUP_NAME, type GroupClass } from './group';
-import { PMA_EXPENSE, groupAtoms, sumAtoms, type Atom } from './group-report';
+import { BELOW_EBITDA_LINES, BELOW_GP_LINES, CASH_ONLY_LINES, GA_CASH_LINES, GA_LINES, NON_CASH_LINES, OPEX_LINES, TAX_LINES, budgetedExpenseLines, isPnlLine, propertyExpenses, type ExpenseLine, type PropertyExpense } from './expenses';
+import { ENTITIES, GROUP_NAME, LANDLORDS, type EntityKey, type GroupClass } from './group';
+import { PMA_EXPENSE, RECHARGED_LINES, RECHARGES, groupAtoms, sumAtoms, type Atom, type Intergroup } from './group-report';
 import { MONTHS, sum } from '@/lib/format';
 import { eq } from 'drizzle-orm';
+import { getSettings } from '@/lib/settings';
+import { asreAtoms } from './asre';
+import { FD_INTEREST_ACCOUNT, treasuryForStatements } from './treasury';
 import { db, schema } from '@/db';
-import { adminEntityCosts } from './admin';
+import { adminEntityCosts, landlordRent, managementFees } from './admin';
+
+/** income lines of the statements: the other income accounts, then ANPM's recharges */
+const INCOME_LINES: { code: string; name: string; showCode: boolean }[] = [
+  ...OI_ACCOUNTS.map((a) => ({ code: a.code, name: a.name, showCode: true })),
+  ...RECHARGES.map((r) => ({ code: r.code, name: r.name, showCode: false })),
+];
 
 /** a statement line; vals null = not budgeted */
 export interface StatementLine {
@@ -25,29 +34,62 @@ export interface StatementLine {
 }
 
 const z12 = () => Array.from({ length: 12 }, () => 0);
+/** what the intergroup eliminations are */
+const ELIM = 'PMA fee, recharges and the mall lease';
 const addUp = (rows: (number[] | null)[]) => (rows.some(Boolean) ? MONTHS.map((_, i) => sum(rows.map((r) => r?.[i] ?? 0))) : null);
 const neg = (v: number[] | null) => v && v.map((x) => -x);
 const any = (v: number[]) => v.some((x) => Math.abs(x) >= 0.5);
 const isOi = (a: Atom) => a.line.startsWith('oi:');
 /** a P&L expense (capex items are in the cash flow only) */
 const isExp = (a: Atom) => a.line.startsWith('exp:') && isPnlLine(a.line.slice(4));
-const isOpex = (a: Atom) => isExp(a) && ![...BELOW_GP_LINES, ...GA_LINES].some((l) => a.line === `exp:${l.key}`);
+const isOpex = (a: Atom) => isExp(a) && ![...BELOW_GP_LINES, ...GA_LINES, ...BELOW_EBITDA_LINES, ...TAX_LINES].some((l) => a.line === `exp:${l.key}`);
 
-/** Rent, other income (General rows: Finance only, and only the BU filter applies) and expenses of the selection. */
+/**
+ * Rent, other income (General rows: Finance only, and only the BU filter applies), expenses of the
+ * selection, and the intergroup flows: the PMA fee as the landlords' cost on their rent in view (Finance),
+ * and, when ANPM is in view, its PMA fee income and the FM staff and watchmen it recharges.
+ */
 export async function summaryData(
   versionId: number,
   user: CurrentUser,
   scope: { filters: Filters; propertyIds: number[]; categories: Category[] },
   rolls: PropertyRollup[],
 ) {
+  await getSettings(); // the mappings (e.g. the Mall's codes) before any property is classified
   const f = scope.filters;
-  const general = isFinance(user) && !f.pm.length && !f.cat.length && !f.prop.length;
-  const oi = await otherIncomeMonthly(versionId, scope.propertyIds, scope.categories, (bu) => general && (!f.bu.length || f.bu.includes(bu)));
+  const finance = isFinance(user);
+  const general = finance && !f.pm.length && !f.cat.length && !f.prop.length;
+  // a company-level entity (BU or MALL) is in view: Finance, no PM / category / property filter, the BU filter
+  const entityInView = (e: string) => general && (!f.bu.length || f.bu.includes(e));
+  const oi = await otherIncomeMonthly(versionId, scope.propertyIds, scope.categories, entityInView);
   const costs = await propertyExpenses(versionId, scope.propertyIds);
-  // general & administration: company level, like the General rows (Finance, only the BU filter applies)
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-  const ga = general && version ? (await adminEntityCosts(version)).costs.filter((c) => !f.bu.length || f.bu.includes(c.entity === 'MALL' ? '502' : c.entity)) : [];
-  return { atoms: groupAtoms(rolls, oi, costs, ga), expenses: await budgetedExpenseLines(versionId) };
+  // general & administration: company level, like the General rows
+  const ga = general && version ? (await adminEntityCosts(version)).costs.filter((c) => entityInView(c.entity)) : [];
+  // Finance's tabs: loan interest and contingencies (below EBITDA), deposit interest (other income 52201)
+  if (general && version) {
+    const tr = await treasuryForStatements(version);
+    ga.push(...tr.costs.filter((c) => entityInView(c.entity)));
+    for (const fd of tr.fdInterest)
+      if (entityInView(fd.entity)) oi.push({ scope: `G:${fd.entity}`, buCode: fd.entity, propertyId: null, propertyCode: null, account: FD_INTEREST_ACCOUNT, months: fd.months, cash: fd.cash });
+  }
+
+  const anpm = entityInView('521');
+  let ig: Intergroup = { anpm: false, pma: [], recharged: [] };
+  if (finance && version) {
+    const [fees, rent] = await Promise.all([managementFees(version), landlordRent(versionId)]);
+    const pma = LANDLORDS.map((e) => ({ entity: e as EntityKey, months: fees.months.PMA[e], rent: sum(rent[e]) }));
+    let recharged: PropertyExpense[] = [];
+    if (anpm) {
+      const all = (await db.select({ id: schema.properties.id }).from(schema.properties).where(eq(schema.properties.active, true))).map((p) => p.id);
+      recharged = (await propertyExpenses(versionId, all)).filter((c) => RECHARGED_LINES.includes(c.line));
+    }
+    ig = { anpm, pma, recharged };
+  }
+  const atoms = groupAtoms(rolls, oi, costs, ga, ig);
+  // ASRE, the mall operator (its own budget, Admin → ASRE): its mall lease eliminates against the Mall's rent in view
+  if (entityInView('ASRE')) atoms.push(...(await asreAtoms(versionId, atoms, true)));
+  return { atoms, expenses: await budgetedExpenseLines(versionId) };
 }
 
 /** the parts both monthly statements share (the group's: entities outside it are left out) */
@@ -55,7 +97,7 @@ function parts(all: Atom[], expenses: Set<string>) {
   const atoms = all.filter((a) => a.cls !== 'outside');
   const S = (match: (a: Atom) => boolean, cls?: GroupClass[]) => sumAtoms(atoms, (a) => match(a) && (!cls || cls.includes(a.cls)));
   const line = (l: string) => (a: Atom) => a.line === l;
-  const oiLines: StatementLine[] = OI_ACCOUNTS.map((a) => ({ label: a.name, code: a.code, vals: S(line(`oi:${a.code}`)), kind: 'item' as const })).filter((l) => any(l.vals!));
+  const oiLines: StatementLine[] = INCOME_LINES.map((a) => ({ label: a.name, code: a.showCode ? a.code : undefined, vals: S(line(`oi:${a.code}`)), kind: 'item' as const })).filter((l) => any(l.vals!));
   const pma = S(line(`exp:${PMA_EXPENSE.key}`));
   const of = (ls: ExpenseLine[], prefix = 'exp'): StatementLine[] =>
     ls.map((l) => ({ label: l.label, vals: expenses.has(l.key) ? S(line(`${prefix}:${l.key}`)) : null, kind: 'item' as const }));
@@ -64,11 +106,14 @@ function parts(all: Atom[], expenses: Set<string>) {
   const belowGpLines = of(BELOW_GP_LINES);
   // general & administration, below major repairs (company level)
   const gaLines = of(GA_LINES);
+  // below EBITDA (depreciation, loan interest, IFRS 16 lines, contingencies) and corporate tax, as the 2026 budget
+  const belowEbitdaLines = of(BELOW_EBITDA_LINES);
+  const taxLines = of(TAX_LINES);
   const cashOnlyLines = of([...CASH_ONLY_LINES, ...GA_CASH_LINES]);
   // what is paid, by month: every cost line from its cash months (premiums paid upfront differ from the expense)
   const pmaPaid = S(line(`cash:exp:${PMA_EXPENSE.key}`));
   const paidLines: StatementLine[] = [
-    ...of([...OPEX_LINES, ...BELOW_GP_LINES, ...GA_LINES, ...CASH_ONLY_LINES, ...GA_CASH_LINES], 'cash:exp'),
+    ...of([...OPEX_LINES, ...BELOW_GP_LINES, ...GA_LINES, ...BELOW_EBITDA_LINES, ...TAX_LINES, ...CASH_ONLY_LINES, ...GA_CASH_LINES], 'cash:exp').filter((l) => l.vals && any(l.vals)),
     ...(any(pmaPaid) ? [{ label: PMA_EXPENSE.label, vals: pmaPaid, kind: 'item' as const }] : []),
   ];
   return {
@@ -82,6 +127,10 @@ function parts(all: Atom[], expenses: Set<string>) {
     belowGpTotal: addUp(belowGpLines.map((l) => l.vals)),
     gaLines,
     gaTotal: addUp(gaLines.map((l) => l.vals)),
+    belowEbitdaLines,
+    belowEbitdaTotal: addUp(belowEbitdaLines.map((l) => l.vals)),
+    taxLines,
+    taxTotal: addUp(taxLines.map((l) => l.vals)),
     cashOnlyLines,
     cashOnlyTotal: addUp(cashOnlyLines.map((l) => l.vals)),
     paidLines,
@@ -89,18 +138,28 @@ function parts(all: Atom[], expenses: Set<string>) {
 }
 
 export function incomeStatement(all: Atom[], expenses: Set<string>): StatementLine[] {
-  const { S, line, oiLines, oiTotal, opexLines, opexTotal, belowGpLines, belowGpTotal, gaLines, gaTotal, cashOnlyLines } = parts(all, expenses);
+  const { S, line, oiLines, oiTotal, opexLines, opexTotal, belowGpLines, belowGpTotal, gaLines, gaTotal, belowEbitdaLines, belowEbitdaTotal, taxLines, taxTotal, cashOnlyLines, cashOnlyTotal } = parts(all, expenses);
   const rent = S(line('rent'));
   const income = MONTHS.map((_, i) => rent[i] + oiTotal[i]);
   const gross = MONTHS.map((_, i) => income[i] - (opexTotal?.[i] ?? 0));
-  const net = MONTHS.map((_, i) => gross[i] - (belowGpTotal?.[i] ?? 0) - (gaTotal?.[i] ?? 0));
+  // the 2026 budget's layout (ConsolidatedxRealEstate): EBITDA, then what is below it, PBT, tax, PAT
+  const ebitda = MONTHS.map((_, i) => gross[i] - (belowGpTotal?.[i] ?? 0) - (gaTotal?.[i] ?? 0));
+  const pbt = MONTHS.map((_, i) => ebitda[i] - (belowEbitdaTotal?.[i] ?? 0));
+  const pat = MONTHS.map((_, i) => pbt[i] - (taxTotal?.[i] ?? 0));
   // PMC buildings: their income less their costs is the owners'
   const ownersIncome = S((a) => a.line === 'rent' || isOi(a), ['owners']);
   const ownersCost = S(isExp, ['owners']);
   const owners = MONTHS.map((_, i) => ownersIncome[i] - ownersCost[i]);
-  const elimIncome = S(isOi, ['intergroup']);
+  // intergroup income: ANPM's fees and recharges, and the Mall's rent from ASRE (when ASRE is in view)
+  const elimIncome = S((a) => isOi(a) || a.line === 'rent', ['intergroup']);
   const elimCost = S(isExp, ['intergroup']);
   const adjusted = any(owners) || any(elimIncome) || any(elimCost);
+  const groupPat = MONTHS.map((_, i) => pat[i] - owners[i] - elimIncome[i] + elimCost[i]);
+  const finalPat = adjusted ? groupPat : pat;
+  // cash profit: PAT with the non-cash lines added back; capex; what is left for distribution (2026 rows 31-38)
+  const nonCash = S((a) => NON_CASH_LINES.some((k) => a.line === `exp:${k}`), ['group', 'intergroup']);
+  const cashProfit = MONTHS.map((_, i) => finalPat[i] + nonCash[i]);
+  const capex = cashOnlyTotal ?? z12();
   return [
     { label: 'Income', vals: null, kind: 'group' },
     { label: 'Rental revenue', vals: rent, kind: 'item' },
@@ -115,30 +174,35 @@ export function incomeStatement(all: Atom[], expenses: Set<string>): StatementLi
     { label: 'General & administration', vals: null, kind: 'group' },
     ...gaLines,
     { label: 'Total general & administration', vals: gaTotal, kind: 'sub' },
+    { label: 'Operating profit (EBITDA)', vals: ebitda, kind: 'sub' },
+    ...belowEbitdaLines.map((l) => (l.label.includes('RTU') && !l.vals ? { ...l, label: `${l.label} (IFRS 16: on hold)` } : l)),
+    { label: 'Profit before tax (PBT)', vals: pbt, kind: 'sub' },
+    ...taxLines.map((l) => (!l.vals ? { ...l, label: `${l.label} (rules to be agreed)` } : l)),
     ...(adjusted
       ? [
-          { label: 'Net income · standalone', vals: net, kind: 'sub' as const },
+          { label: 'Profit after tax (PAT) · standalone', vals: pat, kind: 'sub' as const },
           { label: 'Group adjustments', vals: null, kind: 'group' as const },
           ...(any(owners) ? [{ label: "Owners' share · PMC properties", vals: neg(owners), kind: 'item' as const }] : []),
-          ...(any(elimIncome) ? [{ label: 'Intergroup income eliminated · PMA fee', vals: neg(elimIncome), kind: 'item' as const }] : []),
-          ...(any(elimCost) ? [{ label: 'Intergroup cost eliminated · PMA fee', vals: elimCost, kind: 'item' as const }] : []),
-          { label: `Net income · ${GROUP_NAME}`, vals: MONTHS.map((_, i) => net[i] - owners[i] - elimIncome[i] + elimCost[i]), kind: 'total' as const },
+          ...(any(elimIncome) ? [{ label: `Intergroup income eliminated · ${ELIM}`, vals: neg(elimIncome), kind: 'item' as const }] : []),
+          ...(any(elimCost) ? [{ label: `Intergroup cost eliminated · ${ELIM}`, vals: elimCost, kind: 'item' as const }] : []),
+          { label: `Profit after tax (PAT) · ${GROUP_NAME}`, vals: groupPat, kind: 'total' as const },
         ]
-      : [{ label: 'Net income', vals: net, kind: 'total' as const }]),
-    // capex items are paid (Cash flow) but not expensed; shown for reference, standalone
-    { label: 'Cash flow only', vals: null, kind: 'group' },
+      : [{ label: 'Profit after tax (PAT)', vals: pat, kind: 'total' as const }]),
+    { label: 'Cash profit', vals: cashProfit, kind: 'sub' },
+    { label: 'Capex (paid, not expensed)', vals: null, kind: 'group' },
     ...cashOnlyLines.map((l) => ({ ...l, kind: 'muted' as const })),
+    { label: 'Total capex', vals: capex, kind: 'sub' },
+    { label: 'Cash for distribution', vals: MONTHS.map((_, i) => cashProfit[i] - capex[i]), kind: 'total' },
   ];
 }
-
 export function cashStatement(all: Atom[], expenses: Set<string>): StatementLine[] {
   const p = parts(all, expenses);
   const { S, line } = p;
   // every cost is paid: operating costs, major repairs and capex items, in the month paid
   const expLines = p.paidLines;
+  // VAT is left out: what is collected passes through to the FTA (as the 2026 budget)
   const cashIn: StatementLine[] = [
     { label: 'Rent cheques (ex VAT)', vals: S(line('cash:rent')), kind: 'item' },
-    { label: 'VAT collected on rent', vals: S(line('cash:vat')), kind: 'item' },
     { label: 'Other income', vals: S(line('cash:oi')), kind: 'item' },
     { label: 'Security deposits received', vals: S(line('cash:depositIn')), kind: 'item' },
   ];
@@ -149,11 +213,11 @@ export function cashStatement(all: Atom[], expenses: Set<string>): StatementLine
   const tin = addUp(cashIn.map((l) => l.vals)) ?? z12();
   const tout = addUp(cashOut.map((l) => l.vals)) ?? z12();
   const net = MONTHS.map((_, i) => tin[i] + tout[i]);
-  const inLines = ['cash:rent', 'cash:vat', 'cash:oi', 'cash:depositIn'];
+  const inLines = ['cash:rent', 'cash:oi', 'cash:depositIn'];
   const ownersIn = S((a) => inLines.includes(a.line), ['owners']);
   const ownersOut = S((a) => a.line === 'cash:depositOut' || a.line.startsWith('cash:exp:'), ['owners']);
   const owners = MONTHS.map((_, i) => ownersIn[i] - ownersOut[i]);
-  const elimIn = S(line('cash:oi'), ['intergroup']);
+  const elimIn = S((a) => a.line === 'cash:oi' || a.line === 'cash:rent', ['intergroup']);
   const elimOut = S((a) => a.line.startsWith('cash:exp:'), ['intergroup']);
   const adjusted = any(owners) || any(elimIn) || any(elimOut);
   const groupNet = MONTHS.map((_, i) => net[i] - owners[i] - elimIn[i] + elimOut[i]);
@@ -170,8 +234,8 @@ export function cashStatement(all: Atom[], expenses: Set<string>): StatementLine
           { label: 'Net cash flow · standalone', vals: net, kind: 'sub' as const },
           { label: 'Group adjustments', vals: null, kind: 'group' as const },
           ...(any(owners) ? [{ label: "Owners' collections · PMC properties", vals: neg(owners), kind: 'item' as const }] : []),
-          ...(any(elimIn) ? [{ label: 'Intergroup receipts eliminated · PMA fee', vals: neg(elimIn), kind: 'item' as const }] : []),
-          ...(any(elimOut) ? [{ label: 'Intergroup payments eliminated · PMA fee', vals: elimOut, kind: 'item' as const }] : []),
+          ...(any(elimIn) ? [{ label: `Intergroup receipts eliminated · ${ELIM}`, vals: neg(elimIn), kind: 'item' as const }] : []),
+          ...(any(elimOut) ? [{ label: `Intergroup payments eliminated · ${ELIM}`, vals: elimOut, kind: 'item' as const }] : []),
           { label: `Net cash flow · ${GROUP_NAME}`, vals: groupNet, kind: 'total' as const },
         ]
       : [{ label: 'Net cash flow', vals: net, kind: 'total' as const }]),
@@ -200,10 +264,12 @@ export function groupPnl(atoms: Atom[], expenses: Set<string>): GroupPnl {
   };
   const n = inside.length + 4 + outside.length;
   const isRent = (a: Atom) => a.line === 'rent';
-  const oiAccounts = OI_ACCOUNTS.filter((acc) => atoms.some((a) => a.line === `oi:${acc.code}` && Math.abs(sum(a.months)) >= 0.5));
+  const oiAccounts = INCOME_LINES.filter((acc) => atoms.some((a) => a.line === `oi:${acc.code}` && Math.abs(sum(a.months)) >= 0.5));
   const income = cells((a) => isRent(a) || isOi(a));
   const opex = cells(isOpex);
   const cost = cells(isExp);
+  const belowEbitda = cells((a) => BELOW_EBITDA_LINES.some((l) => a.line === `exp:${l.key}`));
+  const tax = cells((a) => TAX_LINES.some((l) => a.line === `exp:${l.key}`));
   const empty = Array.from({ length: n }, () => null);
   const expRow = (l: ExpenseLine) => ({ label: l.label, kind: 'item' as const, vals: expenses.has(l.key) ? cells((a) => a.line === `exp:${l.key}`) : empty });
   return {
@@ -212,7 +278,7 @@ export function groupPnl(atoms: Atom[], expenses: Set<string>): GroupPnl {
     rows: [
       { label: 'Income', kind: 'group', vals: empty },
       { label: 'Rental revenue', kind: 'item', vals: cells(isRent) },
-      ...oiAccounts.map((acc) => ({ label: acc.name, code: acc.code, kind: 'item' as const, vals: cells((a) => a.line === `oi:${acc.code}`) })),
+      ...oiAccounts.map((acc) => ({ label: acc.name, code: acc.showCode ? acc.code : undefined, kind: 'item' as const, vals: cells((a) => a.line === `oi:${acc.code}`) })),
       { label: 'Total other income', kind: 'sub', vals: cells(isOi) },
       { label: 'Total income', kind: 'sub', vals: income },
       { label: 'Operating expenses', kind: 'group', vals: empty },
@@ -227,7 +293,11 @@ export function groupPnl(atoms: Atom[], expenses: Set<string>): GroupPnl {
       { label: 'General & administration', kind: 'group', vals: empty },
       ...GA_LINES.map(expRow),
       { label: 'Total general & administration', kind: 'sub', vals: cells((a) => GA_LINES.some((l) => a.line === `exp:${l.key}`)) },
-      { label: 'Net income', kind: 'total', vals: income.map((v, i) => v - cost[i]) },
+      { label: 'Operating profit (EBITDA)', kind: 'sub', vals: income.map((v, i) => v - cost[i] + belowEbitda[i] + tax[i]) },
+      ...BELOW_EBITDA_LINES.map(expRow),
+      { label: 'Profit before tax (PBT)', kind: 'sub', vals: income.map((v, i) => v - cost[i] + tax[i]) },
+      ...TAX_LINES.map(expRow),
+      { label: 'Profit after tax (PAT)', kind: 'total', vals: income.map((v, i) => v - cost[i]) },
       // paid, not expensed: in the cash flow only
       { label: 'Cash flow only', kind: 'group', vals: empty },
       ...[...CASH_ONLY_LINES, ...GA_CASH_LINES].map(expRow),

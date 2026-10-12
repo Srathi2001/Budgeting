@@ -493,17 +493,17 @@ function FacilityForm({ data, d, onClose, onPrev, onNext }: { data: FmPageData; 
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={d.status} />
             <input className="input min-w-[12rem] flex-1" placeholder="Note" value={note} onChange={(e) => setNote(e.target.value)} disabled={version.locked} />
-            {!version.locked && (d.status === 'DRAFT' || d.status === 'RETURNED') && (data.finance || d.canEdit) && (
+            {!version.locked && (d.status === 'DRAFT' || d.status === 'RETURNED') && d.canEdit && (
               <button className="btn-primary" disabled={pending} onClick={() => transition('submit')}>
-                Submit to Finance
+                Submit to Admin
               </button>
             )}
-            {!version.locked && data.finance && d.status === 'SUBMITTED' && (
+            {!version.locked && data.admin && d.status === 'SUBMITTED' && (
               <button className="btn-primary" disabled={pending} onClick={() => transition('approve')}>
                 Approve
               </button>
             )}
-            {!version.locked && data.finance && (d.status === 'SUBMITTED' || d.status === 'APPROVED') && (
+            {!version.locked && data.admin && (d.status === 'SUBMITTED' || d.status === 'APPROVED') && (
               <button className="btn" disabled={pending} onClick={() => transition('return')}>
                 Return for changes
               </button>

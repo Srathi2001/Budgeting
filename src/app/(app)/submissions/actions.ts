@@ -1,16 +1,18 @@
 'use server';
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db, schema } from '@/db';
-import { requireUser, isFinance } from '@/lib/auth/dal';
+import { requireUser, isAdmin, isFinance } from '@/lib/auth/dal';
+import { contractYear, type ContractInput } from '@/lib/budget/boh-calc';
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'RETURNED';
 
-const TRANSITIONS: Record<'submit' | 'approve' | 'return', { from: Status[]; to: Status; finance: boolean }> = {
-  submit: { from: ['DRAFT', 'RETURNED'], to: 'SUBMITTED', finance: false },
-  approve: { from: ['SUBMITTED'], to: 'APPROVED', finance: true },
-  return: { from: ['SUBMITTED', 'APPROVED'], to: 'RETURNED', finance: true },
+// the property manager submits; Admin approves or returns
+const TRANSITIONS: Record<'submit' | 'approve' | 'return', { from: Status[]; to: Status; admin: boolean }> = {
+  submit: { from: ['DRAFT', 'RETURNED'], to: 'SUBMITTED', admin: false },
+  approve: { from: ['SUBMITTED'], to: 'APPROVED', admin: true },
+  return: { from: ['SUBMITTED', 'APPROVED'], to: 'RETURNED', admin: true },
 };
 
 export async function transition(versionId: number, propertyId: number, action: keyof typeof TRANSITIONS, note: string | null): Promise<{ error?: string }> {
@@ -21,9 +23,26 @@ export async function transition(versionId: number, propertyId: number, action: 
   if (!version || version.status === 'LOCKED') return { error: 'Version is locked' };
   const [prop] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
   if (!prop) return { error: 'Property not found' };
-  if (user.role === 'FM') return { error: 'Facilities management submits the FM budget only' };
-  if (t.finance && !isFinance(user)) return { error: 'Only Finance can do this' };
-  if (!t.finance && !isFinance(user) && prop.coordinator !== user.coordinator) return { error: 'Not your property' };
+  if (t.admin && !isAdmin(user)) return { error: 'Only Admin approves or returns' };
+  if (!t.admin && !isAdmin(user) && (user.role !== 'PM' || prop.coordinator !== user.coordinator)) return { error: 'The property manager submits the property' };
+  if (action === 'return' && !note?.trim()) return { error: 'Give a reason for returning it' };
+  if (action === 'submit') {
+    // every renewal needs its RERA range (or an increase entered): none means a 0% increase (audit FIN-014)
+    const missing = await db
+      .select({ unit: schema.units.unitCode, bedroom: schema.units.bedroom })
+      .from(schema.leaseLines)
+      .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
+      .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId), sql`${schema.leaseLines.calc}->>'warnings' like '%No RERA index%'`));
+    if (missing.length) {
+      const codes = [...new Set(missing.map((m) => m.bedroom ?? '(no code)'))].join(', ');
+      return { error: `${missing.length} renewal${missing.length === 1 ? ' has' : 's have'} no RERA range (${codes}): enter the ranges in the Lease Budget row form, or an increase for the unit, then submit` };
+    }
+    // a service contract ending before 31 December needs the property manager's decision (audit FIN-008)
+    const contracts = await db.select().from(schema.bohContracts).where(and(eq(schema.bohContracts.versionId, versionId), eq(schema.bohContracts.propertyId, propertyId)));
+    const open = contracts.filter((c) => contractYear(c as ContractInput, version.year).needsDecision);
+    if (open.length)
+      return { error: `${open.length} service contract${open.length === 1 ? ' ends' : 's end'} before 31-Dec-${version.year} without a decision (${open.map((c) => c.supplier ?? c.description ?? c.account).slice(0, 3).join(', ')}): say in Building Overheads whether each is renewed, then submit` };
+  }
 
   const where = and(eq(schema.submissions.versionId, versionId), eq(schema.submissions.propertyId, propertyId));
   const [sub] = await db.select().from(schema.submissions).where(where);

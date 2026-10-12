@@ -8,6 +8,7 @@ import { MF_CHOICES, MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, 
 import { count, fmt, MONTHS, pct } from '@/lib/format';
 import { ScheduleEditor } from './schedule-editor';
 import { ConfirmDialog } from '@/components/ui/dialog';
+import { DEFAULT_ASSUMPTIONS } from '@/lib/engine/assumptions';
 import { OUTCOMES, annualRent, dmy, leaseTiming, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 
 type Row = MasterRow;
@@ -168,7 +169,7 @@ export function RowForm({
     if (contractedLock || timing.kind === 'vacant' || !row.currentEnd) return saved;
     if (outcome === 'Not re-let') return { start: null, end: null };
     const vac = val('vacancyDays');
-    const start = outcome === 'New tenant' ? (vac === null ? null : addDays(row.currentEnd, vac + 1)) : (val('r1Start') ?? addDays(row.currentEnd, 1));
+    const start = outcome === 'New tenant' ? addDays(row.currentEnd, (vac ?? DEFAULT_ASSUMPTIONS.defaultVacancyDays) + 1) : (val('r1Start') ?? addDays(row.currentEnd, 1));
     if (!start) return { start: null, end: null };
     // keep the contract length the engine used; a year when there was none
     const term = saved.start && saved.end ? daysBetween(saved.start, saved.end) : 364;
@@ -490,8 +491,8 @@ export function RowForm({
                   </Field>
                 ) : (
                   <>
-                    <Field label="Vacancy days" hint="Required · empty days after the lease ends">
-                      {num('vacancyDays', decisionOpen, { int: true })}
+                    <Field label="Vacancy days" hint="Empty days after the lease ends · blank = 60">
+                      {num('vacancyDays', decisionOpen, { int: true, placeholder: String(DEFAULT_ASSUMPTIONS.defaultVacancyDays) })}
                     </Field>
                     <Field label="New tenant from" hint={r1Moved ? 'From the vacancy days · saved with the form' : undefined}>
                       {show(r1Preview.start ? dmy(r1Preview.start) : null)}

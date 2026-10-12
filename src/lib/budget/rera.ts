@@ -26,6 +26,7 @@ export async function saveReraRange(
 
   const lineIds = await db.transaction(async (tx) => {
     const where = and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
+    const [before] = await tx.select().from(schema.reraIndex).where(where);
     await tx.delete(schema.reraIndex).where(where);
     if (min !== null && max !== null) await tx.insert(schema.reraIndex).values({ versionId, propertyCode: property.code, bedroom: code, min, max });
     await tx.insert(schema.auditLog).values({
@@ -35,7 +36,7 @@ export async function saveReraRange(
       entity: 'rera_index',
       entityId: `${property.code}|${code}`,
       action: min === null ? 'delete' : 'upsert',
-      changes: { min, max },
+      changes: { from: before ? { min: before.min, max: before.max } : null, to: min === null ? null : { min, max } },
     });
     const lines = await tx
       .select({ id: schema.leaseLines.id, bedroom: schema.units.bedroom })

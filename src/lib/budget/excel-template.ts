@@ -7,7 +7,7 @@
 import ExcelJS from 'exceljs';
 import { XL } from '@/lib/format';
 import { MF_LABEL, type MasterRow, type MfChoice, type RowPatch } from './master-types';
-import { annualRent, needsVacancyDays, outcomeOf, outcomePatch, OUTCOMES, type Outcome } from '@/app/(app)/master/row-logic';
+import { annualRent, outcomeOf, outcomePatch, OUTCOMES, type Outcome } from '@/app/(app)/master/row-logic';
 
 const SHEET = 'Lease Budget';
 const HEADER_ROW = 2;
@@ -203,7 +203,7 @@ export async function buildTemplate(rows: MasterRow[], ctx: { versionName: strin
   line('What to do', true, 12);
   for (const s of [
     '1. Go to the “Lease Budget” sheet. Fill in the white cells only. Grey cells are fixed: they come from the Oracle import or are calculated, and the sheet is protected.',
-    '2. A white cell left blank means “no value”: for an override, the tool’s calculated value is used; for vacancy days on a new tenant, the line is flagged until filled in.',
+    '2. A white cell left blank means “no value”: for an override, the tool’s calculated value is used; for vacancy days on a new tenant, the default of 60 days is used.',
     '3. Don’t add, delete or reorder rows or columns, and don’t change the Line ID.',
     '4. Save the file as .xlsx and upload it in the tool: Lease Budget → Import Excel. You’ll see every change before it is applied.',
     '5. The upload follows the same rules as the tool: only lines you may edit, only the fields you may change. Anything else is listed as rejected.',
@@ -254,7 +254,6 @@ export async function buildTemplate(rows: MasterRow[], ctx: { versionName: strin
       if (open && c.kind === 'int') cell.dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [c.key === 'cheques' ? 1 : 0, c.key === 'cheques' ? 12 : 100000], showErrorMessage: true, error: 'Whole number' };
       if (open && (c.kind === 'money' || c.kind === 'pct')) cell.dataValidation = { type: 'decimal', operator: c.kind === 'pct' ? 'between' : 'greaterThanOrEqual', allowBlank: true, formulae: c.kind === 'pct' ? [-1, 5] : [0], showErrorMessage: true, error: 'Number' };
       if (open && c.kind === 'date') cell.dataValidation = { type: 'date', operator: 'greaterThan', allowBlank: true, formulae: [new Date(Date.UTC(2000, 0, 1))], showErrorMessage: true, error: 'Date' };
-      if (open && c.key === 'vacancyDays' && needsVacancyDays(r) && r.vacancyDays === null) cell.fill = FILL.inputHead; // required, still blank
     });
   });
   ws.autoFilter = { from: { row: HEADER_ROW, column: 1 }, to: { row: HEADER_ROW, column: cols.length } };

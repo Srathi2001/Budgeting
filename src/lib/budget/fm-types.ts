@@ -102,12 +102,4 @@ export const STAFF_TEAMS: { code: StaffTeam; label: string; hint: string }[] = [
   { code: 'GA', label: 'G&A share', hint: 'Department overheads, added to every team pro rata' },
 ];
 
-/** Supervisory cost split over work types (2026 Labor_Allocation: M1 19%, M2–M4 30%, R1/R2/R4 42%, R3 9%). */
-export const SUPERVISION_SPLIT: { share: number; workTypes: WorkType[] }[] = [
-  { share: 0.19, workTypes: ['M01'] },
-  { share: 0.3, workTypes: ['M02', 'M03', 'M04'] },
-  { share: 0.42, workTypes: ['R01', 'R02', 'R04'] },
-  { share: 0.09, workTypes: ['R03'] },
-];
-/** business units supervision is spread over (2026: "Supervisory % 501, 502"; PMC none) */
-export const SUPERVISED_BUS = ['501', '502'];
+// the supervisory staff's split over work types and business units is a yearly rule: Admin → Assumptions

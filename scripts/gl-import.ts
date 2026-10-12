@@ -5,6 +5,7 @@
 //   npx tsx scripts/gl-import.ts <versionId> <Account Analysis Report.xls>           preview only
 //   npx tsx scripts/gl-import.ts <versionId> <Account Analysis Report.xls> --apply   import
 import 'dotenv/config';
+import { scriptActor } from './script-actor';
 import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import { db } from '../src/db';
@@ -44,18 +45,19 @@ async function main() {
     console.table(ga.preview.byYear);
   }
   if (flag === '--apply') {
-    await applyGlImport(Number(versionId), values, null, { file: basename(file), preview: p });
+    const actor = await scriptActor();
+    await applyGlImport(Number(versionId), values, actor, { file: basename(file), preview: p });
     console.log(`Imported ${values.length} values`);
     if (fm) {
-      await applyFmActuals(fm.rows, fm.preview, null, basename(file));
+      await applyFmActuals(fm.rows, fm.preview, actor, basename(file));
       console.log(`Imported ${fm.rows.length} FM cost actuals`);
     }
     if (boh) {
-      await applyBohActuals(boh.rows, boh.preview, null, basename(file));
+      await applyBohActuals(boh.rows, boh.preview, actor, basename(file));
       console.log(`Imported ${boh.rows.length} building overhead actuals`);
     }
     if (ga) {
-      await applyAdminActuals(ga.rows, ga.preview, null, basename(file));
+      await applyAdminActuals(ga.rows, ga.preview, actor, basename(file));
       console.log(`Imported ${ga.rows.length} G&A actuals`);
     }
   }

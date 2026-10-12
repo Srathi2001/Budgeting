@@ -59,6 +59,125 @@ export function contractMonths(c: { terms: ContractTerms; quantity: number; rate
   return out;
 }
 
+// ---- contracts over their own period (audit FIN-008, user decision 12-Oct-2026) ----------------------
+
+const DAY_MS = 86_400_000;
+const dayOf = (y: number, m: number, d: number) => Math.round(Date.UTC(y, m - 1, d) / DAY_MS);
+const parseIso = (s: string) => dayOf(Number(s.slice(0, 4)), Number(s.slice(5, 7)), Number(s.slice(8, 10)));
+export const isoDay = (d: number) => new Date(d * DAY_MS).toISOString().slice(0, 10);
+const addMonths = (d: number, n: number) => {
+  const x = new Date(d * DAY_MS);
+  // the same day n months on (31st → the month's last day)
+  const y = x.getUTCFullYear();
+  const m = x.getUTCMonth() + n;
+  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return Math.round(Date.UTC(y, m, Math.min(x.getUTCDate(), last)) / DAY_MS);
+};
+
+export interface ContractInput {
+  terms: ContractTerms;
+  quantity: number;
+  rate: number;
+  startMonth: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  renewal?: string | null;
+  renewalRate?: number | null;
+  renewalTerms?: string | null;
+}
+
+/** months a payment covers, by terms */
+const STEP: Record<ContractTerms, number> = { Monthly: 1, Quarterly: 3, 'Half-yearly': 6, Yearly: 12, 'One-off': 0 };
+
+/**
+ * The contract's period: the dates entered; else it starts on the 1st of its start month of the budget
+ * year (January when blank) and runs a year, or, paid monthly with a number of months, that many months.
+ */
+export function contractPeriod(c: ContractInput, year: number): { start: number; end: number } {
+  const start = c.startDate ? parseIso(c.startDate) : dayOf(year, Math.min(Math.max(c.startMonth ?? 1, 1), 12), 1);
+  if (c.endDate) return { start, end: parseIso(c.endDate) };
+  const q = Math.round(c.quantity);
+  const months = c.terms === 'Monthly' && Number.isInteger(c.quantity) && q >= 1 && q <= 36 ? q : 12;
+  return { start, end: addMonths(start, months) - 1 };
+}
+
+/** one period of a contract in the budget year: the expense by the months it covers, the payments by its terms */
+function periodYear(value: number, start: number, end: number, terms: ContractTerms, year: number) {
+  const expense = Array.from({ length: 12 }, () => 0);
+  const cash = Array.from({ length: 12 }, () => 0);
+  const days = end - start + 1;
+  if (!value || days <= 0) return { expense, cash };
+  // the expense by month: each calendar month of the period weighs the share of it covered (a full month 1,
+  // half of it 0.5), so 300 a month books 300 in every full month and a part month only its days
+  const first = new Date(start * DAY_MS);
+  const weights: { y: number; m: number; w: number }[] = [];
+  for (let y = first.getUTCFullYear(), m = first.getUTCMonth() + 1; dayOf(y, m, 1) <= end; m === 12 ? ((y += 1), (m = 1)) : (m += 1)) {
+    const from = dayOf(y, m, 1);
+    const to = dayOf(y, m + 1, 1) - 1;
+    const covered = Math.min(end, to) - Math.max(start, from) + 1;
+    if (covered > 0) weights.push({ y, m, w: covered / (to - from + 1) });
+  }
+  const totalWeight = weights.reduce((s, x) => s + x.w, 0);
+  for (const x of weights) if (x.y === year) expense[x.m - 1] += (value * x.w) / totalWeight;
+  // payments: monthly in advance each month; quarterly and half-yearly at the end of each part (as the
+  // 2026 schedules: March / June …); yearly at the start of each year; one-off at the start
+  const months = Math.max(1, Math.round(days / 30.4375));
+  const step = STEP[terms];
+  const due: number[] = [];
+  if (!step) due.push(start);
+  else if (terms === 'Monthly' || terms === 'Yearly') for (let k = 0; k * step < months; k++) due.push(addMonths(start, k * step));
+  else for (let k = 0; k * step < months; k++) due.push(Math.min(addMonths(start, (k + 1) * step) - 1, end));
+  const each = value / due.length;
+  for (const d of due) {
+    const x = new Date(d * DAY_MS);
+    if (x.getUTCFullYear() === year) cash[x.getUTCMonth()] += each;
+  }
+  return { expense, cash };
+}
+
+export interface ContractYear {
+  /** expense of the budget year by month */
+  expense: number[];
+  /** paid in the budget year by month */
+  cash: number[];
+  total: number;
+  start: string;
+  end: string;
+  /** ends before 31 December of the budget year (or ended before it): renew or end? */
+  endsBeforeYearEnd: boolean;
+  /** ends before 31 December and nobody said whether it is renewed: flagged to the property manager */
+  needsDecision: boolean;
+}
+
+/**
+ * A contract in the budget year: its value (quantity × rate) spread over its own months (a part
+ * month for its days), only the months inside the year booked; paid by its terms. Ending before 31 December: renewed (at the new rate and
+ * terms, for the same length, again until the year is covered) or ended, as the property manager says.
+ */
+export function contractYear(c: ContractInput, year: number): ContractYear {
+  const { start, end } = contractPeriod(c, year);
+  const expense = Array.from({ length: 12 }, () => 0);
+  const cash = Array.from({ length: 12 }, () => 0);
+  const add = (p: { expense: number[]; cash: number[] }) => p.expense.forEach((v, i) => ((expense[i] += v), (cash[i] += p.cash[i])));
+  add(periodYear(r2((c.quantity || 0) * (c.rate || 0)), start, end, c.terms, year));
+  const yearEnd = dayOf(year, 12, 31);
+  const endsBeforeYearEnd = end < yearEnd;
+  if (endsBeforeYearEnd && c.renewal === 'RENEW') {
+    const months = Math.max(1, Math.round((end - start + 1) / 30.4375));
+    const value = r2((c.quantity || 0) * (c.renewalRate ?? c.rate ?? 0));
+    const terms = (CONTRACT_TERMS_LIST as readonly string[]).includes(c.renewalTerms ?? '') ? (c.renewalTerms as ContractTerms) : c.terms;
+    let from = end + 1;
+    for (let i = 0; i < 12 && from <= yearEnd; i++) {
+      const to = addMonths(from, months) - 1;
+      add(periodYear(value, from, to, terms, year));
+      from = to + 1;
+    }
+  }
+  const total = r2(expense.reduce((s, v) => s + v, 0));
+  return { expense, cash, total, start: isoDay(start), end: isoDay(end), endsBeforeYearEnd, needsDecision: endsBeforeYearEnd && !c.renewal };
+}
+const CONTRACT_TERMS_LIST = ['Monthly', 'Quarterly', 'Half-yearly', 'Yearly', 'One-off'] as const;
+
 /** terms read from a purchase order line: its wording, else 12 = monthly, 1 = one-off */
 export function termsOf(description: string, quantity: number | null): ContractTerms {
   const d = description.toLowerCase();

@@ -63,8 +63,11 @@ export function oiType(account: string): OiType {
 export const OI_STORED = ['A2', 'A1', 'YTD', 'OD', 'B'] as const;
 export type OiPeriod = (typeof OI_STORED)[number];
 export const OI_INPUT: readonly OiPeriod[] = ['OD', 'B'];
-export type OiColumn = OiPeriod | 'F';
+/** F: YTD + OD; PB: last year's approved budget (reference, e.g. 2026B); CH: B less PB */
+export type OiColumn = OiPeriod | 'F' | 'PB' | 'CH';
 export const OI_COLUMNS: OiColumn[] = ['A2', 'A1', 'YTD', 'OD', 'F', 'B'];
+/** the columns on the page when last year's budget is loaded as reference */
+export const OI_VIEW_COLUMNS: OiColumn[] = ['A2', 'A1', 'YTD', 'OD', 'F', 'PB', 'B', 'CH'];
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -73,7 +76,7 @@ export function oiLabel(c: OiColumn, year: number, cutoff = 9): string {
   const m = Math.min(12, Math.max(1, Math.round(cutoff)));
   const ytd = m === 1 ? `${year - 1} Jan` : `${year - 1} Jan–${MON[m - 1]}`;
   const od = m >= 12 ? `${year - 1} (none)` : m === 11 ? `${year - 1} Dec` : `${year - 1} ${MON[m]}–Dec`;
-  return { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: ytd, OD: od, F: `${year - 1}F`, B: `${year}B` }[c];
+  return { A2: `${year - 3}A`, A1: `${year - 2}A`, YTD: ytd, OD: od, F: `${year - 1}F`, PB: `${year - 1}B`, B: `${year}B`, CH: `${year}B vs ${year - 1}B` }[c];
 }
 
 /** account → period → amount (null: nothing entered) */
@@ -95,6 +98,8 @@ export interface OiBlock {
   mfBudget: number;
   /** other budget amounts calculated, not entered (ANPM's PMA fee: the rate × the landlords' rent), by account */
   calcB?: Record<string, number>;
+  /** last year's approved budget by account (reference only, e.g. 2026B from the 2026 workbook) */
+  prior?: Record<string, number>;
 }
 
 export interface OiChange {
@@ -107,6 +112,12 @@ export interface OiChange {
 /** The value of one cell, with F and the calculated MF budget filled in. */
 export function oiCell(b: OiBlock, account: string, c: OiColumn): number | null {
   const v = b.values[account] ?? {};
+  if (c === 'PB') return b.prior?.[account] ?? null;
+  if (c === 'CH') {
+    const bv = oiCell(b, account, 'B');
+    const pb = b.prior?.[account] ?? null;
+    return bv === null && pb === null ? null : (bv ?? 0) - (pb ?? 0);
+  }
   if (c === 'F') return v.YTD == null && v.OD == null ? null : (v.YTD ?? 0) + (v.OD ?? 0);
   if (c === 'B' && OI_ACCOUNT.get(account)?.calc === 'MF') return b.kind === 'P' ? b.mfBudget || null : null;
   if (c === 'B' && b.calcB?.[account] !== undefined) return b.calcB[account];
