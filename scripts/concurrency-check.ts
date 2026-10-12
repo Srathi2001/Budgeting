@@ -144,6 +144,70 @@ async function main() {
     check('5. both cell saves land', x.errors.length + y.errors.length === 0 && has('62401', 1111) && has('62402', 2222), JSON.stringify([x.errors, y.errors]));
   }
 
+  // ---- 6. a figure someone else changed after the page was loaded (lib/conflict.ts) ----
+  {
+    const [l0] = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.id, lines[0].id));
+    const saw = l0.r1Rent;
+    // Admin changes the renewal rent; the PM, still on the old page, changes it too and the vacancy days
+    await applyLineChanges(actor(admin), v, [{ lineId: lines[0].id, patch: { r1Rent: 160000 }, seen: { r1Rent: saw } }]);
+    const r = await applyLineChanges(actor(pm), v, [{ lineId: lines[0].id, patch: { r1Rent: 170000, vacancyDays: 45 }, seen: { r1Rent: saw, vacancyDays: l0.vacancyDays } }]);
+    const [l1] = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.id, lines[0].id));
+    check('6. lease: the other person’s figure stays', l1.r1Rent === 160000, String(l1.r1Rent));
+    check('6. lease: the user is told who changed it, when and to what', r.errors.some((e) => /Renewal rent was changed by Admin on \d{2}-\w{3}-\d{4} \d{2}:\d{2} to 160,000\.00\. Your value 170,000\.00 was not saved/.test(e.message)), JSON.stringify(r.errors));
+    check('6. lease: the user’s other figure on the line is saved', l1.vacancyDays === 45, String(l1.vacancyDays));
+    // the user's own earlier save from the same page is no conflict
+    const own = await applyLineChanges(actor(pm), v, [{ lineId: lines[0].id, patch: { vacancyDays: 50 }, seen: { vacancyDays: l0.vacancyDays } }]);
+    const [l2] = await db.select().from(schema.leaseLines).where(eq(schema.leaseLines.id, lines[0].id));
+    check('6. lease: the user’s own earlier save is no conflict', own.errors.length === 0 && l2.vacancyDays === 50, JSON.stringify(own.errors));
+    // building overheads: Admin changes the PM's cell; the PM, still on the old page, changes it too
+    await saveBuildingOverheads(actor(admin), v, [{ propertyId: prop.id, account: '62401', amount: 2000, dueMonth: null }]);
+    const b = await saveBuildingOverheads(actor(pm), v, [{ propertyId: prop.id, account: '62401', amount: 999, dueMonth: null, seen: { amount: 1111, dueMonth: null } }]);
+    const [cell] = await db.select().from(schema.bohBudget).where(and(eq(schema.bohBudget.versionId, v), eq(schema.bohBudget.account, '62401')));
+    check('6. building overheads: a cell someone else changed is not overwritten', b.saved === 0 && cell.amount === 2000 && /changed by Admin/.test(b.errors[0] ?? ''), JSON.stringify(b));
+  }
+
+  // ---- 7. an Excel upload after someone else changed figures in the tool ----
+  {
+    const ExcelJS = (await import('exceljs')).default;
+    await as(pm);
+    const route = (await import('../src/app/api/export/input-template/route')) as { GET: (r: Request) => Promise<Response> };
+    const file = await (await route.GET(new Request('http://localhost/api/export/input-template?kind=building-overheads'))).arrayBuffer();
+    // meanwhile Admin changes the cell in the tool
+    await saveBuildingOverheads(actor(admin), v, [{ propertyId: prop.id, account: '62401', amount: 3333, dueMonth: null }]);
+    const edited = async (amount: number | null) => {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(file);
+      const ws = wb.worksheets.find((w) => w.state === 'visible' && w.name !== 'Instructions')!;
+      let col = 0;
+      ws.getRow(2).eachCell((c, n) => {
+        if (String(c.value) === `${version.year}B`) col = n;
+      });
+      ws.eachRow((row) => {
+        if (amount !== null && String(row.getCell(1).value) === `${prop.id}|62401`) row.getCell(col).value = amount;
+      });
+      const f = new FormData();
+      f.set('file', new File([new Uint8Array(await wb.xlsx.writeBuffer())], 'upload.xlsx'));
+      return f;
+    };
+    const amountNow = async () => (await db.select().from(schema.bohBudget).where(and(eq(schema.bohBudget.versionId, v), eq(schema.bohBudget.account, '62401'))))[0]?.amount;
+    const { uploadInputTemplate } = await import('../src/app/(app)/template-actions');
+    // left as downloaded: the tool's value stays, no change
+    const kept = await uploadInputTemplate('building-overheads', v, await edited(null), false);
+    check('7. upload: a figure left as downloaded keeps the tool’s value', kept.changes.length === 0 && (kept.kept?.length ?? 0) === 1, JSON.stringify({ changes: kept.changes.length, kept: kept.kept?.length }));
+    // changed in both: listed with who changed it in the tool
+    const pre = await uploadInputTemplate('building-overheads', v, await edited(4444), false);
+    const c = pre.conflicts?.[0];
+    check('7. upload: a figure changed in both is listed, with who', pre.conflicts?.length === 1 && c?.by === 'Admin' && c.from === 3333 && c.to === 4444, JSON.stringify(pre.conflicts));
+    const theirs = await uploadInputTemplate('building-overheads', v, await edited(4444), true, [], [c!.id]);
+    check('7. upload: not ticked, the tool’s value stays', (await amountNow()) === 3333, JSON.stringify({ saved: theirs.saved, now: await amountNow() }));
+    const mineRes = await uploadInputTemplate('building-overheads', v, await edited(4444), true, [c!.id], [c!.id]);
+    check('7. upload: ticked “use my value”, the file’s value is saved', (await amountNow()) === 4444, JSON.stringify({ saved: mineRes.saved, refused: mineRes.refused, now: await amountNow() }));
+    // a new conflict between the preview and the apply: nothing saved, the preview comes back
+    await saveBuildingOverheads(actor(admin), v, [{ propertyId: prop.id, account: '62401', amount: 5555, dueMonth: null }]);
+    const again = await uploadInputTemplate('building-overheads', v, await edited(6666), true, [], []);
+    check('7. upload: changed again since the preview, nothing is saved', !!again.again && (await amountNow()) === 5555, JSON.stringify({ again: again.again, now: await amountNow() }));
+  }
+
   console.log(failures.length ? `\n${failures.length} check(s) failed` : '\nall checks passed');
   if (failures.length) process.exitCode = 1;
 }

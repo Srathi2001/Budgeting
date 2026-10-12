@@ -4,17 +4,23 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { fmt } from '@/lib/format';
+import { ConflictList } from '@/components/template-buttons';
 import { uploadFmTemplate, type FmUploadResult } from './actions';
 
 export function FmImport({ versionId, onClose }: { versionId: number; onClose: () => void }) {
   const router = useRouter();
   const [form, setForm] = useState<FormData | null>(null);
   const [res, setRes] = useState<FmUploadResult | null>(null);
+  // conflicting lines the uploader takes from the file (the rest keep the tool's values)
+  const [mine, setMine] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const done = !!res?.saved;
+  const conflicts = res?.conflicts ?? [];
+  const toApply = (res?.changes.length ?? 0) + conflicts.filter((c) => mine.has(c.id)).length;
 
   const choose = (e: React.ChangeEvent<HTMLInputElement>) => {
     setRes(null);
+    setMine(new Set());
     const file = e.target.files?.[0];
     if (!file) return setForm(null);
     const f = new FormData();
@@ -25,8 +31,9 @@ export function FmImport({ versionId, onClose }: { versionId: number; onClose: (
   const apply = () =>
     form &&
     start(async () => {
-      setRes(await uploadFmTemplate(versionId, form, true));
-      router.refresh();
+      const r = await uploadFmTemplate(versionId, form, true, [...mine], conflicts.map((c) => c.id));
+      setRes(r);
+      if (!r.again) router.refresh();
     });
 
   return (
@@ -37,7 +44,8 @@ export function FmImport({ versionId, onClose }: { versionId: number; onClose: (
         {pending && <span>{form && res ? 'Saving…' : 'Reading…'}</span>}
         {res && !res.error && !done && (
           <span>
-            {res.changes.length} change{res.changes.length === 1 ? '' : 's'} · {res.errors.length} rejected
+            {res.changes.length} change{res.changes.length === 1 ? '' : 's'}
+            {conflicts.length ? ` · ${conflicts.length} changed in the tool too` : ''} · {res.errors.length} rejected
           </span>
         )}
         {done && (
@@ -49,14 +57,24 @@ export function FmImport({ versionId, onClose }: { versionId: number; onClose: (
         {res?.error && <span className="text-red-600">{res.error}</span>}
         <span className="ml-auto" />
         {res && !res.error && !done && (
-          <button className="btn-primary" disabled={pending || !res.changes.length} onClick={apply}>
-            Apply {res.changes.length} change{res.changes.length === 1 ? '' : 's'}
+          <button className="btn-primary" disabled={pending || !toApply} onClick={apply}>
+            Apply {toApply} change{toApply === 1 ? '' : 's'}
           </button>
         )}
         <button className="btn" onClick={onClose}>
           Close
         </button>
       </div>
+
+      {res?.again && <p className="mt-2 text-red-600">Lines changed again in the tool since this preview. Nothing was saved: check the list and apply again.</p>}
+      {conflicts.length > 0 && !done && (
+        <ConflictList conflicts={conflicts.map((c) => ({ id: c.id, row: c.facility, header: c.detail, from: c.from, to: c.to, by: c.by, at: c.at }))} mine={mine} setMine={setMine} />
+      )}
+      {(res?.kept ?? 0) > 0 && !done && (
+        <p className="mt-2 text-xs text-slate-600">
+          {res!.kept} line{res!.kept === 1 ? '' : 's'} had fields you left as downloaded that were changed in the tool since: the tool’s values stay.
+        </p>
+      )}
 
       {res && !res.error && (res.changes.length > 0 || res.errors.length > 0) && (
         <div className="mt-3 grid gap-3 xl:grid-cols-2">

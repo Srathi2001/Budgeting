@@ -4,9 +4,47 @@
 // on the left, one record on the right half with its fields grouped in sections, Save / Cancel at the
 // bottom, ↑ ↓ to move between records, and a prompt before unsaved changes are dropped.
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/ui/dialog';
-import { fmt } from '@/lib/format';
+import { fmt, fmtDateTime } from '@/lib/format';
+import { lastUpdated } from '@/app/(app)/history-actions';
+
+export type HistoryQuery = Parameters<typeof lastUpdated>[0];
+
+/** who changed the record last and when (the change history), read when the form opens and after each save */
+function useLastUpdated(q: HistoryQuery | undefined, saving: boolean) {
+  const [updated, setUpdated] = useState<{ by: string | null; at: string } | null>(null);
+  const key = q ? JSON.stringify(q) : '';
+  const wasSaving = useRef(saving);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    // a save just finished: read it again
+    if (wasSaving.current && !saving) setTick((t) => t + 1);
+    wasSaving.current = saving;
+  }, [saving]);
+  useEffect(() => {
+    if (!key) return;
+    let live = true;
+    lastUpdated(JSON.parse(key) as HistoryQuery)
+      .then((r) => live && setUpdated(r))
+      .catch(() => live && setUpdated(null));
+    return () => {
+      live = false;
+    };
+  }, [key, tick]);
+  return key ? updated : null;
+}
+
+/** "Last updated by … on …" of a record, for forms with a layout of their own */
+export function LastUpdated({ history, saving }: { history: HistoryQuery; saving: boolean }) {
+  const updated = useLastUpdated(history, saving);
+  if (!updated) return null;
+  return (
+    <div className="truncate text-xs text-slate-500">
+      Last updated{updated.by ? ` by ${updated.by}` : ''} on {fmtDateTime(updated.at)}
+    </div>
+  );
+}
 
 // left rule by cell state, never colour: ink where you enter values, gray for fixed, hairline for calculated
 const TONE = { fixed: 'var(--control-border)', input: 'var(--ink)', calc: 'var(--line)' } as const;
@@ -203,10 +241,13 @@ export function RecordForm({
   onNext,
   onDelete,
   deleteLabel = 'Delete',
+  history,
   children,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
+  /** the record in the change history: the form shows who changed it last, and when */
+  history?: HistoryQuery;
   flags?: string[];
   canEdit: boolean;
   dirty: number;
@@ -222,6 +263,7 @@ export function RecordForm({
   children: ReactNode;
 }) {
   const [leaving, setLeaving] = useState<(() => void) | null>(null);
+  const updated = useLastUpdated(history, saving);
   const confirmLeave = (go?: () => void) => () => {
     if (!go) return;
     if (dirty) setLeaving(() => go);
@@ -248,6 +290,11 @@ export function RecordForm({
             <div className="truncate text-xs text-slate-500">
               {subtitle}
               {!canEdit && ' · read only'}
+            </div>
+          )}
+          {updated && (
+            <div className="truncate text-xs text-slate-500">
+              Last updated{updated.by ? ` by ${updated.by}` : ''} on {fmtDateTime(updated.at)}
             </div>
           )}
           <div className="mt-1 flex items-center gap-3 text-[11px] text-slate-600" aria-label="Field legend">

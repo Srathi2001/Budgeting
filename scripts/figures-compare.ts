@@ -32,6 +32,7 @@ function diff(x: unknown, y: unknown, path: string, out: string[], limit = 8) {
   const xo = x as Record<string, unknown>;
   const yo = y as Record<string, unknown>;
   for (const k of new Set([...Object.keys(xo), ...Object.keys(yo)])) {
+    if (ignore?.test(`${path}.${k}`)) continue;
     if (!(k in yo)) out.push(`${path}.${k}: removed`);
     else if (!(k in xo)) out.push(`${path}.${k}: added`);
     else diff(xo[k], yo[k], `${path}.${k}`, out, limit);

@@ -13,6 +13,8 @@ const Changes = z
       account: z.string().regex(/^\d{5}$/),
       period: z.enum(OI_INPUT as [OiPeriod, ...OiPeriod[]]),
       amount: z.number().finite().nullable(),
+      // what the user saw (lib/conflict.ts)
+      seen: z.number().finite().nullable().optional(),
     }),
   )
   .max(500);

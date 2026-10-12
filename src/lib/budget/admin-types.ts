@@ -269,10 +269,21 @@ export interface AdminData {
 }
 
 export type PayrollField = 'headcount' | 'ctc' | 'newHeadcount' | 'newCtc' | 'capPct' | 'mjnhPct' | 'asrePct' | 'seniorCtc';
-export type AdminChange =
+export type AdminChange = (
   | { kind: 'payroll'; dept: string; field: PayrollField; value: number | null }
   | { kind: 'admin'; dept: string; account: string; entity: string; value: number | null }
-  | { kind: 'fee'; fee: FeeKind; entity: FeeEntity; field: 'rate' | 'base'; value: number | null };
+  | { kind: 'fee'; fee: FeeKind; entity: FeeEntity; field: 'rate' | 'base'; value: number | null }
+) & {
+  /** the stored value the user saw (lib/conflict.ts): a figure someone else changed since is not overwritten */
+  seen?: number | null;
+};
+
+/** the stored value a change replaces, as the page has it (what the user saw) */
+export function storedAdminValue(d: AdminData, c: AdminChange): number | null {
+  if (c.kind === 'payroll') return d.payroll.find((r) => r.dept === c.dept)?.[c.field] ?? null;
+  if (c.kind === 'admin') return d.admin.find((r) => r.dept === c.dept && r.account === c.account)?.b[c.entity] ?? null;
+  return d.fees.find((r) => r.fee === c.fee && r.entity === c.entity)?.[c.field] ?? null;
+}
 
 /**
  * A department's payroll budget and how it splits under the 2026 rules (PayrollxCost): `oh` is the admin

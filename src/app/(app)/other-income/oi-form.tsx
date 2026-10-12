@@ -69,7 +69,8 @@ export function OiForm({
     start(async () => {
       const changes: OiChange[] = Object.entries(d.changes).map(([key, amount]) => {
         const [account, period] = key.split('|');
-        return { scope: block.scope, account, period: period as OiPeriod, amount: amount ?? null };
+        // with the figure the user saw: a cell someone else changed meanwhile is not overwritten
+        return { scope: block.scope, account, period: period as OiPeriod, amount: amount ?? null, seen: stored[key] ?? null };
       });
       // one at a time, so what was taken is shown even when one is refused
       const ok: OiChange[] = [];
@@ -91,6 +92,7 @@ export function OiForm({
     <RecordForm
       title={block.kind === 'G' ? `General · ${block.buCode} ${block.buName}` : `${block.code} · ${block.name}`}
       subtitle={[block.kind === 'G' ? 'Company level (Finance)' : block.buName, block.pm].filter(Boolean).join(' · ')}
+      history={block.kind === 'G' ? { entity: 'other_income', versionId, entityIdHas: `${block.scope}|` } : { entity: 'other_income', versionId, propertyId: block.propertyId! }}
       canEdit={canEdit}
       dirty={d.dirty}
       saving={saving}

@@ -10,6 +10,7 @@ import { and, eq, gte, inArray, like, lte, max, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { canEditProperty, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { writeGuard } from '@/lib/write-guard';
+import { clash } from '@/lib/conflict';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { BOH_ACCOUNT, BOH_ACCOUNTS, CONTRACT_KIND_OF, phase, type BohBlock, type BohCalc, type BohChange, type BohLine, type BohRow } from './boh-types';
 import { referenceBudget } from './reference';
@@ -255,6 +256,16 @@ export async function loadBuildingOverheads(version: schema.BudgetVersion, props
     finEditable: finEditable.has(p.id),
     rows: BOH_ACCOUNTS.map((a) => cellOf(ctx, p.id, a.code).row),
   }));
+  // who entered each amount last, and when (shown on hover)
+  const entered = ids.length
+    ? await db
+        .select({ propertyId: schema.bohBudget.propertyId, account: schema.bohBudget.account, at: schema.bohBudget.updatedAt, by: schema.users.name })
+        .from(schema.bohBudget)
+        .leftJoin(schema.users, eq(schema.users.id, schema.bohBudget.updatedBy))
+        .where(and(eq(schema.bohBudget.versionId, version.id), inArray(schema.bohBudget.propertyId, ids)))
+    : [];
+  const updated = new Map(entered.map((e) => [`${e.propertyId}|${e.account}`, { by: e.by, at: e.at.toISOString() }]));
+  for (const b of blocks) for (const r of b.rows) if (updated.has(`${b.propertyId}|${r.account}`)) r.updated = updated.get(`${b.propertyId}|${r.account}`);
   // last year's approved budget, reference only (2026B from the 2026 workbook)
   const ref = await referenceBudget(version.year - 1, 'boh', ids);
   for (const b of blocks) {
@@ -329,11 +340,24 @@ export async function saveBuildingOverheads(user: Actor, versionId: number, chan
       .where(and(eq(b.versionId, versionId), inArray(b.propertyId, [...new Set(todo.map((t) => t.p.id))]), inArray(b.account, [...new Set(todo.map((t) => t.c.account))])));
     // each cell as it stands while the changes are applied in order (a cell changed twice: the second sees the first)
     const state = new Map<string, Cell>(rows.map((r) => [`${r.propertyId}|${r.account}`, { amount: r.amount, dueMonth: r.dueMonth }]));
+    const stored = new Map(state);
     const upserts = new Map<string, typeof b.$inferInsert>();
     const deletes = new Map<string, { propertyId: number; account: string }>();
     const trail: (typeof schema.auditLog.$inferInsert)[] = [];
-    for (const { p, c, after } of todo) {
+    for (const { p, c, acct, after } of todo) {
       const k = `${p.id}|${c.account}`;
+      // a cell someone else changed after the user loaded it is left as it is (lib/conflict.ts)
+      if (c.seen) {
+        const now = stored.get(k) ?? null;
+        const was = { amount: now?.amount ?? null, dueMonth: now?.dueMonth ?? null };
+        const mine = { amount: after?.amount ?? null, dueMonth: after?.dueMonth ?? null };
+        const seen = { amount: c.seen.amount ?? null, dueMonth: c.seen.amount === null ? null : (c.seen.dueMonth ?? null) };
+        const message = await clash(tx, user.id, `${p.code} ${acct.name}`, { entity: 'boh_budget', entityId: k }, seen, was, mine, { show: [was.amount, mine.amount] });
+        if (message) {
+          errors.push(message);
+          continue;
+        }
+      }
       const before = state.get(k) ?? null;
       if ((before?.amount ?? null) === (after?.amount ?? null) && (before?.dueMonth ?? null) === (after?.dueMonth ?? null)) continue;
       if (!after) {

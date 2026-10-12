@@ -7,6 +7,7 @@ import { db, schema } from '@/db';
 import { canEditProperty, entersData, isFinance, type EditCheck } from '@/lib/auth/permissions';
 import type { Actor } from '@/lib/auth/permissions';
 import { writeGuard } from '@/lib/write-guard';
+import { clash } from '@/lib/conflict';
 import { OI_ACCOUNT, OI_INPUT, OI_STORED, oiInput, type OiBlock, type OiChange, type OiPeriod } from './other-income-types';
 import { managementFees } from './admin';
 import { referenceBudget } from './reference';
@@ -54,11 +55,17 @@ export async function loadOtherIncome(version: schema.BudgetVersion, user: Actor
     }
   }
 
-  const stored = await db.select().from(schema.otherIncome).where(eq(schema.otherIncome.versionId, version.id));
-  for (const r of stored) {
+  const stored = await db
+    .select({ r: schema.otherIncome, by: schema.users.name })
+    .from(schema.otherIncome)
+    .leftJoin(schema.users, eq(schema.users.id, schema.otherIncome.updatedBy))
+    .where(eq(schema.otherIncome.versionId, version.id));
+  for (const { r, by } of stored) {
     const b = blocks.get(r.scope);
     if (!b) continue;
     (b.values[r.account] ??= {})[r.period as OiPeriod] = r.amount;
+    // who entered it last, and when (shown on hover)
+    (b.updated ??= {})[`${r.account}|${r.period}`] = { by, at: r.updatedAt.toISOString() };
   }
 
   // maintenance service fee from the lease calculation
@@ -182,11 +189,21 @@ export async function saveOtherIncome(user: Actor, versionId: number, changes: O
     // each cell as it stands while the changes are applied in order (a cell changed twice: the second sees the first)
     const keyOf = (scope: string, account: string, period: string) => `${scope}|${account}|${period}`;
     const state = new Map<string, number | null>(rows.map((r) => [keyOf(r.scope, r.account, r.period), r.amount]));
+    const stored = new Map(state);
     const upserts = new Map<string, typeof t.$inferInsert>();
     const deletes = new Map<string, OiChange>();
     const trail: (typeof schema.auditLog.$inferInsert)[] = [];
     for (const { c, buCode, propertyId } of todo) {
       const k = keyOf(c.scope, c.account, c.period);
+      // a cell someone else changed after the user loaded it is left as it is (lib/conflict.ts)
+      if (c.seen !== undefined) {
+        const what = propertyId !== null ? `${props.get(propertyId)?.code} ${OI_ACCOUNT.get(c.account)?.name}` : `General ${buCode} ${OI_ACCOUNT.get(c.account)?.name}`;
+        const message = await clash(tx, user.id, what, { entity: 'other_income', entityId: k }, c.seen, stored.get(k) ?? null, c.amount);
+        if (message) {
+          errors.push(message);
+          continue;
+        }
+      }
       const before = state.has(k) ? state.get(k)! : null;
       if (before === c.amount) continue;
       if (c.amount === null) {

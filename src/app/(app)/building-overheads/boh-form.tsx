@@ -63,7 +63,8 @@ export function BohForm({
           continue;
         }
         const c: BohChange = { propertyId: block.propertyId, account, amount, dueMonth };
-        const res = await saveBuildingOverheadCells(versionId, [c]);
+        // with the figures the user saw: a cell someone else changed meanwhile is not overwritten
+        const res = await saveBuildingOverheadCells(versionId, [{ ...c, seen: { amount: r.entered, dueMonth: r.dueMonth } }]);
         if (res.errors.length) errors.push(...res.errors);
         else ok.push(c);
       }
@@ -108,6 +109,7 @@ export function BohForm({
     <RecordForm
       title={`${block.code} · ${block.name}`}
       subtitle={[block.buCode, block.pm].filter(Boolean).join(' · ')}
+      history={{ entity: 'boh_budget', versionId, propertyId: block.propertyId }}
       canEdit={canEdit}
       dirty={d.dirty}
       saving={saving}

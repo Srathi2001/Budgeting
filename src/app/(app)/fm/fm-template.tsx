@@ -205,7 +205,10 @@ function FacilityForm({ data, d, onClose, onPrev, onNext }: { data: FmPageData; 
       month: spread || !entry.month ? null : Number(entry.month),
       remarks: entry.remarks || null,
     };
-    run(() => saveFmLines(version.id, d.id, { lines: [line], deleted: [] }), () => setEntry(null));
+    // an edited line goes with the line as the user saw it: a field someone else changed meanwhile is not overwritten
+    const was = entry.id !== null ? d.lines.find((l) => l.id === entry.id) : undefined;
+    const seen = was ? { workType: was.workType, element: was.element, subElement: was.subElement, description: was.description, businessNeed: was.businessNeed, kind: was.kind, amount: was.amount, month: was.month, remarks: was.remarks } : undefined;
+    run(() => saveFmLines(version.id, d.id, { lines: [{ ...line, ...(seen ? { seen } : {}) }], deleted: [] }), () => setEntry(null));
   };
   const { confirm, element: confirmEl } = useConfirm();
   const remove = async (l: FmLineRow) => {

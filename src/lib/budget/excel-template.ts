@@ -258,7 +258,23 @@ export async function buildTemplate(rows: MasterRow[], ctx: { versionName: strin
   });
   ws.autoFilter = { from: { row: HEADER_ROW, column: 1 }, to: { row: HEADER_ROW, column: cols.length } };
   await ws.protect(PASSWORD, { selectLockedCells: true, selectUnlockedCells: true, formatColumns: true, autoFilter: true, sort: false });
+
+  // ---- each line's inputs as downloaded (hidden): on upload, a field the user left as it was is not taken
+  // back over a change someone else made in the tool meanwhile, and a field both changed is asked about
+  const orig = wb.addWorksheet(ORIGINAL, { state: 'veryHidden' });
+  orig.addRow([DOWNLOADED, new Date().toISOString()]);
+  for (const r of rows) orig.addRow([r.lineId, JSON.stringify(originalOf(r, ctx.year))]);
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+const ORIGINAL = 'Original';
+const DOWNLOADED = '__downloaded';
+
+/** a line's input fields as the upload compares them (the tool's values, outcome and RERA range included) */
+function originalOf(r: MasterRow, year: number): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const c of templateColumns(year).filter((x) => x.input)) out[c.key] = c.key === 'outcome' ? outcomeOf(r) : ((r as unknown as Record<string, unknown>)[c.key] ?? null);
+  return out;
 }
 
 // ---- upload --------------------------------------------------------------------------------------
@@ -282,23 +298,36 @@ function cellValue(v: ExcelJS.CellValue): unknown {
   return v;
 }
 
-/** Reads the input columns of an uploaded template. */
-export async function readTemplate(data: ArrayBuffer, year: number): Promise<{ rows: UploadRow[]; error?: string }> {
+/**
+ * Reads the input columns of an uploaded template, and each line's inputs as they were downloaded
+ * (`original`; empty for templates from before 12-Oct-2026).
+ */
+export async function readTemplate(data: ArrayBuffer, year: number): Promise<{ rows: UploadRow[]; original: Map<number, Record<string, unknown>>; error?: string }> {
   const wb = new ExcelJS.Workbook();
+  const original = new Map<number, Record<string, unknown>>();
   try {
     await wb.xlsx.load(data);
   } catch {
-    return { rows: [], error: 'Not an Excel (.xlsx) file' };
+    return { rows: [], original, error: 'Not an Excel (.xlsx) file' };
   }
+  wb.getWorksheet(ORIGINAL)?.eachRow((row) => {
+    const id = Number(row.getCell(1).value);
+    if (!Number.isInteger(id) || id <= 0) return;
+    try {
+      original.set(id, JSON.parse(String(row.getCell(2).value ?? '{}')) as Record<string, unknown>);
+    } catch {
+      // a damaged row: that line is compared without its original
+    }
+  });
   const ws = wb.getWorksheet(SHEET);
-  if (!ws) return { rows: [], error: `No “${SHEET}” sheet: upload the template downloaded from the tool` };
+  if (!ws) return { rows: [], original, error: `No “${SHEET}” sheet: upload the template downloaded from the tool` };
   const cols = templateColumns(year).filter((c) => c.input || c.key === 'lineId');
   const at = new Map<string, number>();
   ws.getRow(HEADER_ROW).eachCell((cell, n) => {
     const c = cols.find((x) => x.header === String(cell.value ?? '').trim());
     if (c) at.set(c.key, n);
   });
-  if (!at.has('lineId')) return { rows: [], error: 'The Line ID column is missing: upload the template downloaded from the tool' };
+  if (!at.has('lineId')) return { rows: [], original, error: 'The Line ID column is missing: upload the template downloaded from the tool' };
   const rows: UploadRow[] = [];
   ws.eachRow((row, n) => {
     if (n <= HEADER_ROW) return;
@@ -308,7 +337,7 @@ export async function readTemplate(data: ArrayBuffer, year: number): Promise<{ r
     for (const c of cols) if (c.input && at.has(c.key)) values[c.key] = cellValue(row.getCell(at.get(c.key)!).value);
     rows.push({ excelRow: n, lineId: id, values });
   });
-  return { rows };
+  return { rows, original };
 }
 
 export interface UploadChange {
@@ -335,14 +364,33 @@ const day = (v: unknown): string | null | 'bad' => {
   return d ? `${d[3]}-${d[2].padStart(2, '0')}-${d[1].padStart(2, '0')}` : 'bad';
 };
 
+/** a field changed both in the file and in the tool since the download (`from`: the tool's value now) */
+export interface UploadConflict extends UploadChange {
+  id: string;
+  /** who changed it in the tool, and when (filled in by the upload) */
+  by?: string | null;
+  at?: string | null;
+}
+/** a field left as downloaded that someone else changed in the tool meanwhile: the tool's value stays */
+export interface UploadKept {
+  unit: string;
+  field: string;
+}
+
+const sameValue = (a: unknown, b: unknown) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.005 : JSON.stringify(a ?? null) === JSON.stringify(b ?? null));
+
 /**
  * Compares uploaded inputs with the current lines. Returns the patches to save, the RERA ranges to
- * save, a readable list of changes, and errors (values that can't be read; locked cells changed).
+ * save, a readable list of changes, and errors (values that can't be read; locked cells changed). With the
+ * inputs as downloaded (`original`): a field the user left as it was and the tool changed meanwhile is kept
+ * (`kept`); a field both changed is a conflict, taken from the file only when its id is in `useMine`.
  */
-export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow>, year: number) {
+export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow>, year: number, original = new Map<number, Record<string, unknown>>(), useMine = new Set<string>()) {
   const cols = templateColumns(year).filter((c) => c.input);
   const patches = new Map<number, RowPatch>();
   const changes: UploadChange[] = [];
+  const conflicts: UploadConflict[] = [];
+  const kept: UploadKept[] = [];
   const errors: { excelRow: number; unit: string; message: string }[] = [];
   const rera = new Map<string, { propertyId: number; bedroom: string; min: number | null; max: number | null; excelRow: number; unit: string }>();
 
@@ -356,6 +404,21 @@ export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow
     const note = (field: string, from: unknown, to: unknown) => changes.push({ excelRow: u.excelRow, lineId: r.lineId, unit: r.unitCode, field, from: show(from), to: show(to) });
     const bad = (field: string, v: unknown) => errors.push({ excelRow: u.excelRow, unit: r.unitCode, message: `${field}: can’t read “${show(v)}”` });
     let reraMin: number | null = r.reraMin, reraMax: number | null = r.reraMax, reraTouched = false;
+    const orig = original.get(u.lineId);
+    /** the file differs from the tool: kept as the tool has it, a conflict, or a change ('change') */
+    const sort = (key: string, field: string, before: unknown, next: unknown): 'kept' | 'conflict' | 'change' => {
+      if (!orig || !(key in orig)) return 'change';
+      if (sameValue(next, orig[key])) {
+        kept.push({ unit: r.unitCode, field });
+        return 'kept';
+      }
+      const id = `${u.lineId}|${key}`;
+      if (!sameValue(before, orig[key]) && !useMine.has(id)) {
+        conflicts.push({ id, excelRow: u.excelRow, lineId: r.lineId, unit: r.unitCode, field, from: show(before), to: show(next) });
+        return 'conflict';
+      }
+      return 'change';
+    };
 
     for (const c of cols) {
       if (!(c.key in u.values)) continue;
@@ -369,6 +432,7 @@ export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow
           continue;
         }
         if (o === outcomeOf(r)) continue;
+        if (sort('outcome', 'Outcome', outcomeOf(r), o) !== 'change') continue;
         if (!open) {
           errors.push({ excelRow: u.excelRow, unit: r.unitCode, message: 'Outcome is fixed on this line' });
           continue;
@@ -412,6 +476,7 @@ export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow
       }
       const same = typeof next === 'number' && typeof before === 'number' ? Math.abs(next - before) < 0.005 : JSON.stringify(next) === JSON.stringify(before);
       if (same) continue;
+      if (sort(c.key, c.header, before, next) !== 'change') continue;
       if (!open) {
         errors.push({ excelRow: u.excelRow, unit: r.unitCode, message: `${c.header} is fixed on this line` });
         continue;
@@ -438,5 +503,5 @@ export function diffUpload(uploaded: UploadRow[], current: Map<number, MasterRow
     }
     if (Object.keys(patch).length) patches.set(r.lineId, patch);
   }
-  return { patches, rera: [...rera.values()], changes, errors };
+  return { patches, rera: [...rera.values()], changes, conflicts, kept, errors };
 }

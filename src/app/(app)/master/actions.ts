@@ -7,12 +7,13 @@ import { requireUser, canEditProperty, editablePropertyIds, visibleProperties } 
 import { recalcLines } from '@/lib/budget/calc';
 import { writeGuard } from '@/lib/write-guard';
 import { loadMasterRows } from '@/lib/budget/master';
-import { applyLineChanges } from '@/lib/budget/save';
-import { saveReraRange } from '@/lib/budget/rera';
-import { diffUpload, readTemplate, type UploadChange } from '@/lib/budget/excel-template';
+import { applyLineChanges, applyLineChangesIn } from '@/lib/budget/save';
+import { saveReraRange, saveReraRangeIn } from '@/lib/budget/rera';
+import { diffUpload, readTemplate, type UploadChange, type UploadConflict, type UploadKept } from '@/lib/budget/excel-template';
+import { lastChange } from '@/lib/conflict';
 import type { RowPatch, SaveResult, MasterRow } from '@/lib/budget/master-types';
 
-export async function saveLines(versionId: number, changes: { lineId: number; patch: RowPatch }[]): Promise<SaveResult> {
+export async function saveLines(versionId: number, changes: { lineId: number; patch: RowPatch; seen?: Record<string, unknown> }[]): Promise<SaveResult> {
   const user = await requireUser();
   return applyLineChanges(user, versionId, changes);
 }
@@ -111,49 +112,80 @@ export interface TemplateUploadResult {
   error?: string;
   changes: UploadChange[];
   errors: { excelRow: number; unit: string; message: string }[];
+  /** fields changed both in the file and in the tool since the download: the uploader chooses */
+  conflicts?: UploadConflict[];
+  /** fields left as downloaded that someone else changed meanwhile: their value stays */
+  kept?: UploadKept[];
+  /** apply only: fields changed again since the preview; nothing was saved, the preview is shown again */
+  again?: boolean;
   /** lines and RERA ranges saved (apply only) */
   saved?: { lines: number; rera: number };
 }
 
 /**
  * Lease Budget input template upload. Without `apply` it only reports what would change; with
- * `apply` the changes go through the same save path as the grid.
+ * `apply` the changes go through the same save path as the grid, in one transaction (RERA ranges and
+ * lines land together). `useMine`: the conflicts the uploader takes from the file; `previewed`: the
+ * conflicts the preview showed (a new one at apply time sends the preview back).
  */
-export async function uploadTemplate(versionId: number, form: FormData, apply: boolean): Promise<TemplateUploadResult> {
+export async function uploadTemplate(versionId: number, form: FormData, apply: boolean, useMine: string[] = [], previewed: string[] = []): Promise<TemplateUploadResult> {
   const user = await requireUser();
   const file = form.get('file');
   if (!(file instanceof File) || !file.size) return { error: 'Choose the filled-in template (.xlsx)', changes: [], errors: [] };
   const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
   if (!version) return { error: 'Version not found', changes: [], errors: [] };
-  const { rows: uploaded, error } = await readTemplate(await file.arrayBuffer(), version.year);
+  const { rows: uploaded, original, error } = await readTemplate(await file.arrayBuffer(), version.year);
   if (error) return { error, changes: [], errors: [] };
   if (!uploaded.length) return { error: 'No lines found in the “Lease Budget” sheet', changes: [], errors: [] };
 
   const editable = await editablePropertyIds(user, version, 'PM');
   const visible = new Set((await visibleProperties(user)).map((p) => p.id));
   const current = (await loadMasterRows(versionId, { lineIds: uploaded.map((u) => u.lineId), editableProperties: editable })).filter((r) => visible.has(r.propertyId));
-  const diff = diffUpload(uploaded, new Map(current.map((r) => [r.lineId, r])), version.year);
-  if (!apply) return { changes: diff.changes, errors: diff.errors };
+  const byLine = new Map(current.map((r) => [r.lineId, r]));
+  const diff = diffUpload(uploaded, byLine, version.year, original, new Set(useMine));
+  // who changed the conflicting fields in the tool, and when
+  const conflicts = await Promise.all(
+    diff.conflicts.map(async (c) => {
+      const key = c.id.split('|')[1];
+      const field = key === 'outcome' ? 'renew1' : key === 'reraMin' || key === 'reraMax' ? undefined : key;
+      const who = field ? await lastChange(db, 'lease_line', String(c.lineId), field) : null;
+      return { ...c, by: who?.who ?? null, at: who?.at.toISOString() ?? null };
+    }),
+  );
+  const result = { changes: diff.changes, errors: diff.errors, conflicts, kept: diff.kept };
+  if (!apply) return result;
+  // changed again since the preview: show it again, save nothing
+  const known = new Set([...previewed, ...useMine]);
+  if (conflicts.some((c) => !known.has(c.id))) return { ...result, again: true };
 
   const errors = [...diff.errors];
   const rowOf = new Map(uploaded.map((u) => [u.lineId, u.excelRow]));
   let reraSaved = 0;
-  for (const r of diff.rera) {
-    const check = await canEditProperty(user, versionId, r.propertyId);
-    const res = check.ok ? await saveReraRange(user, versionId, r.propertyId, r.bedroom, r.min, r.max) : { error: check.reason };
-    if (res.error) errors.push({ excelRow: r.excelRow, unit: r.unit, message: `RERA: ${res.error}` });
-    else reraSaved++;
-  }
-  const res = await applyLineChanges(user, versionId, [...diff.patches].map(([lineId, patch]) => ({ lineId, patch })));
-  for (const e of res.errors) errors.push({ excelRow: rowOf.get(e.lineId) ?? 0, unit: current.find((r) => r.lineId === e.lineId)?.unitCode ?? String(e.lineId), message: e.message });
-  await db.insert(schema.auditLog).values({
-    userId: user.id,
-    versionId,
-    entity: 'template_upload',
-    action: 'apply',
-    changes: { file: file.name, lines: diff.patches.size - res.errors.length, rera: reraSaved, rejected: errors.length },
+  // with the values the tool has now (read for this comparison): a field changed in the moment before the
+  // save is reported, not overwritten
+  const changes = [...diff.patches].map(([lineId, patch]) => {
+    const r = byLine.get(lineId) as unknown as Record<string, unknown>;
+    return { lineId, patch, seen: Object.fromEntries(Object.keys(patch).map((k) => [k, r[k] ?? null])) };
   });
-  return { changes: diff.changes, errors, saved: { lines: diff.patches.size - res.errors.length, rera: reraSaved } };
+  const lineErrors = await db.transaction(async (tx) => {
+    await writeGuard(tx, versionId, { leases: true });
+    for (const r of diff.rera) {
+      const res = await saveReraRangeIn(tx, user, versionId, r.propertyId, r.bedroom, r.min, r.max);
+      if (res.error) errors.push({ excelRow: r.excelRow, unit: r.unit, message: `RERA: ${res.error}` });
+      else reraSaved++;
+    }
+    const res = await applyLineChangesIn(tx, user, versionId, changes);
+    await tx.insert(schema.auditLog).values({
+      userId: user.id,
+      versionId,
+      entity: 'template_upload',
+      action: 'apply',
+      changes: { file: file.name, lines: diff.patches.size - res.length, rera: reraSaved, rejected: errors.length + res.length },
+    });
+    return res;
+  });
+  for (const e of lineErrors) errors.push({ excelRow: rowOf.get(e.lineId) ?? 0, unit: byLine.get(e.lineId)?.unitCode ?? String(e.lineId), message: e.message });
+  return { ...result, errors, saved: { lines: diff.patches.size - lineErrors.length, rera: reraSaved } };
 }
 
 export async function removeLine(versionId: number, lineId: number): Promise<{ error?: string }> {

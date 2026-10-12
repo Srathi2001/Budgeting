@@ -7,6 +7,7 @@ import { db, schema } from '@/db';
 import { entersData, type Actor } from '@/lib/auth/permissions';
 import { changedFields } from '@/lib/audit-diff';
 import { writeGuard } from '@/lib/write-guard';
+import { clash, sameValue } from '@/lib/conflict';
 import { contingencyMonths, depositYear, loanYear, DAY_BASES, FREQUENCIES, REPAYMENT_TYPES } from './treasury-calc';
 import type { EntityCost } from './admin';
 import type { EntityKey } from './group';
@@ -105,10 +106,16 @@ export async function saveTreasury(user: Actor, versionId: number, kind: Kind, i
     const i = parsed.error.issues[0];
     return { error: i ? `${i.path.join('.')}: ${i.message}` : 'Invalid input' };
   }
-  const { id, ...data } = parsed.data as { id: number | null } & Record<string, unknown>;
-  const events = kind === 'loan' ? ((data.events as { date: string; kind: string; amount: number }[]) ?? []) : [];
+  const { id, ...sent } = parsed.data as { id: number | null } & Record<string, unknown>;
+  let data = sent;
+  let events = kind === 'loan' ? ((data.events as { date: string; kind: string; amount: number }[]) ?? []) : [];
   if (kind === 'loan') delete data.events;
+  // the record as the user saw it (lib/conflict.ts): only what the user changed is written, and a field
+  // someone else changed meanwhile is not overwritten
+  const seenIn = (input as { seen?: unknown } | null)?.seen;
+  const seen = seenIn && typeof seenIn === 'object' ? (seenIn as Record<string, unknown>) : null;
   const table = TABLE[kind];
+  const entity = kind === 'loan' ? 'shareholder_loan' : kind === 'deposit' ? 'fixed_deposit' : 'contingency';
   let newId = id;
   await db.transaction(async (tx) => {
     // the version stays open until this commits (a lock waits for it)
@@ -118,6 +125,32 @@ export async function saveTreasury(user: Actor, versionId: number, kind: Kind, i
     if (id) {
       [before] = (await tx.select().from(table).where(and(eq(table.id, id), eq(table.versionId, versionId)))) as Record<string, unknown>[];
       if (!before) throw new Error('Record not found');
+      if (seen) {
+        const kept = { ...data };
+        for (const [k, v] of Object.entries(data)) {
+          const saw = seen[k] ?? null;
+          if (sameValue(v, saw)) {
+            kept[k] = before[k] ?? null; // not changed by the user: stays as stored
+            continue;
+          }
+          const message = await clash(tx, user.id, `${String(before.name ?? before.bank ?? before.description ?? '')} ${k}`.trim(), { entity, entityId: String(id), field: k }, saw, before[k], v);
+          if (message) throw new Error(message);
+        }
+        data = kept;
+        if (kind === 'loan') {
+          const old = (await tx.select().from(schema.loanEvents).where(eq(schema.loanEvents.loanId, id))).map((e) => ({ date: e.date, kind: e.kind, amount: e.amount }));
+          const saw = (seen.events as unknown[] | undefined) ?? [];
+          const shown = saw.map((e) => {
+            const x = e as { date: string; kind: string; amount: number };
+            return { date: x.date, kind: x.kind, amount: x.amount };
+          });
+          if (sameValue(events, shown)) events = old;
+          else {
+            const message = await clash(tx, user.id, `${String(before.name ?? '')} drawdowns and repayments`.trim(), { entity, entityId: String(id), field: 'events' }, shown, old, events, { show: [`${old.length} entries`, `${events.length} entries`] });
+            if (message) throw new Error(message);
+          }
+        }
+      }
       await tx.update(table).set({ ...data, updatedAt: new Date(), updatedBy: user.id }).where(eq(table.id, id));
     } else {
       const [row] = await tx.insert(table).values({ ...data, versionId, updatedBy: user.id } as never).returning({ id: table.id });
@@ -136,7 +169,7 @@ export async function saveTreasury(user: Actor, versionId: number, kind: Kind, i
     await tx.insert(schema.auditLog).values({
       userId: user.id,
       versionId,
-      entity: kind === 'loan' ? 'shareholder_loan' : kind === 'deposit' ? 'fixed_deposit' : 'contingency',
+      entity,
       entityId: String(newId),
       action: id ? 'update' : 'create',
       changes: { ...(before ? changedFields(before, data) : { from: null, to: data }), ...(eventsChange ? { events: eventsChange } : {}) },

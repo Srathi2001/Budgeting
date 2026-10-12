@@ -100,6 +100,8 @@ export interface OiBlock {
   calcB?: Record<string, number>;
   /** last year's approved budget by account (reference only, e.g. 2026B from the 2026 workbook) */
   prior?: Record<string, number>;
+  /** who entered each stored value last, and when, by `account|period` (shown on hover) */
+  updated?: Record<string, { by: string | null; at: string }>;
 }
 
 export interface OiChange {
@@ -107,6 +109,8 @@ export interface OiChange {
   account: string;
   period: OiPeriod;
   amount: number | null;
+  /** the stored amount the user saw (lib/conflict.ts): a cell someone else changed since is not overwritten */
+  seen?: number | null;
 }
 
 /** The value of one cell, with F and the calculated MF budget filled in. */

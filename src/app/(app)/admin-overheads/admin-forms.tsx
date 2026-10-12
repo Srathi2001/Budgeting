@@ -122,7 +122,9 @@ export function DeptForm({
     start(async () => {
       const changes: AdminChange[] = Object.entries(d.changes).map(([k, value]) => {
         const [kind, a, b] = k.split('|');
-        return kind === 'p' ? { kind: 'payroll', dept, field: a as PayrollField, value: value ?? null } : { kind: 'admin', dept, account: a, entity: b, value: value ?? null };
+        // with the figure the user saw: one someone else changed meanwhile is not overwritten
+        const seen = stored[k] ?? null;
+        return kind === 'p' ? { kind: 'payroll', dept, field: a as PayrollField, value: value ?? null, seen } : { kind: 'admin', dept, account: a, entity: b, value: value ?? null, seen };
       });
       const { ok, errors } = await send(versionId, changes);
       onSaved(ok);
@@ -138,6 +140,7 @@ export function DeptForm({
     <RecordForm
       title={`${dept} · ${deptName(dept)}`}
       subtitle="Department · Finance"
+      history={{ entity: 'admin_overheads', versionId, entityIdHas: `"dept":"${dept}"` }}
       canEdit={canEditPay || canEditOh}
       dirty={d.dirty}
       saving={saving}
@@ -231,13 +234,15 @@ export function FeeForm({ row, prior, versionId, year, locked, onSaved, onClose,
     <RecordForm
       title={`${fee.name} · ${who}`}
       subtitle={`Base: ${fee.base.toLowerCase()} · Finance`}
+      history={{ entity: 'admin_overheads', versionId, entityIdHas: `"fee":"${row.fee}","entity":"${row.entity}"` }}
       canEdit={!locked}
       dirty={d.dirty}
       saving={saving}
       error={error}
       onSave={() =>
         start(async () => {
-          const changes = (Object.keys(d.changes) as ('base' | 'rate')[]).map((field): AdminChange => ({ kind: 'fee', fee: row.fee, entity: row.entity, field, value: d.value[field] ?? null }));
+          // with the figure the user saw: one someone else changed meanwhile is not overwritten
+          const changes = (Object.keys(d.changes) as ('base' | 'rate')[]).map((field): AdminChange => ({ kind: 'fee', fee: row.fee, entity: row.entity, field, value: d.value[field] ?? null, seen: row[field] }));
           const { ok, errors } = await send(versionId, changes);
           onSaved(ok);
           if (errors.length) setError(errors[0]);

@@ -126,6 +126,8 @@ export interface BohRow {
   pb?: number | null;
   /** how the reference figure was budgeted, when it differs from the account (e.g. all insurance on one line) */
   pbNote?: string | null;
+  /** who entered the amount last, and when (shown on hover) */
+  updated?: { by: string | null; at: string };
 }
 
 export interface BohBlock {
@@ -149,6 +151,8 @@ export interface BohChange {
   account: string;
   amount: number | null;
   dueMonth: number | null;
+  /** the stored amount and month the user saw (lib/conflict.ts): a cell someone else changed since is not overwritten */
+  seen?: { amount: number | null; dueMonth: number | null };
 }
 
 /**

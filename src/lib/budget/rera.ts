@@ -2,7 +2,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { canEditProperty, type Actor } from '@/lib/auth/permissions';
-import { writeGuard } from '@/lib/write-guard';
+import { writeGuard, type Tx } from '@/lib/write-guard';
 import { recalcLines } from './calc';
 
 /**
@@ -17,46 +17,53 @@ export async function saveReraRange(
   min: number | null,
   max: number | null,
 ): Promise<{ lineIds?: number[]; error?: string }> {
+  // one lease save of the version at a time; the caller's permission check is repeated in here so it
+  // holds until this commits (a lock or a submission waits for it)
+  return db.transaction(async (tx) => {
+    await writeGuard(tx, versionId, { leases: true });
+    return saveReraRangeIn(tx, user, versionId, propertyId, bedroom, min, max);
+  });
+}
+
+/** The range inside a save's transaction that already holds writeGuard(…, { leases: true }). */
+export async function saveReraRangeIn(
+  tx: Tx,
+  user: Actor,
+  versionId: number,
+  propertyId: number,
+  bedroom: string,
+  min: number | null,
+  max: number | null,
+): Promise<{ lineIds?: number[]; error?: string }> {
   const code = bedroom.trim().toUpperCase();
   if (!code) return { error: 'The unit has no bedroom / RERA code' };
   if ((min === null) !== (max === null)) return { error: 'Enter both the low and the high rent, or clear both' };
   if (min !== null && max !== null && (min < 0 || max < 0)) return { error: 'RERA rents can’t be negative' };
   if (min !== null && max !== null && min > max) return { error: 'The low rent is above the high rent' };
-  const [property] = await db.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
+  const [property] = await tx.select().from(schema.properties).where(eq(schema.properties.id, propertyId));
   if (!property) return { error: 'Property not found' };
+  const check = await canEditProperty(user, versionId, propertyId, 'PM', tx);
+  if (!check.ok) return { error: check.reason };
 
-  let refused: string | null = null;
-  const lineIds = await db.transaction(async (tx) => {
-    // one lease save of the version at a time; the caller's permission check is repeated in here so it
-    // holds until this commits (a lock or a submission waits for it)
-    await writeGuard(tx, versionId, { leases: true });
-    const check = await canEditProperty(user, versionId, propertyId, 'PM', tx);
-    if (!check.ok) {
-      refused = check.reason;
-      return [];
-    }
-    const where =and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
-    const [before] = await tx.select().from(schema.reraIndex).where(where);
-    await tx.delete(schema.reraIndex).where(where);
-    if (min !== null && max !== null) await tx.insert(schema.reraIndex).values({ versionId, propertyCode: property.code, bedroom: code, min, max });
-    await tx.insert(schema.auditLog).values({
-      userId: user.id,
-      versionId,
-      propertyId,
-      entity: 'rera_index',
-      entityId: `${property.code}|${code}`,
-      action: min === null ? 'delete' : 'upsert',
-      changes: { from: before ? { min: before.min, max: before.max } : null, to: min === null ? null : { min, max } },
-    });
-    const lines = await tx
-      .select({ id: schema.leaseLines.id, bedroom: schema.units.bedroom })
-      .from(schema.leaseLines)
-      .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
-      .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId)));
-    const ids = lines.filter((l) => (l.bedroom ?? '').trim().toUpperCase() === code).map((l) => l.id);
-    if (ids.length) await recalcLines(tx, versionId, ids);
-    return ids;
+  const where = and(eq(schema.reraIndex.versionId, versionId), eq(schema.reraIndex.propertyCode, property.code), eq(schema.reraIndex.bedroom, code));
+  const [before] = await tx.select().from(schema.reraIndex).where(where);
+  await tx.delete(schema.reraIndex).where(where);
+  if (min !== null && max !== null) await tx.insert(schema.reraIndex).values({ versionId, propertyCode: property.code, bedroom: code, min, max });
+  await tx.insert(schema.auditLog).values({
+    userId: user.id,
+    versionId,
+    propertyId,
+    entity: 'rera_index',
+    entityId: `${property.code}|${code}`,
+    action: min === null ? 'delete' : 'upsert',
+    changes: { from: before ? { min: before.min, max: before.max } : null, to: min === null ? null : { min, max } },
   });
-  if (refused) return { error: refused };
-  return { lineIds };
+  const lines = await tx
+    .select({ id: schema.leaseLines.id, bedroom: schema.units.bedroom })
+    .from(schema.leaseLines)
+    .innerJoin(schema.units, eq(schema.units.id, schema.leaseLines.unitId))
+    .where(and(eq(schema.leaseLines.versionId, versionId), eq(schema.leaseLines.propertyId, propertyId)));
+  const ids = lines.filter((l) => (l.bedroom ?? '').trim().toUpperCase() === code).map((l) => l.id);
+  if (ids.length) await recalcLines(tx, versionId, ids);
+  return { lineIds: ids };
 }

@@ -200,7 +200,41 @@ export async function buildTemplate(t: Template, ctx: { versionName: string; use
     ws.autoFilter = { from: { row: HEADER_ROW, column: 2 }, to: { row: HEADER_ROW, column: cols.length } };
     await ws.protect(PASSWORD, { selectLockedCells: true, selectUnlockedCells: true, formatColumns: true, autoFilter: true, sort: false });
   }
+
+  // ---- the input cells as downloaded (hidden): on upload, a cell the user left as it was is not taken
+  // back over a change someone else made in the tool meanwhile, and a cell both changed is asked about
+  const orig = wb.addWorksheet(ORIGINAL, { state: 'veryHidden' });
+  orig.addRow([DOWNLOADED, new Date().toISOString()]);
+  for (const s of t.sheets)
+    for (const r of s.rows) {
+      const f = { ...s.rowFormulas, ...r.formulas };
+      for (const c of s.columns) if (c.input && r.open.includes(c.key) && !f[c.key]) orig.addRow([s.name, r.key, c.key, JSON.stringify(r.values[c.key] ?? null)]);
+    }
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** the hidden sheet with the input cells as downloaded */
+export const ORIGINAL = 'Original';
+const DOWNLOADED = '__downloaded';
+
+/** the input cells of an uploaded template as they were downloaded, by `sheet|key|column` (empty for older templates) */
+export function originalValues(wb: ExcelJS.Workbook): { values: Map<string, CellValue>; downloadedAt: string | null } {
+  const ws = wb.getWorksheet(ORIGINAL);
+  const values = new Map<string, CellValue>();
+  let downloadedAt: string | null = null;
+  ws?.eachRow((row) => {
+    const a = String(row.getCell(1).value ?? '');
+    if (a === DOWNLOADED) {
+      downloadedAt = String(row.getCell(2).value ?? '') || null;
+      return;
+    }
+    try {
+      values.set(`${a}|${row.getCell(2).value}|${row.getCell(3).value}`, JSON.parse(String(row.getCell(4).value ?? 'null')) as CellValue);
+    } catch {
+      // a damaged row: that cell is compared without its original
+    }
+  });
+  return { values, downloadedAt };
 }
 
 // ---- upload --------------------------------------------------------------------------------------
@@ -266,6 +300,25 @@ export interface TemplateError {
   row: string;
   message: string;
 }
+/**
+ * A cell changed both in the file and in the tool since the template was downloaded: `from` is the tool's
+ * value now (someone else's), `to` the file's. Kept as it is in the tool unless the uploader picks the file's.
+ */
+export interface TemplateConflict extends TemplateChange {
+  id: string;
+  /** who changed it in the tool, and when (when known) */
+  by?: string | null;
+  at?: string | null;
+}
+/** a cell left as downloaded that someone else changed in the tool meanwhile: the tool's value stays */
+export interface TemplateKept {
+  sheet: string;
+  row: string;
+  header: string;
+  /** the tool's value now */
+  value: CellValue;
+}
+export const conflictId = (c: Pick<TemplateChange, 'sheet' | 'key' | 'column'>) => `${c.sheet}|${c.key}|${c.column}`;
 
 const same = (a: CellValue, b: CellValue) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.005 : (a ?? null) === (b ?? null));
 const nameOf = (s: TplSheet, values: Record<string, unknown>) =>
@@ -275,15 +328,27 @@ const nameOf = (s: TplSheet, values: Record<string, unknown>) =>
     .filter((v) => v !== null && v !== undefined && v !== '')
     .join(' · ');
 
-/** Reads an uploaded template and compares its input cells with `current` (the same template built now). */
-export async function diffTemplate(data: ArrayBuffer, current: Template): Promise<{ changes: TemplateChange[]; errors: TemplateError[]; error?: string }> {
+/**
+ * Reads an uploaded template and compares its input cells with `current` (the same template built now). With
+ * the cells as downloaded (templates from 12-Oct-2026 on), a cell is:
+ * - a change: the file differs from the tool, and the tool still has what was downloaded;
+ * - kept: the file still has what was downloaded and the tool changed meanwhile (someone else's change stays);
+ * - a conflict: both changed, differently (the uploader chooses).
+ */
+export async function diffTemplate(
+  data: ArrayBuffer,
+  current: Template,
+): Promise<{ changes: TemplateChange[]; conflicts: TemplateConflict[]; kept: TemplateKept[]; errors: TemplateError[]; downloadedAt: string | null; error?: string }> {
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(data);
   } catch {
-    return { changes: [], errors: [], error: 'Not an Excel (.xlsx) file' };
+    return { changes: [], conflicts: [], kept: [], errors: [], downloadedAt: null, error: 'Not an Excel (.xlsx) file' };
   }
+  const { values: original, downloadedAt } = originalValues(wb);
   const changes: TemplateChange[] = [];
+  const conflicts: TemplateConflict[] = [];
+  const kept: TemplateKept[] = [];
   const errors: TemplateError[] = [];
   let found = 0;
   for (const s of current.sheets) {
@@ -297,7 +362,7 @@ export async function diffTemplate(data: ArrayBuffer, current: Template): Promis
       const c = s.columns.find((x) => x.header === h);
       if (c) at.set(c.key, n);
     });
-    if (!at.has('__key')) return { changes: [], errors: [], error: `The ${s.name} sheet has no Key column: upload the template downloaded from the tool` };
+    if (!at.has('__key')) return { changes: [], conflicts: [], kept: [], errors: [], downloadedAt, error: `The ${s.name} sheet has no Key column: upload the template downloaded from the tool` };
     const rows = new Map(s.rows.map((r) => [r.key, r]));
     const seen = new Set<string>();
     ws.eachRow((row, n) => {
@@ -342,12 +407,27 @@ export async function diffTemplate(data: ArrayBuffer, current: Template): Promis
           errors.push({ excelRow: n, sheet: s.name, row: label, message: `${c.header} is fixed on this line` });
           continue;
         }
-        changes.push({ excelRow: n, sheet: s.name, key, row: label, column: c.key, header: c.header, from: before, to: v });
+        const change: TemplateChange = { excelRow: n, sheet: s.name, key, row: label, column: c.key, header: c.header, from: before, to: v };
+        const id = conflictId(change);
+        if (cur && original.has(id)) {
+          const was = original.get(id)!;
+          // left as downloaded: the tool changed meanwhile, and that change stays
+          if (same(was, v)) {
+            kept.push({ sheet: s.name, row: label, header: c.header, value: before });
+            continue;
+          }
+          // changed in the file and, differently, in the tool: the uploader chooses
+          if (!same(was, before)) {
+            conflicts.push({ ...change, id });
+            continue;
+          }
+        }
+        changes.push(change);
       }
     });
   }
-  if (!found) return { changes: [], errors: [], error: `No ${current.sheets.map((s) => `“${s.name}”`).join(' or ')} sheet: upload the ${current.title} template downloaded from the tool` };
-  return { changes, errors };
+  if (!found) return { changes: [], conflicts: [], kept: [], errors: [], downloadedAt, error: `No ${current.sheets.map((s) => `“${s.name}”`).join(' or ')} sheet: upload the ${current.title} template downloaded from the tool` };
+  return { changes, conflicts, kept, errors, downloadedAt };
 }
 
 /** a template value as the page shows it */

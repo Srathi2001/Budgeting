@@ -5,7 +5,7 @@ import type { Contract } from '@/lib/engine/lease';
 import type { StoredCalc } from './calc';
 import type { DerivedContract, MasterRow } from './master-types';
 
-const { leaseLines, units, properties, businessUnits } = schema;
+const { leaseLines, units, properties, businessUnits, users } = schema;
 
 function toDerived(c: Contract | undefined): DerivedContract | null {
   if (!c) return null;
@@ -27,15 +27,16 @@ export async function loadMasterRows(
   if (opts.propertyIds) conds.push(inArray(leaseLines.propertyId, opts.propertyIds.length ? opts.propertyIds : [-1]));
   if (opts.lineIds) conds.push(inArray(leaseLines.id, opts.lineIds.length ? opts.lineIds : [-1]));
   const rows = await db
-    .select({ l: leaseLines, u: units, p: properties, buName: businessUnits.name })
+    .select({ l: leaseLines, u: units, p: properties, buName: businessUnits.name, by: users.name })
     .from(leaseLines)
     .innerJoin(units, eq(units.id, leaseLines.unitId))
     .innerJoin(properties, eq(properties.id, leaseLines.propertyId))
     .innerJoin(businessUnits, eq(businessUnits.code, properties.buCode))
+    .leftJoin(users, eq(users.id, leaseLines.updatedBy))
     .where(and(...conds))
     .orderBy(asc(properties.buCode), asc(properties.code), asc(units.unitCode));
 
-  return rows.map(({ l, u, p, buName }) => {
+  return rows.map(({ l, u, p, buName, by }) => {
     const calc = (l.calc ?? null) as StoredCalc | null;
     const contracts = calc?.contracts ?? [];
     const find = (k: Contract['kind']) => toDerived(contracts.find((c) => c.kind === k));
@@ -134,6 +135,8 @@ export async function loadMasterRows(
       revenueTotal: calc?.totals.revenue ?? 0,
       cashTotal: calc?.totals.cash ?? 0,
       cashFlowTotal: calc?.totals.cashFlow ?? 0,
+      lastUpdatedBy: by,
+      lastUpdatedAt: l.updatedAt ? l.updatedAt.toISOString() : null,
       editable: opts.editableProperties ? opts.editableProperties.has(p.id) : false,
     };
   });

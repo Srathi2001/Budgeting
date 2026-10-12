@@ -189,7 +189,8 @@ export function AnalysisPivot({ versionId, data, finance, locked }: { versionId:
   const byPeriod = (a: number[] | null) => (a ? (period === 'M' ? a : quarters(a)) : periods.map(() => null));
 
   const saveComment = (p: AnalysisProperty, comment: string | null) =>
-    saveNote({ versionId, propertyId: p.id, comment, vacancyLossOverride: p.vacancyLossOverride })
+    // with the note the user saw: one someone else changed meanwhile is not overwritten
+    saveNote({ versionId, propertyId: p.id, comment, vacancyLossOverride: p.vacancyLossOverride, seen: { comment: p.comment, vacancyLossOverride: p.vacancyLossOverride } })
       .then((r) => setMsg(r.error ?? 'Comment saved'))
       .catch((e: Error) => setMsg(e.message));
 

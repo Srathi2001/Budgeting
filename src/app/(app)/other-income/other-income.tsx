@@ -5,7 +5,7 @@
 // budget comes from the Lease Budget.
 
 import { Fragment, useMemo, useState, useTransition } from 'react';
-import { fmt } from '@/lib/format';
+import { fmt, fmtDateTime } from '@/lib/format';
 import { useFilters } from '@/components/filter-bar';
 import { propertyPasses } from '@/lib/filters';
 import {
@@ -150,7 +150,8 @@ export function OtherIncome({
     setBlocks((all) => all.map((x) => (x.scope === b.scope ? { ...x, values: { ...x.values, [account]: { ...x.values[account], [period]: parsed } } } : x)));
     setDirty((s) => new Set(s).add(k));
     setStatus({ kind: 'saving' });
-    const change: OiChange = { scope: b.scope, account, period, amount: parsed };
+    // with the figure the user saw: a cell someone else changed meanwhile is not overwritten
+    const change: OiChange = { scope: b.scope, account, period, amount: parsed, seen: before };
     start(async () => {
       const res = await saveOtherIncomeCells(versionId, [change]);
       setDirty((s) => {
@@ -172,8 +173,10 @@ export function OtherIncome({
     const canType = !locked && b.editable && oiInput(b, account, c);
     if (canType) {
       const period = c as OiPeriod;
+      // who entered it last, and when
+      const u = b.updated?.[`${account}|${period}`];
       return (
-        <td key={c} className={`anh-num input${dirty.has(k) ? ' is-dirty' : ''}${bad.has(k) ? ' is-error' : ''}`}>
+        <td key={c} className={`anh-num input${dirty.has(k) ? ' is-dirty' : ''}${bad.has(k) ? ' is-error' : ''}`} title={u ? `Last updated${u.by ? ` by ${u.by}` : ''} on ${fmtDateTime(u.at)}` : undefined}>
           <input
             aria-label={`${b.code} ${OI_ACCOUNT.get(account)?.name} ${oiLabel(c, year, cutoff)}`}
             inputMode="decimal"

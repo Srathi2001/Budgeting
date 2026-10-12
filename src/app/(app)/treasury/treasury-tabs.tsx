@@ -187,12 +187,13 @@ function LoanForm({ record, year, canEdit, versionId, entities, onClose, onPrev,
   return (
     <RecordForm
       title={v.name || 'New loan'}
+      history={record.id !== null ? { entity: 'shareholder_loan', entityId: String(record.id) } : undefined}
       subtitle={`${v.entity}${v.lender ? ` · ${v.lender}` : ''}`}
       canEdit={canEdit}
       dirty={v.id === null ? Math.max(d.dirty, 1) : d.dirty}
       saving={x.saving}
       error={x.error}
-      onSave={() => (v.name.trim() ? x.save(v, () => (d.reset(), v.id === null && onClose())) : x.setError('Give the loan a name'))}
+      onSave={() => (v.name.trim() ? x.save({ ...v, seen: record }, () => (d.reset(), v.id === null && onClose())) : x.setError('Give the loan a name'))}
       onCancel={() => (d.reset(), x.setError(null))}
       onClose={onClose}
       onPrev={onPrev}
@@ -441,12 +442,13 @@ function DepositForm({ record, year, canEdit, versionId, entities, onClose, onPr
   return (
     <RecordForm
       title={v.bank || 'New deposit'}
+      history={record.id !== null ? { entity: 'fixed_deposit', entityId: String(record.id) } : undefined}
       subtitle={`${v.entity}${v.reference ? ` · ${v.reference}` : ''}`}
       canEdit={canEdit}
       dirty={v.id === null ? Math.max(d.dirty, 1) : d.dirty}
       saving={x.saving}
       error={x.error}
-      onSave={() => (v.bank.trim() ? x.save(v, () => (d.reset(), v.id === null && onClose())) : x.setError('Enter the bank'))}
+      onSave={() => (v.bank.trim() ? x.save({ ...v, seen: record }, () => (d.reset(), v.id === null && onClose())) : x.setError('Enter the bank'))}
       onCancel={() => (d.reset(), x.setError(null))}
       onClose={onClose}
       onPrev={onPrev}
@@ -607,12 +609,13 @@ function ContingencyForm({ record, year, canEdit, versionId, entities, onClose, 
   return (
     <RecordForm
       title={v.description || 'New contingency'}
+      history={record.id !== null ? { entity: 'contingency', entityId: String(record.id) } : undefined}
       subtitle={v.entity}
       canEdit={canEdit}
       dirty={v.id === null ? Math.max(d.dirty, 1) : d.dirty}
       saving={x.saving}
       error={x.error}
-      onSave={() => (v.description.trim() ? x.save(v, () => (d.reset(), v.id === null && onClose())) : x.setError('Describe the contingency'))}
+      onSave={() => (v.description.trim() ? x.save({ ...v, seen: record }, () => (d.reset(), v.id === null && onClose())) : x.setError('Describe the contingency'))}
       onCancel={() => (d.reset(), x.setError(null))}
       onClose={onClose}
       onPrev={onPrev}

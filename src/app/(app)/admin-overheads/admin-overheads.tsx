@@ -20,6 +20,7 @@ import {
   anpmOverheads,
   payrollSplit,
   ruleOf,
+  storedAdminValue,
   type AdminChange,
   type AdminData,
   type AdminRow,
@@ -107,7 +108,8 @@ export function AdminOverheads({ data: initial, versionId, versionName, locked }
       setData((d) => applyAdminChange(d, change));
       setStatus({ kind: 'saving' });
       start(async () => {
-        const res = await saveAdminCells(versionId, [change]);
+        // with the figure the user saw: one someone else changed meanwhile is not overwritten
+        const res = await saveAdminCells(versionId, [{ ...change, seen: storedAdminValue(before, change) }]);
         if (res.errors.length) {
           setData(before);
           setStatus({ kind: 'error', text: res.errors[0] });

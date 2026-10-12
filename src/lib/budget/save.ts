@@ -3,10 +3,11 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@/db';
 import { canEditProperty, editablePropertyIds, type Actor, type EditCheck } from '@/lib/auth/permissions';
-import { writeGuard } from '@/lib/write-guard';
+import { writeGuard, type Tx } from '@/lib/write-guard';
 import { recalcLines } from './calc';
 import { loadMasterRows } from './master';
-import { LINE_FIELDS, MF_CHOICES, UNIT_FIELDS, fixedFields, type RowPatch, type SaveResult } from './master-types';
+import { clash } from '@/lib/conflict';
+import { FIELD_LABEL, LINE_FIELDS, MF_CHOICES, UNIT_FIELDS, fixedFields, type RowPatch, type SaveResult } from './master-types';
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 const money = z.number().finite().min(0).max(1e10);
@@ -74,25 +75,43 @@ export const PatchSchema = z
   .partial()
   .strict();
 
-const ChangesSchema = z.array(z.object({ lineId: z.number().int(), patch: PatchSchema })).max(2000);
+// `seen`: the values the user saw for the fields in the patch (conflict.ts); a field someone else changed
+// since is left as it is and reported
+const ChangesSchema = z.array(z.object({ lineId: z.number().int(), patch: PatchSchema, seen: z.record(z.string(), z.unknown()).optional() })).max(2000);
 
-export async function applyLineChanges(
-  user: Actor,
-  versionId: number,
-  changes: { lineId: number; patch: RowPatch }[],
-): Promise<SaveResult> {
+export type LineChange = { lineId: number; patch: RowPatch; seen?: Record<string, unknown> };
+
+export async function applyLineChanges(user: Actor, versionId: number, changes: LineChange[]): Promise<SaveResult> {
   const parsed = ChangesSchema.safeParse(changes);
   if (!parsed.success) {
     const message = parsed.error.issues[0]?.message ?? 'Invalid input';
     return { rows: [], errors: changes.map((c) => ({ lineId: c.lineId, message })) };
   }
+  // one lease save of the version at a time; the rows and the permission checks are read after that,
+  // inside this transaction, so they hold until it commits (a lock or submission waits for it)
+  const errors = await db.transaction(async (tx) => {
+    await writeGuard(tx, versionId, { leases: true });
+    return applyLineChangesIn(tx, user, versionId, changes);
+  });
+  const ids = parsed.data.map((c) => c.lineId);
+  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
+  const editable = await editablePropertyIds(user, version, 'PM');
+  // return every requested row so the grid can roll back rejected edits
+  const rows = await loadMasterRows(versionId, { lineIds: ids, editableProperties: editable });
+  return { rows, errors };
+}
+
+/** The changes inside a save's transaction that already holds writeGuard(…, { leases: true }); returns the rejections. */
+export async function applyLineChangesIn(tx: Tx, user: Actor, versionId: number, changes: LineChange[]): Promise<SaveResult['errors']> {
+  const parsed = ChangesSchema.safeParse(changes);
+  if (!parsed.success) {
+    const message = parsed.error.issues[0]?.message ?? 'Invalid input';
+    return changes.map((c) => ({ lineId: c.lineId, message }));
+  }
   const ids = parsed.data.map((c) => c.lineId);
   const errors: SaveResult['errors'] = [];
   const touched: number[] = [];
-  await db.transaction(async (tx) => {
-    // one lease save of the version at a time; the rows and the permission checks are read after that,
-    // inside this transaction, so they hold until it commits (a lock or submission waits for it)
-    await writeGuard(tx, versionId, { leases: true });
+  {
     const current = await tx
       .select({ l: schema.leaseLines, u: schema.units })
       .from(schema.leaseLines)
@@ -104,7 +123,7 @@ export async function applyLineChanges(
       if (!checks.has(r.l.propertyId)) checks.set(r.l.propertyId, await canEditProperty(user, versionId, r.l.propertyId, 'PM', tx));
     }
 
-    for (const { lineId, patch } of parsed.data) {
+    for (const { lineId, patch: sent, seen } of parsed.data) {
       const row = byId.get(lineId);
       if (!row) {
         errors.push({ lineId, message: 'Row not found in this version' });
@@ -114,6 +133,24 @@ export async function applyLineChanges(
       if (!check.ok) {
         errors.push({ lineId, message: check.reason });
         continue;
+      }
+      // a figure someone else changed after the user loaded it stays as it is (the grid then shows it)
+      const patch: Record<string, unknown> = { ...sent };
+      if (seen) {
+        const told = new Set<string>();
+        for (const [k, mine] of Object.entries(sent)) {
+          if (!(k in seen)) continue;
+          const isLine = (LINE_FIELDS as readonly string[]).includes(k);
+          const stored = isLine ? (row.l as Record<string, unknown>)[k] : (row.u as Record<string, unknown>)[k];
+          const label = FIELD_LABEL[k] ?? k;
+          const message = await clash(tx, user.id, label, { entity: 'lease_line', entityId: String(lineId), field: isLine ? k : `unit.${k}` }, seen[k], stored, mine, { reload: false });
+          if (!message) continue;
+          delete patch[k];
+          if (told.has(label)) continue;
+          told.add(label);
+          errors.push({ lineId, message });
+        }
+        if (!Object.keys(patch).length) continue;
       }
       // Oracle data and contracted lease years are fixed for everyone: corrections are made in Oracle
       // and arrive with the next import
@@ -169,11 +206,6 @@ export async function applyLineChanges(
       touched.push(lineId);
     }
     if (touched.length) await recalcLines(tx, versionId, touched);
-  });
-
-  const [version] = await db.select().from(schema.budgetVersions).where(eq(schema.budgetVersions.id, versionId));
-  const editable = await editablePropertyIds(user, version, 'PM');
-  // return every requested row so the grid can roll back rejected edits
-  const rows = await loadMasterRows(versionId, { lineIds: ids, editableProperties: editable });
-  return { rows, errors };
+  }
+  return errors;
 }

@@ -5,6 +5,7 @@ import { db, schema } from '@/db';
 import { canEditFm, entersData, isAdmin, type Actor } from '@/lib/auth/permissions';
 import { changedFields, pick } from '@/lib/audit-diff';
 import { fmtDateTime } from '@/lib/format';
+import { clash, sameValue } from '@/lib/conflict';
 import { writeGuard } from '@/lib/write-guard';
 import { BUSINESS_NEEDS, ELEMENTS, FM_KINDS, WORK_TYPE, isWorkType, type StaffTeam, type WorkType } from './fm-types';
 
@@ -28,8 +29,26 @@ const Line = z.object({
   amount: z.number().finite().min(0, 'Amounts cannot be negative').max(1e9),
   month: z.number().int().min(1).max(12).nullable(),
   remarks: text(1000),
+  // the line as the user saw it (lib/conflict.ts): only what the user changed is written, and a field
+  // someone else changed meanwhile is not overwritten
+  seen: z.record(z.string(), z.unknown()).optional(),
 });
 const Save = z.object({ lines: z.array(Line).max(2000), deleted: z.array(z.number().int()).max(2000) });
+
+const FM_FIELD_LABEL: Record<string, string> = {
+  workType: 'work type',
+  element: 'building element',
+  subElement: 'sub-element',
+  description: 'description',
+  businessNeed: 'business need',
+  kind: 'kind',
+  amount: 'amount',
+  month: 'month',
+  remarks: 'remarks',
+};
+
+/** a save refused part way: nothing of it is kept */
+class Refused extends Error {}
 
 const spreads = (workType: string) => WORK_TYPE.get(workType as WorkType)?.spread ?? true;
 
@@ -48,7 +67,8 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
   const FIELDS = ['workType', 'element', 'subElement', 'description', 'businessNeed', 'kind', 'amount', 'month', 'remarks'] as const;
   const trail: (typeof schema.auditLog.$inferInsert)[] = [];
   const log = (id: number, action: string, changes: unknown) => trail.push({ userId: user.id, versionId, propertyId, entity: 'fm_line', entityId: String(id), action, changes });
-  const refused = await db.transaction(async (tx): Promise<string | null> => {
+  const refused = await db
+    .transaction(async (tx): Promise<string | null> => {
     // the facility's status and lines as they are now, held until this commits (a submission waits)
     await writeGuard(tx, versionId, { facilities: [propertyId] });
     const held = await canEditFm(user, versionId, propertyId, tx);
@@ -62,7 +82,7 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
     for (const l of lines) if (l.id !== null && !existing.has(l.id)) return 'A line is not on this facility';
     if (deleted.length) await tx.delete(schema.fmLines).where(and(where, inArray(schema.fmLines.id, deleted)));
     for (const id of deleted) log(id, 'delete', { from: pick(existing.get(id)!, FIELDS), to: null });
-    for (const l of lines) {
+    for (const { seen, ...l } of lines) {
       if (l.id === null) {
         // recurring work is spread over the year; projects go in the month planned
         const v = { ...l, id: undefined, month: spreads(l.workType) ? null : l.month };
@@ -73,7 +93,7 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
       }
       const before = existing.get(l.id)!;
       // what came from the tool stays as it is: only the budget fields of such a line change
-      const set =
+      let set: Record<string, unknown> =
         before.source === 'FM'
           ? {
               workType: l.workType,
@@ -87,6 +107,20 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
               remarks: l.remarks,
             }
           : { businessNeed: l.businessNeed, kind: l.kind, amount: l.amount, month: spreads(before.workType) ? null : l.month, remarks: l.remarks };
+      if (seen) {
+        // only what the user changed is written; a field someone else changed meanwhile is not overwritten:
+        // then nothing of this save is kept and the user is told who changed it
+        const mine: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(set)) {
+          const saw = k === 'month' && v === null ? null : (seen[k] ?? null);
+          if (sameValue(v, saw)) continue;
+          const stored = (before as Record<string, unknown>)[k];
+          const message = await clash(tx, user.id, `${before.description ?? before.workType} ${FM_FIELD_LABEL[k] ?? k}`, { entity: 'fm_line', entityId: String(l.id), field: k }, saw, stored, v);
+          if (message) throw new Refused(message);
+          mine[k] = v;
+        }
+        set = mine;
+      }
       if (Object.entries(set).every(([k, v]) => (before as Record<string, unknown>)[k] === v)) continue;
       await tx
         .update(schema.fmLines)
@@ -97,7 +131,11 @@ export async function saveFmLinesAs(user: Actor, versionId: number, propertyId: 
     }
     for (let i = 0; i < trail.length; i += 500) await tx.insert(schema.auditLog).values(trail.slice(i, i + 500));
     return null;
-  });
+    })
+    .catch((e) => {
+      if (e instanceof Refused) return e.message;
+      throw e;
+    });
   if (refused) return { error: refused };
   return { ok: added || changed || deleted.length ? `Saved: ${added} added, ${changed} changed, ${deleted.length} removed` : 'No changes' };
 }
@@ -108,9 +146,13 @@ const Staff = z
       team: z.enum(['SUPERVISORY', 'ZONE_1', 'ZONE_2', 'ZONE_3', 'PPM', 'VACANT', 'GA']),
       ctc: z.number().finite().min(0).max(1e9),
       overtime: z.number().finite().min(0).max(1e9),
+      // the team's figures as the user saw them (lib/conflict.ts)
+      seen: z.object({ ctc: z.number().finite(), overtime: z.number().finite() }).optional(),
     }),
   )
   .max(7);
+
+const TEAM_LABEL: Record<string, string> = { SUPERVISORY: 'Office / supervisory', ZONE_1: 'Zone 1', ZONE_2: 'Zone 2', ZONE_3: 'Zone 3', PPM: 'PPM', VACANT: 'Vacant units', GA: 'G&A' };
 
 /**
  * The staff budget is spread over every facility, so a change moves cost inside facilities already
@@ -140,14 +182,32 @@ export async function saveFmStaffAs(user: Actor, versionId: number, input: unkno
     const blocked = staffEditBlocked(user, subs.map((s) => s.status));
     if (blocked) return blocked;
     const before = await tx.select({ team: schema.fmStaff.team, ctc: schema.fmStaff.ctc, overtime: schema.fmStaff.overtime }).from(schema.fmStaff).where(eq(schema.fmStaff.versionId, versionId));
+    // with what the user saw: a team the user didn't change keeps what is stored, and a team someone else
+    // changed meanwhile is not overwritten (nothing of the save is kept; the user is told who changed it)
+    const teams = [];
     for (const s of parsed.data) {
+      if (!s.seen) {
+        teams.push(s);
+        continue;
+      }
+      const b = before.find((x) => x.team === s.team);
+      const stored = { ctc: b?.ctc ?? 0, overtime: s.team === 'GA' ? 0 : (b?.overtime ?? 0) };
+      const mine = { ctc: s.ctc, overtime: s.team === 'GA' ? 0 : s.overtime };
+      const saw = { ctc: s.seen.ctc, overtime: s.team === 'GA' ? 0 : s.seen.overtime };
+      if (sameValue(mine, saw)) continue;
+      const message = await clash(tx, user.id, `FM staff ${TEAM_LABEL[s.team] ?? s.team}`, { entity: 'fm_staff', entityId: null }, saw, stored, mine, { show: [stored.ctc, mine.ctc] });
+      if (message) return message;
+      teams.push(s);
+    }
+    if (!teams.length) return null;
+    for (const s of teams) {
       const row = { versionId, team: s.team as StaffTeam, ctc: s.ctc, overtime: s.team === 'GA' ? 0 : s.overtime, updatedBy: user.id };
       await tx
         .insert(schema.fmStaff)
         .values(row)
         .onConflictDoUpdate({ target: [schema.fmStaff.versionId, schema.fmStaff.team], set: { ctc: row.ctc, overtime: row.overtime, updatedAt: new Date(), updatedBy: user.id } });
     }
-    await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'fm_staff', action: 'save', changes: { before, after: parsed.data, facilitiesSubmittedOrApproved: subs.filter((x) => x.status === 'SUBMITTED' || x.status === 'APPROVED').length } });
+    await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'fm_staff', action: 'save', changes: { before, after: parsed.data.map((s) => ({ team: s.team, ctc: s.ctc, overtime: s.overtime })), facilitiesSubmittedOrApproved: subs.filter((x) => x.status === 'SUBMITTED' || x.status === 'APPROVED').length } });
     return null;
   });
   if (refused) return { error: refused };

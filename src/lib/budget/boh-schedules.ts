@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { db, schema } from '@/db';
 import { canEditProperty, entersData, isAdmin, type Actor, type EditCheck } from '@/lib/auth/permissions';
 import { writeGuard, type Exec } from '@/lib/write-guard';
+import { clash, conflicts, sameValue } from '@/lib/conflict';
 import { changedFields, pick } from '@/lib/audit-diff';
 import { withDefaults, type BohAssumptionKey } from '@/lib/engine/assumptions';
 import { CONTRACT_KIND, CONTRACT_TERMS, type ContractKind, type ContractRow, type ContractTerms } from './boh-types';
@@ -20,6 +21,8 @@ async function openVersion(versionId: number) {
   if (v.status === 'LOCKED') return { error: 'This budget version is locked' };
   return { v };
 }
+
+const codeOf = async (on: Exec, propertyId: number) => (await on.select({ code: schema.properties.code }).from(schema.properties).where(eq(schema.properties.id, propertyId)))[0]?.code ?? String(propertyId);
 
 /** inside a save, after writeGuard: why the version can't take it (null: it can) */
 const held = (v: schema.BudgetVersion | undefined) => (!v ? 'Version not found' : v.status === 'LOCKED' ? 'This budget version is locked' : null);
@@ -78,6 +81,8 @@ const InsuranceInput = z
       insuredValue: z.number().min(0).max(1e11).nullable(),
       parRate: z.number().min(0).max(0.1).nullable(),
       plPremium: z.number().min(0).max(1e8).nullable(),
+      // the building's figures as the user saw them (lib/conflict.ts)
+      seen: z.object({ insuredValue: z.number().nullable(), parRate: z.number().nullable(), plPremium: z.number().nullable() }).optional(),
     }),
   )
   .max(500);
@@ -104,7 +109,17 @@ export async function saveInsuranceAs(user: Actor, versionId: number, input: unk
     if (open) return open;
     const ids = parsed.data.map((r) => r.propertyId);
     const before = ids.length ? await tx.select().from(schema.bohInsurance).where(and(eq(schema.bohInsurance.versionId, versionId), inArray(schema.bohInsurance.propertyId, ids))) : [];
+    // a building someone else changed after the user loaded it: nothing is saved, the user is told who (lib/conflict.ts)
     for (const r of parsed.data) {
+      if (!r.seen) continue;
+      const b = before.find((x) => x.propertyId === r.propertyId);
+      const stored = { insuredValue: b?.insuredValue ?? null, parRate: b?.parRate ?? null, plPremium: b?.plPremium ?? null };
+      const mine = { insuredValue: r.insuredValue, parRate: r.parRate, plPremium: r.plPremium };
+      const message = conflicts(true, r.seen, stored, mine) ? await clash(tx, user.id, `${await codeOf(tx, r.propertyId)} insurance`, { entity: 'boh_insurance', entityId: null }, r.seen, stored, mine, { show: [stored.insuredValue, mine.insuredValue] }) : null;
+      if (message) return message;
+    }
+    for (const { seen: _seen, ...r } of parsed.data) {
+      void _seen;
       const where = and(eq(schema.bohInsurance.versionId, versionId), eq(schema.bohInsurance.propertyId, r.propertyId));
       if (r.insuredValue === null && r.parRate === null && r.plPremium === null) await tx.delete(schema.bohInsurance).where(where);
       else
@@ -127,7 +142,8 @@ export async function saveInsuranceAs(user: Actor, versionId: number, input: unk
 
 // ---- security allocation ----------------------------------------------------------------------------
 
-const WatchmenInput = z.array(z.object({ propertyId: z.number().int().positive(), share: z.number().min(0).max(100).nullable() })).max(500);
+// seen: the share the user saw (lib/conflict.ts)
+const WatchmenInput = z.array(z.object({ propertyId: z.number().int().positive(), share: z.number().min(0).max(100).nullable(), seen: z.number().nullable().optional() })).max(500);
 
 export async function loadWatchmen(versionId: number, propertyIds: number[]): Promise<Map<number, number>> {
   if (!propertyIds.length) return new Map();
@@ -147,6 +163,13 @@ export async function saveWatchmenAs(user: Actor, versionId: number, input: unkn
     if (open) return open;
     const ids = parsed.data.map((r) => r.propertyId);
     const before = new Map((ids.length ? await tx.select().from(schema.bohWatchmen).where(and(eq(schema.bohWatchmen.versionId, versionId), inArray(schema.bohWatchmen.propertyId, ids))) : []).map((w) => [w.propertyId, w.share]));
+    // a building someone else changed after the user loaded it: nothing is saved, the user is told who (lib/conflict.ts)
+    for (const r of parsed.data) {
+      const stored = before.get(r.propertyId) ?? null;
+      if (!conflicts(r.seen !== undefined, r.seen || null, stored || null, r.share || null)) continue;
+      const message = await clash(tx, user.id, `${await codeOf(tx, r.propertyId)} watchmen`, { entity: 'boh_watchmen', entityId: null }, r.seen || null, stored || null, r.share || null);
+      if (message) return message;
+    }
     for (const r of parsed.data) {
       const where = and(eq(schema.bohWatchmen.versionId, versionId), eq(schema.bohWatchmen.propertyId, r.propertyId));
       if (!r.share) await tx.delete(schema.bohWatchmen).where(where);
@@ -221,6 +244,9 @@ const ContractInput = z.object({
   renewalRate: z.number().min(0).max(1e9).nullable().default(null),
   renewalTerms: z.enum(CONTRACT_TERMS).nullable().default(null),
   remarks: text(1000),
+  // the row as the user saw it (lib/conflict.ts): only what the user changed is written, and a field someone
+  // else changed meanwhile is not overwritten
+  seen: z.record(z.string(), z.unknown()).optional(),
 });
 const ContractSave = z.object({ lines: z.array(ContractInput).max(2000), deleted: z.array(z.number().int()).max(2000) });
 
@@ -324,7 +350,24 @@ export async function saveContractsAs(user: Actor, versionId: number, kind: Cont
         continue;
       }
       // a PO row stays on its building; an entered row can move
-      const set = before.source === 'PO' ? values : { ...values, propertyId: l.propertyId };
+      let set: Record<string, unknown> = before.source === 'PO' ? values : { ...values, propertyId: l.propertyId };
+      if (l.seen) {
+        const mine: Record<string, unknown> = {};
+        let refusal: string | null = null;
+        for (const [k, v] of Object.entries(set)) {
+          const saw = l.seen[k] ?? null;
+          if (sameValue(v, saw)) continue;
+          const stored = (before as Record<string, unknown>)[k];
+          refusal = await clash(tx, user.id, `${code} ${[before.supplier, before.description].filter(Boolean).join(' · ') || info.label} ${k}`, { entity: 'boh_contracts', entityId: String(before.id), field: k }, saw, stored, v);
+          if (refusal) break;
+          mine[k] = v;
+        }
+        if (refusal) {
+          errors.push(refusal);
+          continue;
+        }
+        set = mine;
+      }
       if (Object.entries(set).every(([k, v]) => (before as Record<string, unknown>)[k] === v)) continue;
       await tx
         .update(schema.bohContracts)

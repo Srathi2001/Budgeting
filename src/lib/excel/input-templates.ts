@@ -413,22 +413,14 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
   const byKey = new Map<string, TemplateChange[]>();
   for (const c of changes) byKey.set(c.key, [...(byKey.get(c.key) ?? []), c]);
   const num = (v: unknown) => (typeof v === 'number' ? v : null);
-  const chunks = async <T>(list: T[], save: (part: T[]) => Promise<{ saved: number; errors: string[] }>) => {
-    const out = { saved: 0, errors: [] as string[] };
-    for (let i = 0; i < list.length; i += 400) {
-      const r = await save(list.slice(i, i + 400));
-      out.saved += r.saved;
-      out.errors.push(...r.errors);
-    }
-    return out;
-  };
+  // each page's save takes the whole upload in one transaction: it lands completely or not at all
 
   if (kind === 'other-income') {
     const list: OiChange[] = changes.map((c) => {
       const [scope, account] = c.key.split('|');
       return { scope, account, period: c.column as 'OD' | 'B', amount: num(c.to) };
     });
-    return chunks(list, (p) => saveOtherIncome(user, version.id, p));
+    return list.length ? saveOtherIncome(user, version.id, list) : { saved: 0, errors: [] };
   }
   if (kind === 'building-overheads') {
     // amount and due month are saved together: an unchanged one keeps its value
@@ -441,7 +433,7 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
       };
       return { propertyId: Number(pid), account, amount: get('b'), dueMonth: get('due') };
     });
-    return chunks(list, (p) => saveBuildingOverheads(user, version.id, p));
+    return list.length ? saveBuildingOverheads(user, version.id, list) : { saved: 0, errors: [] };
   }
   if (kind === 'admin-overheads') {
     // detail sheet lines: saved one by one as items, as the tabs do
@@ -458,7 +450,7 @@ export async function applyInputTemplate(kind: TemplateKind, user: CurrentUser, 
       if (k === 'adm') return { kind: 'admin', dept: a, account: b, entity: c.column.slice(1), value: num(c.to) };
       return { kind: 'fee', fee: a as FeeKind, entity: b as FeeEntity, field: c.column as 'rate' | 'base', value: num(c.to) };
     });
-    const r = await chunks(list, (p) => saveAdminOverheads(user, version.id, p));
+    const r = list.length ? await saveAdminOverheads(user, version.id, list) : { saved: 0, errors: [] };
     return { saved: out.saved + r.saved, errors: [...out.errors, ...r.errors] };
   }
   if (kind.startsWith('amc-')) {

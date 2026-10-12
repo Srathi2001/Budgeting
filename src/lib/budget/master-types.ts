@@ -135,6 +135,10 @@ export interface MasterRow {
   cashTotal: number;
   cashFlowTotal: number;
 
+  /** who saved the line last and when (shown on hover) */
+  lastUpdatedBy: string | null;
+  lastUpdatedAt: string | null;
+
   editable: boolean;
 }
 
@@ -183,6 +187,63 @@ export const LINE_FIELDS = [
   'cheques',
   'notes',
 ] as const;
+
+/** names of the editable fields, as the screens show them (messages about a figure someone else changed) */
+export const FIELD_LABEL: Record<string, string> = {
+  leaseNumber: 'Lease no.',
+  leaseVersion: 'Lease version',
+  tenantCode: 'Tenant code',
+  tenant: 'Tenant',
+  customerClass: 'Customer class',
+  currentStart: 'Contract start',
+  rentStart: 'Rent start',
+  currentEnd: 'Contract end',
+  currentRent: 'Contract amount',
+  vatAmount: 'VAT',
+  securityDeposit: 'Security deposit',
+  leaseStatus: 'Lease status',
+  leaseRemarks: 'Lease remarks',
+  currentSchedule: 'Cheque schedule',
+  vacant: 'Vacant',
+  staffOwner: 'Staff / Owner',
+  mfCurrent: 'MF',
+  mfRenewal: 'MF on renewal / new tenant',
+  renew1: 'Outcome',
+  noRenewal: 'Outcome',
+  vacancyDays: 'Vacancy days',
+  r1Rent: 'Renewal rent',
+  r1Start: 'Renewal start',
+  r1End: 'Renewal end',
+  r1Mf: 'Renewal MF',
+  r1Schedule: 'Renewal cheques',
+  r2Renew: '2nd renewal',
+  r2Rent: '2nd renewal rent',
+  r2Start: '2nd renewal start',
+  r2End: '2nd renewal end',
+  r2Mf: '2nd renewal MF',
+  r2Schedule: '2nd renewal cheques',
+  r3Renew: '3rd renewal',
+  r3Rent: '3rd renewal rent',
+  r3Start: '3rd renewal start',
+  r3End: '3rd renewal end',
+  r3Mf: '3rd renewal MF',
+  r3Schedule: '3rd renewal cheques',
+  budgetRate: 'Budget rate',
+  increasePctOverride: 'Increase % (override)',
+  cheques: 'Cheques per year',
+  notes: 'Notes',
+  bedroom: 'RERA code',
+  area: 'Area',
+  rc: 'R / C',
+  pivotCategory: 'Category',
+  unitType: 'Unit type',
+  rooms: 'Rooms',
+  capacity: 'Beds',
+  landlord: 'Landlord',
+  mergedUnitNumber: 'Merged unit no.',
+  unitStatus: 'Unit status',
+  resiCommercial: 'Unit type',
+};
 
 /** Unit master fields editable in the tool (a Fusion Unit Dump upload overwrites status / merged no. / usage / landlord). */
 export const UNIT_FIELDS = [

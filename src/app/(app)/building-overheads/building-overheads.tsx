@@ -5,7 +5,7 @@
 // they are paid. Nothing is pre-filled: last year's actuals and run-rate stand next to the input.
 
 import { Fragment, useMemo, useState, useTransition } from 'react';
-import { fmt, MONTHS, pct as pctOf } from '@/lib/format';
+import { fmt, fmtDateTime, MONTHS, pct as pctOf } from '@/lib/format';
 import { useFilters } from '@/components/filter-bar';
 import { propertyPasses } from '@/lib/filters';
 import { BOH_ACCOUNT, BOH_ACCOUNTS, BOH_CALC_NOTE, BOH_LINES, BOH_LINE_LABEL, paidInOneMonth, type BohBlock, type BohChange, type BohRow } from '@/lib/budget/boh-types';
@@ -16,6 +16,8 @@ import { BohForm, applyBohChange } from './boh-form';
 
 const key = (propertyId: number, account: string) => `${propertyId}|${account}`;
 const omit = (d: Record<string, string>, k: string) => Object.fromEntries(Object.entries(d).filter(([x]) => x !== k));
+/** who entered the amount last, and when (on hover) */
+const updatedNote = (r: BohRow) => (r.updated ? `Last updated${r.updated.by ? ` by ${r.updated.by}` : ''} on ${fmtDateTime(r.updated.at)}` : undefined);
 
 function parseAmount(s: string): number | null | 'bad' {
   const t = s.replace(/[,\s]/g, '').replace(/^\((.*)\)$/, '-$1');
@@ -104,7 +106,8 @@ export function BuildingOverheads({
     setDirty((s) => new Set(s).add(k));
     setStatus({ kind: 'saving' });
     start(async () => {
-      const res = await saveBuildingOverheadCells(versionId, [change]);
+      // with the figures the user saw: a cell someone else changed meanwhile is not overwritten
+      const res = await saveBuildingOverheadCells(versionId, [{ ...change, seen: { amount: restore.entered, dueMonth: restore.dueMonth } }]);
       setDirty((s) => {
         const n = new Set(s);
         n.delete(k);
@@ -170,12 +173,12 @@ export function BuildingOverheads({
       );
     if (!canEnter(b, r.account))
       return (
-        <td className="anh-num locked" title={locked ? undefined : BOH_ACCOUNT.get(r.account)?.owner === 'FIN' ? 'Entered by Finance' : 'Entered by the property manager'}>
+        <td className="anh-num locked" title={[locked ? null : BOH_ACCOUNT.get(r.account)?.owner === 'FIN' ? 'Entered by Finance' : 'Entered by the property manager', updatedNote(r)].filter(Boolean).join('\n') || undefined}>
           {fmt(r.b)}
         </td>
       );
     return (
-      <td className={`anh-num input${dirty.has(k) ? ' is-dirty' : ''}${bad.has(k) ? ' is-error' : ''}`}>
+      <td className={`anh-num input${dirty.has(k) ? ' is-dirty' : ''}${bad.has(k) ? ' is-error' : ''}`} title={updatedNote(r)}>
         <input
           aria-label={`${b.code} ${BOH_ACCOUNT.get(r.account)?.name} ${label.b}`}
           inputMode="decimal"

@@ -43,13 +43,15 @@ export function InsuranceForm({ block, year, canEdit, versionId, onClose, onPrev
     <RecordForm
       title={`${block.code} · ${block.name}`}
       subtitle={`Insurance · ${block.buCode}`}
+      history={{ entity: 'boh_insurance', versionId, changesContain: [{ propertyId: block.propertyId }] }}
       canEdit={canEdit}
       dirty={d.dirty}
       saving={saving}
       error={error}
       onSave={() =>
         start(async () => {
-          const r = await saveInsurance(versionId, [{ propertyId: block.propertyId, ...v }]);
+          // with the figures the user saw: a building someone else changed meanwhile is not overwritten
+          const r = await saveInsurance(versionId, [{ propertyId: block.propertyId, ...v, seen: { insuredValue: insurance?.insuredValue ?? null, parRate: insurance?.parRate ?? null, plPremium: insurance?.plPremium ?? null } }]);
           if (r.error) return setError(r.error);
           setError(null);
           router.refresh();
@@ -103,13 +105,15 @@ export function WatchmenForm({ block, year, canEdit, versionId, onClose, onPrev,
     <RecordForm
       title={`${block.code} · ${block.name}`}
       subtitle={`Security allocation · ${block.buCode}`}
+      history={{ entity: 'boh_watchmen', versionId, changesContain: [{ propertyId: block.propertyId }] }}
       canEdit={canEdit}
       dirty={d.dirty}
       saving={saving}
       error={error}
       onSave={() =>
         start(async () => {
-          const res = await saveWatchmen(versionId, [{ propertyId: block.propertyId, share: d.value.share }]);
+          // with the share the user saw: a building someone else changed meanwhile is not overwritten
+          const res = await saveWatchmen(versionId, [{ propertyId: block.propertyId, share: d.value.share, seen: share }]);
           if (res.error) return setError(res.error);
           setError(null);
           router.refresh();

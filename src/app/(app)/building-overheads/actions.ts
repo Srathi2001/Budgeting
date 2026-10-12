@@ -14,6 +14,8 @@ const Changes = z
       account: z.string().regex(/^\d{5}$/),
       amount: z.number().finite().nullable(),
       dueMonth: z.number().int().min(1).max(12).nullable(),
+      // what the user saw (lib/conflict.ts)
+      seen: z.object({ amount: z.number().finite().nullable(), dueMonth: z.number().int().nullable() }).optional(),
     }),
   )
   .max(500);

@@ -8,6 +8,7 @@ import { getSettings } from '@/lib/settings';
 import { db, schema } from '@/db';
 import { isFinance, type Actor } from '@/lib/auth/permissions';
 import { writeGuard } from '@/lib/write-guard';
+import { clash } from '@/lib/conflict';
 import { withDefaults } from '@/lib/engine/assumptions';
 import { bohAccountBudget } from './boh';
 import { referenceBudget } from './reference';
@@ -335,6 +336,14 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         errors.push('Not a valid amount');
         continue;
       }
+      const entityId = JSON.stringify({ ...c, value: undefined, seen: undefined });
+      // a figure someone else changed after the user loaded it is left as it is (lib/conflict.ts)
+      const clashes = async (stored: number | null, what: string) => {
+        if (c.seen === undefined) return false;
+        const message = await clash(tx, user.id, what, { entity: 'admin_overheads', entityId }, c.seen, stored, v);
+        if (message) errors.push(message);
+        return !!message;
+      };
       // the value it replaces, for the audit row
       let from: number | null = null;
       if (c.kind === 'payroll') {
@@ -349,6 +358,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         }
         const [b] = await tx.select().from(schema.adminPayroll).where(and(eq(schema.adminPayroll.versionId, versionId), eq(schema.adminPayroll.dept, c.dept)));
         from = (b?.[c.field] as number | null | undefined) ?? null;
+        if (await clashes(from, `${c.dept} ${c.field}`)) continue;
         await tx
           .insert(schema.adminPayroll)
           .values({ versionId, dept: c.dept, [c.field]: v, updatedBy: user.id })
@@ -365,6 +375,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         }
         const where = and(eq(schema.adminBudget.versionId, versionId), eq(schema.adminBudget.dept, c.dept), eq(schema.adminBudget.account, c.account), eq(schema.adminBudget.entity, c.entity));
         from = (await tx.select().from(schema.adminBudget).where(where))[0]?.amount ?? null;
+        if (await clashes(from, `${c.dept} ${ADMIN_ACCOUNT.get(c.account)!.name} (${c.entity})`)) continue;
         if (v === null) await tx.delete(schema.adminBudget).where(where);
         else
           await tx
@@ -385,6 +396,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         }
         const where = and(eq(schema.adminFees.versionId, versionId), eq(schema.adminFees.fee, c.fee), eq(schema.adminFees.entity, c.entity));
         from = ((await tx.select().from(schema.adminFees).where(where))[0]?.[c.field] as number | null | undefined) ?? null;
+        if (await clashes(from, `${c.fee} ${c.entity} ${c.field}`)) continue;
         await tx
           .insert(schema.adminFees)
           .values({ versionId, fee: c.fee, entity: c.entity, [c.field]: v, updatedBy: user.id })
@@ -392,7 +404,7 @@ export async function saveAdminOverheads(user: Actor, versionId: number, changes
         // both back to the defaults: nothing to keep
         await tx.delete(schema.adminFees).where(and(where, isNull(schema.adminFees.rate), isNull(schema.adminFees.base)));
       }
-      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId: JSON.stringify({ ...c, value: undefined }), action: 'update', changes: { from, to: v } });
+      await tx.insert(schema.auditLog).values({ userId: user.id, versionId, entity: 'admin_overheads', entityId, action: 'update', changes: { from, to: v } });
       saved++;
     }
   });

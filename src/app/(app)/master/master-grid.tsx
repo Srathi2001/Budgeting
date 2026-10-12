@@ -21,7 +21,7 @@ import {
   type ValueSetterParams,
 } from 'ag-grid-community';
 import { MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, type RowPatch } from '@/lib/budget/master-types';
-import { count, fmt, fmtDate, MONTHS, parseDate, pct } from '@/lib/format';
+import { count, fmt, fmtDate, fmtDateTime, MONTHS, parseDate, pct } from '@/lib/format';
 import { saveLines, addUnit, removeLine, saveRera } from './actions';
 import { RowForm } from './row-form';
 import { TemplateImport } from './template-import';
@@ -270,6 +270,13 @@ export function MasterGrid({
 }) {
   const apiRef = useRef<GridApi<Row> | null>(null);
   const queue = useRef(new Map<number, RowPatch>());
+  // each row as last loaded from the server (copies: the grid edits its rows in place). An edit is sent with
+  // the values the user saw, so a figure someone else changed meanwhile is not overwritten (lib/conflict.ts)
+  const base = useRef(new Map<number, Row>());
+  const remember = useCallback((rs: Row[]) => {
+    for (const r of rs) base.current.set(r.lineId, { ...r });
+  }, []);
+  useEffect(() => remember(rows), [rows, remember]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; text?: string }>({ kind: 'idle' });
   const [errors, setErrors] = useState<string[]>([]);
@@ -316,13 +323,17 @@ export function MasterGrid({
 
   /** Sends queued edits; returns the first rejection message, or null. A failed request puts the edits back in the queue. */
   const flush = useCallback(async (): Promise<string | null> => {
-    const changes = [...queue.current.entries()].map(([lineId, patch]) => ({ lineId, patch: { ...patch } }));
+    const changes = [...queue.current.entries()].map(([lineId, patch]) => {
+      const was = base.current.get(lineId) as unknown as Record<string, unknown> | undefined;
+      return { lineId, patch: { ...patch }, ...(was ? { seen: Object.fromEntries(Object.keys(patch).map((k) => [k, was[k] ?? null])) } : {}) };
+    });
     queue.current.clear();
     if (!changes.length) return null;
     setStatus({ kind: 'saving' });
     setPendingCount(0);
     try {
       const res = await saveLines(versionId, changes);
+      remember(res.rows);
       apiRef.current?.applyTransaction({ update: res.rows });
       setSelected((s) => (s ? (res.rows.find((r) => r.lineId === s.lineId) ?? s) : s));
       refreshTotals();
@@ -341,7 +352,7 @@ export function MasterGrid({
       setStatus({ kind: 'error', text: `Not saved: ${(e as Error).message}` });
       return (e as Error).message;
     }
-  }, [versionId, refreshTotals]);
+  }, [versionId, refreshTotals, remember]);
 
   // unsaved edits are never lost by closing the tab unnoticed
   useEffect(() => {
@@ -382,6 +393,8 @@ export function MasterGrid({
             headerClass: 'hdr-unit',
             pinned: 'left',
             cellClass: (p) => (p.node.isRowPinned() ? 'font-semibold' : ''),
+            // who saved the line last, and when
+            tooltipValueGetter: (p) => (p.data?.lastUpdatedAt ? `Last updated${p.data.lastUpdatedBy ? ` by ${p.data.lastUpdatedBy}` : ''} on ${fmtDateTime(p.data.lastUpdatedAt)}` : undefined),
           },
           {
             colId: 'issues',
@@ -648,6 +661,7 @@ export function MasterGrid({
           onAdd={async (input) => {
             const res = await addUnit(versionId, { ...input, propertyId: selectedProperty });
             if (res.error) return res.error;
+            remember([res.row!]);
             apiRef.current?.applyTransaction({ add: [res.row!] });
             refreshTotals();
             toast({ kind: 'success', title: `${input.unitCode} added` });
@@ -733,6 +747,7 @@ export function MasterGrid({
               const res = await saveRera(versionId, { propertyId: selected.propertyId, bedroom: selected.bedroom ?? '', min, max });
               if (res.error) return res.error;
               // every unit of the property with this RERA code was recalculated
+              remember(res.rows!);
               apiRef.current?.applyTransaction({ update: res.rows });
               setSelected((s) => (s ? (res.rows!.find((r) => r.lineId === s.lineId) ?? s) : s));
               refreshTotals();

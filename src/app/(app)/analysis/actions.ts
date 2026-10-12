@@ -7,12 +7,15 @@ import { requireUser, requireAdmin, canEditProperty, isAdmin, isFinance } from '
 import { and, eq } from 'drizzle-orm';
 import { changedFields } from '@/lib/audit-diff';
 import { writeGuard } from '@/lib/write-guard';
+import { clash, sameValue } from '@/lib/conflict';
 
 const NoteSchema = z.object({
   versionId: z.number().int(),
   propertyId: z.number().int(),
   comment: z.string().max(4000).nullable(),
   vacancyLossOverride: z.number().finite().nullable(),
+  // the note as the user saw it (lib/conflict.ts)
+  seen: z.object({ comment: z.string().nullable(), vacancyLossOverride: z.number().nullable() }).optional(),
 });
 
 export async function saveNote(input: z.infer<typeof NoteSchema>): Promise<{ error?: string }> {
@@ -40,13 +43,30 @@ export async function saveNote(input: z.infer<typeof NoteSchema>): Promise<{ err
       .select()
       .from(schema.propertyNotes)
       .where(and(eq(schema.propertyNotes.versionId, d.versionId), eq(schema.propertyNotes.propertyId, d.propertyId)));
-    if ((before?.vacancyLossOverride ?? null) !== d.vacancyLossOverride && !isAdmin(user)) return 'Only Admin changes the vacancy loss override';
+    // with what the user saw: a part the user didn't change stays as stored, and one someone else changed
+    // meanwhile is not overwritten (lib/conflict.ts)
+    let comment = d.comment;
+    let vacancyLossOverride = d.vacancyLossOverride;
+    if (d.seen) {
+      const where = { entity: 'property_note', entityId: null, propertyId: d.propertyId };
+      if (sameValue(comment, d.seen.comment)) comment = before?.comment ?? null;
+      else {
+        const message = await clash(tx, user.id, 'The comment', { ...where, field: 'comment' }, d.seen.comment, before?.comment ?? null, comment);
+        if (message) return message;
+      }
+      if (sameValue(vacancyLossOverride, d.seen.vacancyLossOverride)) vacancyLossOverride = before?.vacancyLossOverride ?? null;
+      else {
+        const message = await clash(tx, user.id, 'The vacancy loss override', { ...where, field: 'vacancyLossOverride' }, d.seen.vacancyLossOverride, before?.vacancyLossOverride ?? null, vacancyLossOverride);
+        if (message) return message;
+      }
+    }
+    if ((before?.vacancyLossOverride ?? null) !== vacancyLossOverride && !isAdmin(user)) return 'Only Admin changes the vacancy loss override';
     await tx
       .insert(schema.propertyNotes)
-      .values({ ...d, updatedBy: user.id })
+      .values({ versionId: d.versionId, propertyId: d.propertyId, comment, vacancyLossOverride, updatedBy: user.id })
       .onConflictDoUpdate({
         target: [schema.propertyNotes.versionId, schema.propertyNotes.propertyId],
-        set: { comment: d.comment, vacancyLossOverride: d.vacancyLossOverride, updatedAt: new Date(), updatedBy: user.id },
+        set: { comment, vacancyLossOverride, updatedAt: new Date(), updatedBy: user.id },
       });
     await tx.insert(schema.auditLog).values({
       userId: user.id,
@@ -54,7 +74,7 @@ export async function saveNote(input: z.infer<typeof NoteSchema>): Promise<{ err
       propertyId: d.propertyId,
       entity: 'property_note',
       action: 'update',
-      changes: changedFields({ comment: before?.comment ?? null, vacancyLossOverride: before?.vacancyLossOverride ?? null }, { comment: d.comment, vacancyLossOverride: d.vacancyLossOverride }),
+      changes: changedFields({ comment: before?.comment ?? null, vacancyLossOverride: before?.vacancyLossOverride ?? null }, { comment, vacancyLossOverride }),
     });
     return null;
   });

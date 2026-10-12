@@ -106,7 +106,11 @@ export function BohAssumptions({ blocks, versionId, year, cutoff, locked, financ
       if (ids.some((id) => vals(id).bad)) return setMsg({ error: 'Insurance figures must be numbers' });
       const r = await saveInsurance(
         versionId,
-        ids.map((id) => ({ propertyId: id, insuredValue: vals(id).value, parRate: vals(id).rate, plPremium: vals(id).pl })),
+        // with the figures the user saw: a building someone else changed meanwhile is not overwritten
+        ids.map((id) => {
+          const i = byId.get(id);
+          return { propertyId: id, insuredValue: vals(id).value, parRate: vals(id).rate, plPremium: vals(id).pl, seen: { insuredValue: i?.insuredValue ?? null, parRate: i?.parRate ?? null, plPremium: i?.plPremium ?? null } };
+        }),
       );
       setMsg(r);
       if (!r.error) router.refresh();
@@ -256,7 +260,8 @@ export function SecurityAllocation({ blocks, versionId, year, cutoff, locked, fi
     start(async () => {
       const ids = Object.keys(drafts).map(Number);
       if (ids.some((id) => parse(drafts[id]) === 'bad')) return setMsg({ error: 'Watchmen must be numbers' });
-      const r = await saveWatchmen(versionId, ids.map((id) => ({ propertyId: id, share: shareOf(id) })));
+      // with the shares the user saw: a building someone else changed meanwhile is not overwritten
+      const r = await saveWatchmen(versionId, ids.map((id) => ({ propertyId: id, share: shareOf(id), seen: shares[id] ?? null })));
       setMsg(r);
       if (!r.error) router.refresh();
     });
@@ -529,8 +534,10 @@ function ContractForm({
       if (!(v.quantity >= 0) || !(v.rate >= 0)) return setError('Quantity and rate must be numbers');
       if (v.startDate && v.endDate && v.endDate < v.startDate) return setError('The contract ends before it starts');
       if (y.endsBeforeYearEnd && v.renewal === 'RENEW' && v.renewalRate === null) return setError('Enter the renewal rate, or choose that it ends');
+      const fields = (x: ContractDraft) => ({ propertyId: x.propertyId, account: x.account, supplier: x.supplier, description: x.description, terms: x.terms, quantity: x.quantity, rate: x.rate, startMonth: x.startMonth, startDate: x.startDate, endDate: x.endDate, renewal: x.renewal, renewalRate: x.renewalRate, renewalTerms: x.renewalTerms, remarks: x.remarks });
+      // a changed row goes with the row as the user saw it: a field someone else changed meanwhile is not overwritten
       const r = await saveContracts(versionId, kind, {
-        lines: [{ id: v.id, propertyId: v.propertyId, account: v.account, supplier: v.supplier, description: v.description, terms: v.terms, quantity: v.quantity, rate: v.rate, startMonth: v.startMonth, startDate: v.startDate, endDate: v.endDate, renewal: v.renewal, renewalRate: v.renewalRate, renewalTerms: v.renewalTerms, remarks: v.remarks }],
+        lines: [{ id: v.id, ...fields(v), ...(record.id !== null ? { seen: fields(record) } : {}) }],
         deleted: [],
       });
       if (r.errors.length) return setError(r.errors.join(' · '));
@@ -551,6 +558,7 @@ function ContractForm({
     <RecordForm
       title={`${v.supplier ?? (v.id === null ? 'New contract' : 'Contract')} · ${info.label}`}
       subtitle={building ? `${building.code} · ${building.name}${v.poNumber ? ` · PO ${v.poNumber}` : ''}` : undefined}
+      history={record.id !== null ? { entity: 'boh_contracts', entityId: String(record.id) } : undefined}
       flags={flags}
       canEdit={canEdit}
       dirty={v.id === null ? Math.max(d.dirty, 1) : d.dirty}

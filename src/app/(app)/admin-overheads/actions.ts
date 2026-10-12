@@ -6,6 +6,8 @@ import { requireFinance } from '@/lib/auth/dal';
 import { deleteAdminItem, saveAdminItem, saveAdminOverheads } from '@/lib/budget/admin';
 
 const value = z.number().finite().nullable();
+// what the user saw (lib/conflict.ts)
+const seen = value.optional();
 const Changes = z
   .array(
     z.discriminatedUnion('kind', [
@@ -14,9 +16,10 @@ const Changes = z
         dept: z.string().regex(/^\d{3}$/),
         field: z.enum(['headcount', 'ctc', 'newHeadcount', 'newCtc', 'capPct', 'mjnhPct', 'asrePct', 'seniorCtc']),
         value,
+        seen,
       }),
-      z.object({ kind: z.literal('admin'), dept: z.string().regex(/^\d{3}$/), account: z.string().regex(/^\d{5}$/), entity: z.enum(['521', '501', '502']), value }),
-      z.object({ kind: z.literal('fee'), fee: z.enum(['PMA', 'AMA']), entity: z.enum(['501', '502', 'MALL']), field: z.enum(['rate', 'base']), value }),
+      z.object({ kind: z.literal('admin'), dept: z.string().regex(/^\d{3}$/), account: z.string().regex(/^\d{5}$/), entity: z.enum(['521', '501', '502']), value, seen }),
+      z.object({ kind: z.literal('fee'), fee: z.enum(['PMA', 'AMA']), entity: z.enum(['501', '502', 'MALL']), field: z.enum(['rate', 'base']), value, seen }),
     ]),
   )
   .max(500);

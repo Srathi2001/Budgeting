@@ -8,6 +8,7 @@ import { MF_CHOICES, MF_LABEL, defaultMfRenewal, type MasterRow, type MfChoice, 
 import { count, fmt, MONTHS, pct } from '@/lib/format';
 import { ScheduleEditor } from './schedule-editor';
 import { ConfirmDialog } from '@/components/ui/dialog';
+import { LastUpdated } from '@/components/record-form';
 import { DEFAULT_ASSUMPTIONS } from '@/lib/engine/assumptions';
 import { OUTCOMES, annualRent, dmy, leaseTiming, outcomeOf, outcomePatch, rentPsf, type Outcome } from './row-logic';
 
@@ -271,6 +272,7 @@ export function RowForm({
             {row.propertyName} · {row.buName} · PC {row.coordinator ?? '—'}
             {!canEdit && ' · read only'}
           </div>
+          <LastUpdated history={{ entity: 'lease_line', entityId: String(row.lineId) }} saving={saving} />
           <div className="mt-1 flex items-center gap-3 text-[11px] text-slate-600" aria-label="Field legend">
             <span className="flex items-center gap-1">
               <i className="swatch input" /> To enter

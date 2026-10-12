@@ -225,8 +225,19 @@ export async function buildFmTemplate(
   }
   ws.autoFilter = { from: { row: HEADER_ROW, column: 1 }, to: { row: HEADER_ROW, column: COLS.length } };
   await ws.protect(PASSWORD, { selectLockedCells: true, selectUnlockedCells: true, formatColumns: true, autoFilter: true, sort: false });
+
+  // ---- each line as downloaded (hidden): on upload, a field the user left as it was is not taken back
+  // over a change someone else made in the tool meanwhile, and a line both changed is asked about
+  const orig = wb.addWorksheet(ORIGINAL, { state: 'veryHidden' });
+  orig.addRow([DOWNLOADED, new Date().toISOString()]);
+  for (const f of facilities) for (const l of f.lines) orig.addRow([l.id, JSON.stringify(lineFields(l))]);
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
+
+const ORIGINAL = 'Original';
+const DOWNLOADED = '__downloaded';
+const LINE_FIELDS = ['workType', 'element', 'subElement', 'description', 'businessNeed', 'kind', 'amount', 'month', 'remarks'] as const;
+const lineFields = (l: Pick<FmLineRow, (typeof LINE_FIELDS)[number]>) => Object.fromEntries(LINE_FIELDS.map((k) => [k, l[k] ?? null])) as Record<string, unknown>;
 
 // ---- upload --------------------------------------------------------------------------------------
 
@@ -250,21 +261,32 @@ export interface FmUploadRow {
   values: Record<string, unknown>;
 }
 
-export async function readFmTemplate(data: ArrayBuffer): Promise<{ rows: FmUploadRow[]; error?: string }> {
+/** The lines of an uploaded FM template, and each line as it was downloaded (`original`; empty for older templates). */
+export async function readFmTemplate(data: ArrayBuffer): Promise<{ rows: FmUploadRow[]; original: Map<number, Record<string, unknown>>; error?: string }> {
   const wb = new ExcelJS.Workbook();
+  const original = new Map<number, Record<string, unknown>>();
   try {
     await wb.xlsx.load(data);
   } catch {
-    return { rows: [], error: 'Not an Excel (.xlsx) file' };
+    return { rows: [], original, error: 'Not an Excel (.xlsx) file' };
   }
+  wb.getWorksheet(ORIGINAL)?.eachRow((row) => {
+    const id = Number(row.getCell(1).value);
+    if (!Number.isInteger(id) || id <= 0) return;
+    try {
+      original.set(id, JSON.parse(String(row.getCell(2).value ?? '{}')) as Record<string, unknown>);
+    } catch {
+      // a damaged row: that line is compared without its original
+    }
+  });
   const ws = wb.getWorksheet(SHEET);
-  if (!ws) return { rows: [], error: `No “${SHEET}” sheet: upload the FM template downloaded from the tool` };
+  if (!ws) return { rows: [], original, error: `No “${SHEET}” sheet: upload the FM template downloaded from the tool` };
   const at = new Map<string, number>();
   ws.getRow(HEADER_ROW).eachCell((cell, n) => {
     const c = COLS.find((x) => x.header === String(cell.value ?? '').trim());
     if (c) at.set(c.key, n);
   });
-  for (const k of ['lineId', 'facility', 'workType', 'element', 'amount']) if (!at.has(k)) return { rows: [], error: `The “${COLS.find((c) => c.key === k)!.header}” column is missing: upload the FM template downloaded from the tool` };
+  for (const k of ['lineId', 'facility', 'workType', 'element', 'amount']) if (!at.has(k)) return { rows: [], original, error: `The “${COLS.find((c) => c.key === k)!.header}” column is missing: upload the FM template downloaded from the tool` };
   const rows: FmUploadRow[] = [];
   ws.eachRow((row, n) => {
     if (n <= HEADER_ROW) return;
@@ -275,7 +297,7 @@ export async function readFmTemplate(data: ArrayBuffer): Promise<{ rows: FmUploa
     if (id === null && Object.values(values).every((v) => v === null)) return;
     rows.push({ excelRow: n, lineId: id !== null && Number.isInteger(id) && id > 0 ? id : null, values });
   });
-  return { rows };
+  return { rows, original };
 }
 
 export interface FmLineInput {
@@ -289,6 +311,21 @@ export interface FmLineInput {
   amount: number;
   month: number | null;
   remarks: string | null;
+  /** the line as the uploader saw it (lib/conflict.ts): only what the uploader changed is written */
+  seen?: Record<string, unknown>;
+}
+/** a line changed both in the file and in the tool since the download: the uploader chooses */
+export interface FmUploadConflict {
+  id: string;
+  excelRow: number;
+  facility: string;
+  /** what differs, e.g. "amount" */
+  detail: string;
+  /** the tool's amount now, and the file's */
+  from: number;
+  to: number;
+  by?: string | null;
+  at?: string | null;
 }
 export interface FmUploadChange {
   excelRow: number;
@@ -326,17 +363,27 @@ const parseAmount = (v: unknown): number | null | 'bad' => {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 'bad';
 };
 
-/** Compares the upload with the lines in the tool: per facility, the lines to save and the ones to remove. */
+/**
+ * Compares the upload with the lines in the tool: per facility, the lines to save and the ones to remove.
+ * With the lines as downloaded (`original`): a field the uploader left as it was keeps what the tool has
+ * now (`kept` counts the lines), and a line whose fields both changed is a conflict, taken from the file only
+ * when its id is in `useMine`.
+ */
 export function diffFmUpload(
   uploaded: FmUploadRow[],
   facilities: { id: number; code: string; editable: boolean; reason: string | null }[],
   current: Map<number, FmLineRow & { propertyId: number }>,
+  original = new Map<number, Record<string, unknown>>(),
+  useMine = new Set<string>(),
 ) {
   const byCode = new Map(facilities.map((f) => [f.code.toUpperCase(), f]));
   const byId = new Map(facilities.map((f) => [f.id, f]));
   const saves = new Map<number, { lines: FmLineInput[]; deleted: number[] }>();
   const changes: FmUploadChange[] = [];
+  const conflicts: FmUploadConflict[] = [];
+  let kept = 0;
   const errors: FmUploadError[] = [];
+  const sameValue = (a: unknown, b: unknown) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.005 : (a ?? null) === (b ?? null));
   const bucket = (id: number) => {
     let b = saves.get(id);
     if (!b) saves.set(id, (b = { lines: [], deleted: [] }));
@@ -401,19 +448,35 @@ export function diffFmUpload(
       remarks: txt(v.remarks),
     };
     if (existing) {
-      const fields: [string, unknown, unknown][] = [
-        ['work type', existing.workType, line.workType],
-        ['element', existing.element, line.element],
-        ['sub-element', existing.subElement, line.subElement],
-        ['description', existing.description, line.description],
-        ['business need', existing.businessNeed, line.businessNeed],
-        ['type', existing.kind, line.kind],
-        ['month', existing.month, line.month],
-        ['amount', existing.amount, line.amount],
-        ['remarks', existing.remarks, line.remarks],
+      const fields: [string, unknown, unknown, (typeof LINE_FIELDS)[number]][] = [
+        ['work type', existing.workType, line.workType, 'workType'],
+        ['element', existing.element, line.element, 'element'],
+        ['sub-element', existing.subElement, line.subElement, 'subElement'],
+        ['description', existing.description, line.description, 'description'],
+        ['business need', existing.businessNeed, line.businessNeed, 'businessNeed'],
+        ['type', existing.kind, line.kind, 'kind'],
+        ['month', existing.month, line.month, 'month'],
+        ['amount', existing.amount, line.amount, 'amount'],
+        ['remarks', existing.remarks, line.remarks, 'remarks'],
       ];
-      const diff = fields.filter(([, a, b]) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) >= 0.005 : (a ?? null) !== (b ?? null)));
+      let diff = fields.filter(([, a, b]) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) >= 0.005 : (a ?? null) !== (b ?? null)));
       if (!diff.length) continue;
+      const was = original.get(existing.id);
+      if (was) {
+        // left as downloaded: the tool's value stays; changed in both, differently: the uploader chooses
+        const mineOnly = diff.filter(([, , b, k]) => !sameValue(b, was[k]));
+        const both = mineOnly.filter(([, a, , k]) => !sameValue(a, was[k]));
+        if (mineOnly.length < diff.length) kept++;
+        const id = String(existing.id);
+        if (both.length && !useMine.has(id)) {
+          conflicts.push({ id, excelRow: u.excelRow, facility: code, detail: both.map(([k]) => k).join(', '), from: existing.amount, to: line.amount });
+          continue;
+        }
+        diff = mineOnly;
+        if (!diff.length) continue;
+        // what the uploader saw: the download for the fields kept; the tool's value now for the ones taken over it
+        line.seen = Object.fromEntries(LINE_FIELDS.map((k) => [k, both.some(([, , , x]) => x === k) ? (existing[k] ?? null) : (was[k] ?? null)]));
+      }
       if (!fac.editable) {
         err(fac.reason ?? 'This facility can’t be changed');
         continue;
@@ -429,5 +492,5 @@ export function diffFmUpload(
       changes.push({ excelRow: u.excelRow, facility: code, what: 'New', detail: `${glOf(line.workType, line.element)} ${line.workType} ${line.description ?? elementLabel(line.element)}`, amount: line.amount });
     }
   }
-  return { saves, changes, errors };
+  return { saves, changes, conflicts, kept, errors };
 }

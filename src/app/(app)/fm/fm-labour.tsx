@@ -17,6 +17,11 @@ const parse = (s: string) => {
   return s.trim() === '' ? 0 : Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
 };
 const TEAM = new Map(STAFF_TEAMS.map((t) => [t.code, t]));
+/** a team's figures as the page was loaded (what the user saw) */
+const seenOf = (data: FmPageData, team: string) => {
+  const s = data.staff.find((x) => x.team === team);
+  return { ctc: s?.ctc ?? 0, overtime: s?.overtime ?? 0 };
+};
 
 export function FmLabour({ data }: { data: FmPageData }) {
   const router = useRouter();
@@ -34,7 +39,8 @@ export function FmLabour({ data }: { data: FmPageData }) {
     start(async () => {
       const parsed = rows.map((r) => ({ team: r.team, ctc: parse(r.ctc), overtime: r.team === 'GA' ? 0 : parse(r.ot) }));
       if (parsed.some((p) => p.ctc === null || p.overtime === null)) return setMsg({ error: 'Amounts must be numbers of 0 or more' });
-      const r = await saveFmStaff(version.id, parsed);
+      // with the figures the user saw: a team someone else changed meanwhile is not overwritten
+      const r = await saveFmStaff(version.id, parsed.map((p) => ({ ...p, seen: seenOf(data, p.team) })));
       setMsg(r);
       if (!r.error) {
         setDirty(false);
@@ -241,6 +247,7 @@ function TeamForm({ data, team, onSaved, onClose, onPrev, onNext }: { data: FmPa
     <RecordForm
       title={t.label}
       subtitle={`FM staff · spread over ${t.hint.toLowerCase()}`}
+      history={{ entity: 'fm_staff', versionId: data.version.id }}
       canEdit={edit}
       dirty={d.dirty}
       saving={saving}
@@ -252,7 +259,8 @@ function TeamForm({ data, team, onSaved, onClose, onPrev, onNext }: { data: FmPa
           if (ctc < 0 || overtime < 0) return setError('Amounts must be 0 or more');
           const r = await saveFmStaff(
             data.version.id,
-            data.staff.map((x) => (x.team === team ? { team, ctc, overtime } : { team: x.team, ctc: x.ctc, overtime: x.team === 'GA' ? 0 : x.overtime })),
+            // with the figures the user saw: a team someone else changed meanwhile is not overwritten
+            data.staff.map((x) => ({ ...(x.team === team ? { team, ctc, overtime } : { team: x.team, ctc: x.ctc, overtime: x.team === 'GA' ? 0 : x.overtime }), seen: seenOf(data, x.team) })),
           );
           if (r.error) return setError(r.error);
           setError(null);
